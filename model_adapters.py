@@ -1,8 +1,8 @@
 """Model adapters for the learning runtime.
 
-FakeModel is deterministic and used by tests.
-OpenAIModel uses the Responses API but normalizes provider-specific output into
-one tiny runtime-facing contract: either `tool_call` or `final`.
+FakeModel is deterministic and can intentionally produce good or bad tool calls
+so the Runtime trust boundary can be observed. OpenAIModel normalizes provider-
+specific Responses API output into the same tiny runtime-facing contract.
 """
 
 import json
@@ -29,20 +29,42 @@ CALCULATOR_TOOL_SCHEMA = {
 }
 
 
+FAKE_SCENARIOS = {
+    "success": {
+        "tool_name": "calculator",
+        "arguments": {"a": 10, "b": 20, "operation": "add"},
+    },
+    "unknown_tool": {
+        "tool_name": "weather_machine",
+        "arguments": {"city": "Irvine"},
+    },
+    "missing_argument": {
+        "tool_name": "calculator",
+        "arguments": {"a": 10, "operation": "add"},
+    },
+    "invalid_operation": {
+        "tool_name": "calculator",
+        "arguments": {"a": 10, "b": 20, "operation": "divide"},
+    },
+}
+
+
 class FakeModel:
     """Deterministic stand-in used to test runtime mechanics."""
 
+    def __init__(self, scenario: str = "success"):
+        if scenario not in FAKE_SCENARIOS:
+            raise ValueError(f"Unknown fake scenario: {scenario}")
+        self.scenario = scenario
+
     def start(self, user_message: str) -> dict:
+        proposal = FAKE_SCENARIOS[self.scenario]
         return {
             "type": "tool_call",
-            "response_id": "fake-response-1",
-            "call_id": "fake-call-1",
-            "tool_name": "calculator",
-            "arguments": {
-                "a": 10,
-                "b": 20,
-                "operation": "add",
-            },
+            "response_id": f"fake-response-{self.scenario}",
+            "call_id": f"fake-call-{self.scenario}",
+            "tool_name": proposal["tool_name"],
+            "arguments": dict(proposal["arguments"]),
         }
 
     def continue_with_tool_result(
@@ -53,6 +75,13 @@ class FakeModel:
         tool_name,
         result,
     ) -> dict:
+        if isinstance(result, dict) and "error" in result:
+            error = result["error"]
+            return {
+                "type": "final",
+                "content": f"Tool call failed [{error['code']}]: {error['message']}",
+            }
+
         return {
             "type": "final",
             "content": f"The result is {result}.",
@@ -99,7 +128,7 @@ class OpenAIModel:
                 {
                     "type": "function_call_output",
                     "call_id": call_id,
-                    "output": str(result),
+                    "output": json.dumps(result) if isinstance(result, dict) else str(result),
                 }
             ],
             tools=self.tools,
