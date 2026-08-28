@@ -1,15 +1,35 @@
-"""Serve the V5 Policy Engine visual debugger with Python's standard library."""
+"""Serve the V6 ExecutionContext visual debugger with Python's standard library."""
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 
 from agent import DEFAULT_MAX_STEPS, run_agent
+from context import ExecutionContext
 from model_adapters import FAKE_SCENARIOS, FakeModel
 from tools import TOOL_REGISTRY, reset_teaching_tools
 
 
 WEB_DIR = Path(__file__).parent / "web"
+
+# Browser chooses only a preset key. Concrete identity fields are created on the
+# Runtime/server side instead of being accepted as arbitrary model/user fields.
+CONTEXT_PRESETS = {
+    "general": ExecutionContext(
+        tenant_id="demo-tenant",
+        user_id="user-123",
+        agent_id="general-agent",
+        task_id="visual-task-general",
+        trace_id="visual-trace-general",
+    ),
+    "read_only": ExecutionContext(
+        tenant_id="demo-tenant",
+        user_id="user-123",
+        agent_id="read-only-agent",
+        task_id="visual-task-read-only",
+        trace_id="visual-trace-read-only",
+    ),
+}
 
 
 class VisualizerHandler(SimpleHTTPRequestHandler):
@@ -32,10 +52,15 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
         user_message = request_data.get("message", "Please calculate 8 + 9.")
         scenario = request_data.get("scenario", "policy_allow")
+        context_preset = request_data.get("context_preset", "general")
         max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
 
         if scenario not in FAKE_SCENARIOS:
             self.send_json(400, {"ok": False, "error": f"Unknown scenario: {scenario}", "events": []})
+            return
+
+        if context_preset not in CONTEXT_PRESETS:
+            self.send_json(400, {"ok": False, "error": f"Unknown context preset: {context_preset}", "events": []})
             return
 
         if (
@@ -49,6 +74,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
         events = []
         reset_teaching_tools()
+        execution_context = CONTEXT_PRESETS[context_preset]
 
         try:
             final_answer = run_agent(
@@ -56,10 +82,13 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 model=FakeModel(scenario=scenario),
                 on_event=events.append,
                 max_steps=max_steps,
+                execution_context=execution_context,
             )
             payload = {
                 "ok": True,
                 "scenario": scenario,
+                "context_preset": context_preset,
+                "execution_context": execution_context.to_dict(),
                 "max_steps": max_steps,
                 "tool_registry": [tool.trace_metadata() for tool in TOOL_REGISTRY.values()],
                 "final_answer": final_answer,
@@ -70,6 +99,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             payload = {
                 "ok": False,
                 "scenario": scenario,
+                "context_preset": context_preset,
                 "max_steps": max_steps,
                 "error": f"{exc.__class__.__name__}: {exc}",
                 "events": events,
@@ -92,7 +122,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V5")
+    print("Agent Runtime Visual Debugger · V6")
     print("Open http://127.0.0.1:8000")
     print("Press Ctrl+C to stop.")
 

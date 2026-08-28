@@ -21,94 +21,100 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V5 — Policy Engine
+## Current stage: V6 — ExecutionContext
 
-V4 established one authoritative Tool definition. V5 adds a new boundary:
+V5 proved that Capability is not Permission. V6 answers the next question:
 
-> Capability is not permission.
+> Permission for whom?
 
-A Tool can exist, have valid arguments, and still be forbidden from executing.
+Policy now receives both the Tool request and a Runtime-owned execution identity.
 
 ```text
-Model Tool Call
-    ↓
+User goal
+   ↓
+Runtime injects ExecutionContext
+   ↓
+Model proposes Tool Call
+   ↓
 Runtime Guards
-    ↓
-Tool Registry
-    ↓
-Tool.validate(arguments)
-    ↓
-PolicyEngine.evaluate(tool, arguments)
-    ↓
+   ↓
+Tool Registry + Tool.validate
+   ↓
+PolicyEngine.evaluate(tool, arguments, execution_context)
+   ↓
 ALLOW / REQUIRE_APPROVAL / DENY
-    ↓
+   ↓
 Only ALLOW reaches tool.function(...)
 ```
 
-### Tool facts vs policy rules
+### Model Context vs ExecutionContext
 
-Tool objects now include a risk classification:
+They are different concepts.
+
+```text
+Model Context
+= what information the model sees
+
+ExecutionContext
+= who/what the system says is executing
+```
+
+V6 uses an immutable dataclass:
 
 ```python
-Tool(
-    name=...,
-    parameters=...,
-    function=...,
-    max_retries=...,
-    risk="low" | "medium" | "high",
+ExecutionContext(
+    tenant_id="demo-tenant",
+    user_id="user-123",
+    agent_id="general-agent",
+    task_id="task-001",
+    trace_id="trace-001",
 )
 ```
 
-`risk` is a capability fact. It does not directly grant or remove permission.
+These fields are injected by Runtime infrastructure. They are not taken from a model-generated Tool Call.
 
-The V5 `PolicyEngine` owns the rule:
+### Context-aware policy
 
-```text
-low    → ALLOW
-medium → REQUIRE_APPROVAL
-high   → DENY
-```
-
-This distinction matters because policy can later depend on identity, tenant, resource, environment, arguments, or organization rules without rewriting Tool functions.
-
-### Deterministic policy scenarios
-
-The visual debugger demonstrates three paths:
+The teaching Policy keeps V5 risk rules and adds one identity rule:
 
 ```text
-calculator
-risk=low
-   ↓
-ALLOW
-   ↓
-Python function executes
-```
-
-```text
-send_message
-risk=medium
-   ↓
+general-agent + send_message(medium)
+    ↓
 REQUIRE_APPROVAL
-   ↓
-approval_required Observation
-   ↓
-Python function does NOT execute
+
+read-only-agent + send_message(medium)
+    ↓
+DENY
 ```
+
+The Tool and arguments are identical. Only ExecutionContext changes.
+
+Low-risk compute is still allowed for the read-only agent:
 
 ```text
-delete_record
-risk=high
-   ↓
-DENY
-   ↓
-policy_denied Observation
-   ↓
-Python function does NOT execute
+read-only-agent + calculator(low)
+    ↓
+ALLOW
 ```
 
-`send_message` and `delete_record` are simulated teaching functions only; they do not perform external side effects.
+This demonstrates the key idea:
 
-V5 intentionally does **not** implement approval pause/resume yet. It only proves that Policy can stop execution before the function boundary.
+> Authorization is a function of capability + request + trusted execution identity.
+
+### Why Runtime owns the identity
+
+If Model output could supply its own `agent_id`, `tenant_id`, or `user_id`, it could simply claim a more privileged identity. V6 therefore keeps identity on a separate Runtime path:
+
+```text
+Model output
+  └─ tool_name + arguments
+
+Runtime infrastructure
+  └─ ExecutionContext
+
+Policy Engine
+  └─ combines both
+```
 
 ## Run the visual debugger
 
@@ -122,15 +128,14 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Run these scenarios in order:
+Recommended comparison:
 
-```text
-LOW risk → ALLOW → 执行
-MEDIUM risk → REQUIRE_APPROVAL
-HIGH risk → DENY
-```
+1. Choose `MEDIUM risk · send_message`.
+2. Run as `general-agent` → `REQUIRE_APPROVAL`.
+3. Run the same Tool Call as `read-only-agent` → `DENY`.
+4. Compare the `ExecutionContext Injected` and `Policy Decision` trace events.
 
-Watch the `Policy Engine` node. In the latter two cases there should be no `Tool Attempt` event.
+The browser selects only a server-side context preset; it does not send arbitrary tenant/user/agent IDs into the Runtime.
 
 ## Run deterministic tests
 
@@ -138,7 +143,7 @@ Watch the `Policy Engine` node. In the latter two cases there should be no `Tool
 python -m unittest -v
 ```
 
-Tests are API-free and verify Tool risk metadata, ALLOW/REQUIRE_APPROVAL/DENY decisions, blocked execution for medium/high risk, Tool-owned retry behavior, MAX_STEPS, duplicate protection, and Model/Tool validation.
+Tests verify typed immutable ExecutionContext, Runtime context injection, context-aware Policy differences, blocked execution for unauthorized identities, previous Policy behavior, Tool-owned retry, MAX_STEPS, duplicate protection, and Model/Tool validation.
 
 ## Run with a real OpenAI model
 

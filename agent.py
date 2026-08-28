@@ -1,12 +1,13 @@
-"""V5: Agent Runtime with an explicit Policy Engine.
+"""V6: Agent Runtime with trusted ExecutionContext.
 
-V4 made Tool the single source of capability facts. V5 separates capability
-from permission: a valid Tool Call still cannot execute until PolicyEngine
-returns ALLOW.
+V5 separated capability from permission. V6 adds runtime-owned identity so
+Policy can decide not only WHAT Tool is requested, but WHO is acting, for whom,
+in which tenant/task/trace.
 """
 
 import json
 
+from context import ExecutionContext, default_execution_context
 from model_validation import validate_model_response
 from policy import DEFAULT_POLICY, PolicyDecision
 from tools import TOOL_REGISTRY, Tool, calculator, resolve_tool
@@ -160,15 +161,13 @@ def run_agent(
     max_steps: int = DEFAULT_MAX_STEPS,
     max_retries: int | None = None,
     policy=None,
+    execution_context: ExecutionContext | None = None,
 ) -> str:
-    """Run the Agent Loop with deterministic policy before execution.
+    """Run the Agent Loop with trusted execution identity.
 
-    Order for a Tool Call:
-        Model contract → step/loop guards → Registry → Tool validation
-        → Policy decision → retry/execution.
-
-    V5 surfaces REQUIRE_APPROVAL as an Observation; actual pause/resume approval
-    is intentionally deferred to a later lesson.
+    ExecutionContext belongs to Runtime infrastructure, not Model output. The
+    model proposes Tool name + arguments; Runtime supplies tenant/user/agent/
+    task/trace identity to Policy separately.
     """
     if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < 1:
         raise ValueError("max_steps must be a positive integer")
@@ -181,13 +180,24 @@ def run_agent(
 
     if model is None:
         from model_adapters import FakeModel
-
         model = FakeModel()
+
+    runtime_context = (
+        default_execution_context() if execution_context is None else execution_context
+    )
+    if not isinstance(runtime_context, ExecutionContext):
+        raise TypeError("execution_context must be an ExecutionContext")
 
     policy_engine = DEFAULT_POLICY if policy is None else policy
     tool_steps = 0
     seen_calls: set[str] = set()
 
+    _emit(
+        on_event,
+        "execution_context",
+        context=runtime_context.to_dict(),
+        source="Runtime injected",
+    )
     _emit(on_event, "user_input", message=user_message)
     _emit(on_event, "model_request", phase="start", message=user_message)
 
@@ -315,13 +325,18 @@ def run_agent(
                     error=validation["error"],
                 )
             else:
-                policy_result = policy_engine.evaluate(tool, arguments)
+                policy_result = policy_engine.evaluate(
+                    tool,
+                    arguments,
+                    runtime_context,
+                )
                 _emit(
                     on_event,
                     "policy_decision",
                     tool_name=tool.name,
                     arguments=arguments,
                     tool_risk=tool.risk,
+                    context=runtime_context.to_dict(),
                     policy=policy_result.to_dict(),
                 )
 
@@ -344,6 +359,7 @@ def run_agent(
                         "tool_execute",
                         tool_name=tool.name,
                         arguments=arguments,
+                        context=runtime_context.to_dict(),
                         tool_metadata=tool.trace_metadata(),
                         effective_max_retries=effective_retries,
                         retry_policy_source=(

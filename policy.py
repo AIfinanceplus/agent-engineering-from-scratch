@@ -1,19 +1,14 @@
-"""V5 Policy Engine: decide whether a valid Tool request may execute.
+"""V6 Policy Engine: capability facts + trusted ExecutionContext.
 
-Tool metadata describes capability facts such as risk. PolicyEngine interprets
-those facts and returns one of three deterministic decisions:
-
-- ALLOW
-- REQUIRE_APPROVAL
-- DENY
-
-V5 does not yet implement pause/resume approval. REQUIRE_APPROVAL is surfaced as
-a structured Observation and the Tool is not executed.
+Tool tells Runtime what a capability is. ExecutionContext tells Runtime who is
+acting, for whom, in which tenant/task/trace. Policy combines both to decide
+whether the request may execute.
 """
 
 from dataclasses import dataclass
 from enum import Enum
 
+from context import ExecutionContext
 from tools import Tool
 
 
@@ -36,34 +31,52 @@ class PolicyResult:
 
 
 class PolicyEngine:
-    """Minimal deterministic policy used for the V5 lesson.
+    """Minimal deterministic context-aware policy for the V6 lesson."""
 
-    The rules intentionally live outside Tool definitions. A Tool reports its
-    risk classification; the PolicyEngine decides what that classification
-    means for execution.
-    """
+    def evaluate(
+        self,
+        tool: Tool,
+        arguments: dict,
+        context: ExecutionContext,
+    ) -> PolicyResult:
+        # Context-aware rule: a read-only agent may use low-risk read/compute
+        # capabilities, but cannot request side-effecting medium/high-risk tools.
+        if context.agent_id == "read-only-agent" and tool.risk != "low":
+            return PolicyResult(
+                PolicyDecision.DENY,
+                (
+                    f"Agent {context.agent_id} is not permitted to use "
+                    f"{tool.risk}-risk Tool {tool.name}."
+                ),
+            )
 
-    def evaluate(self, tool: Tool, arguments: dict) -> PolicyResult:
         if tool.risk == "low":
             return PolicyResult(
                 PolicyDecision.ALLOW,
-                "Low-risk Tool may execute automatically.",
+                (
+                    f"Low-risk Tool may execute for agent {context.agent_id} "
+                    f"in tenant {context.tenant_id}."
+                ),
             )
 
         if tool.risk == "medium":
             return PolicyResult(
                 PolicyDecision.REQUIRE_APPROVAL,
-                "Medium-risk Tool requires human approval before execution.",
+                (
+                    f"Medium-risk Tool requires human approval for user "
+                    f"{context.user_id} before execution."
+                ),
             )
 
         if tool.risk == "high":
             return PolicyResult(
                 PolicyDecision.DENY,
-                "High-risk Tool is denied by the current teaching policy.",
+                (
+                    f"High-risk Tool is denied for agent {context.agent_id} "
+                    "by the current teaching policy."
+                ),
             )
 
-        # Tool.__post_init__ already rejects unknown values, but policy still
-        # fails closed if a malformed Tool somehow reaches this boundary.
         return PolicyResult(
             PolicyDecision.DENY,
             f"Unknown risk classification: {tool.risk}",
