@@ -14,6 +14,6 @@ jobs:
         with:
           python-version: "3.12"
       - name: Syntax check
-        run: python -m py_compile agent.py test_agent.py
+        run: python -m py_compile agent.py model_adapters.py run_real.py test_agent.py
       - name: Unit tests
         run: python -m unittest -v
