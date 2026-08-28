@@ -1,4 +1,4 @@
-"""Serve the V1 Agent Runtime visual debugger with Python's standard library.
+"""Serve the V2 Agent Runtime visual debugger with Python's standard library.
 
 Run:
     python serve_visualizer.py
@@ -11,7 +11,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 
-from agent import run_agent
+from agent import DEFAULT_MAX_STEPS, run_agent
 from model_adapters import FAKE_SCENARIOS, FakeModel
 
 
@@ -40,6 +40,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
         user_message = request_data.get("message", "Please calculate 10 + 20.")
         scenario = request_data.get("scenario", "success")
+        max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
 
         if scenario not in FAKE_SCENARIOS:
             self.send_json(
@@ -52,6 +53,22 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             )
             return
 
+        if (
+            not isinstance(max_steps, int)
+            or isinstance(max_steps, bool)
+            or max_steps < 1
+            or max_steps > 20
+        ):
+            self.send_json(
+                400,
+                {
+                    "ok": False,
+                    "error": "max_steps must be an integer from 1 to 20",
+                    "events": [],
+                },
+            )
+            return
+
         events = []
 
         try:
@@ -59,10 +76,12 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 user_message,
                 model=FakeModel(scenario=scenario),
                 on_event=events.append,
+                max_steps=max_steps,
             )
             payload = {
                 "ok": True,
                 "scenario": scenario,
+                "max_steps": max_steps,
                 "final_answer": final_answer,
                 "events": events,
             }
@@ -71,6 +90,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             payload = {
                 "ok": False,
                 "scenario": scenario,
+                "max_steps": max_steps,
                 "error": f"{exc.__class__.__name__}: {exc}",
                 "events": events,
             }
@@ -87,13 +107,12 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format, *args):
-        # Keep terminal output readable while learning.
         print(f"[visualizer] {format % args}")
 
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V1")
+    print("Agent Runtime Visual Debugger · V2")
     print("Open http://127.0.0.1:8000")
     print("Press Ctrl+C to stop.")
 
