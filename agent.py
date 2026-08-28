@@ -1,10 +1,12 @@
-"""V1: a model-agnostic agent runtime with a defensive Tool Registry boundary.
+"""V2: a model-agnostic agent runtime with deterministic execution guards.
 
-The model proposes tool calls. The runtime resolves the name, validates the
-arguments, executes only valid calls, and turns failures into Observations
-instead of crashing the whole agent loop.
+V1 protected the Tool boundary. V2 adds two Runtime-level guards around the
+model itself:
+1. validate every normalized model response before trusting its shape;
+2. cap the number of tool-call attempts with MAX_STEPS.
 """
 
+from model_validation import validate_model_response
 from tools import (
     TOOL_REGISTRY,
     calculator,
@@ -12,6 +14,8 @@ from tools import (
     validate_tool_arguments,
 )
 
+
+DEFAULT_MAX_STEPS = 5
 
 # Backwards-compatible public name used by earlier lessons/tests.
 tool_registry = TOOL_REGISTRY
@@ -33,17 +37,42 @@ def _execution_error(tool_name: str, exc: Exception) -> dict:
     }
 
 
-def run_agent(user_message: str, model=None, on_event=None) -> str:
-    """Run Model -> Registry -> Tool -> Observation -> Model until final.
+def _stop_agent(on_event, error: dict, *, reason: str, step: int, max_steps: int) -> str:
+    """Stop the Runtime safely and expose the reason as trace data."""
+    content = f"Agent stopped [{error['code']}]: {error['message']}"
+    _emit(
+        on_event,
+        "runtime_stop",
+        reason=reason,
+        error=error,
+        step=step,
+        max_steps=max_steps,
+    )
+    _emit(on_event, "final", content=content, stopped=True)
+    return content
 
-    V1 adds a trust boundary around model-proposed tool calls:
-    unknown names and invalid arguments become Observations instead of uncaught
-    runtime exceptions.
+
+def run_agent(
+    user_message: str,
+    model=None,
+    on_event=None,
+    max_steps: int = DEFAULT_MAX_STEPS,
+) -> str:
+    """Run the Agent Loop with model validation and a deterministic step cap.
+
+    `max_steps` counts attempted Tool Calls, not model responses. A final answer
+    may arrive after the last allowed Tool Call, but an additional Tool Call is
+    rejected before execution.
     """
+    if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < 1:
+        raise ValueError("max_steps must be a positive integer")
+
     if model is None:
         from model_adapters import FakeModel
 
         model = FakeModel()
+
+    tool_steps = 0
 
     _emit(on_event, "user_input", message=user_message)
     _emit(on_event, "model_request", phase="start", message=user_message)
@@ -52,15 +81,54 @@ def run_agent(user_message: str, model=None, on_event=None) -> str:
     _emit(on_event, "model_response", response=response)
 
     while True:
+        response_validation = validate_model_response(response)
+        _emit(
+            on_event,
+            "model_validation",
+            response=response,
+            validation=response_validation,
+        )
+
+        if not response_validation["ok"]:
+            return _stop_agent(
+                on_event,
+                response_validation["error"],
+                reason="invalid_model_response",
+                step=tool_steps,
+                max_steps=max_steps,
+            )
+
         if response["type"] == "final":
-            _emit(on_event, "final", content=response["content"])
+            _emit(on_event, "final", content=response["content"], stopped=False)
             return response["content"]
 
-        if response["type"] != "tool_call":
-            raise RuntimeError(f"Unknown model response type: {response['type']}")
+        if tool_steps >= max_steps:
+            error = {
+                "code": "max_steps_exceeded",
+                "message": (
+                    f"Runtime refused another Tool Call after {max_steps} "
+                    "allowed step(s)."
+                ),
+            }
+            return _stop_agent(
+                on_event,
+                error,
+                reason="max_steps",
+                step=tool_steps,
+                max_steps=max_steps,
+            )
 
-        tool_name = response.get("tool_name", "")
-        arguments = response.get("arguments")
+        tool_steps += 1
+        _emit(
+            on_event,
+            "runtime_step",
+            step=tool_steps,
+            max_steps=max_steps,
+            tool_name=response["tool_name"],
+        )
+
+        tool_name = response["tool_name"]
+        arguments = response["arguments"]
         tool = resolve_tool(tool_name)
 
         _emit(

@@ -21,61 +21,57 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V1
+## Current stage: V2
 
-V0 introduced the smallest possible Agent Loop. V0.1 made the model provider replaceable. V0.2 made execution observable in the browser.
-
-V1 adds the first explicit **trust boundary** around model-proposed tool calls:
+V1 protected the Tool boundary. V2 protects the Runtime from the model itself.
 
 ```text
 User
   ↓
-Model proposes Tool Call
+Model Adapter
   ↓
-Runtime
+Model Response Validator   ← is the normalized response contract valid?
   ↓
-Tool Registry         ← does this capability exist?
+MAX_STEPS Budget           ← may another Tool Call execute?
   ↓
-Argument Validator    ← are the arguments valid?
+Tool Registry              ← does this capability exist?
   ↓
-Python Tool           ← execute only if validation passed
+Tool Argument Validator    ← are its arguments valid?
   ↓
-Observation           ← success OR structured error
+Python Tool
+  ↓
+Observation
   ↓
 Model
   ↓
-Final Answer
+Final Answer or Runtime Stop
 ```
 
-The important change is that the runtime no longer does this blindly:
+Two different ideas matter:
 
-```python
-tool = tool_registry[tool_name]
-result = tool(**arguments)
-```
+1. **Model response validation** checks whether Runtime can safely interpret the model output at all.
+2. **MAX_STEPS** limits the total number of Tool Call attempts even when every individual call is valid.
 
-Instead it resolves and validates first. Unknown tool names, missing arguments, and invalid values are converted into structured Observations rather than uncaught Python exceptions.
+> A valid action is not automatically allowed to run forever.
 
-> Model proposes an action. Runtime decides whether that proposal is executable.
+### V2 deterministic scenarios
 
-### V1 deterministic failure scenarios
+The visual debugger can reproduce these cases without an API key:
 
-The visual debugger can reproduce four scenarios without an API key:
+- `success` — normal Tool Call completes
+- `unknown_tool` — Registry rejects an unavailable capability
+- `missing_argument` — Tool validator rejects missing data
+- `invalid_operation` — Tool validator rejects an invalid value
+- `malformed_response` — Model Response contract fails before Tool lookup
+- `infinite_loop` — Model repeatedly proposes valid Tool Calls until Runtime hits `MAX_STEPS`
 
-- `success` — valid calculator call reaches Python execution
-- `unknown_tool` — Registry miss becomes `unknown_tool`
-- `missing_argument` — call is rejected before execution
-- `invalid_operation` — invalid enum-like value is rejected before execution
-
-The rejected scenarios intentionally never emit `tool_execute`.
+For the looping scenario, try `MAX_STEPS = 1`, `2`, and `3` and compare the trace. The next Tool Call is refused before execution.
 
 ## Run deterministic Agent Runtime
 
 ```bash
 python agent.py
 ```
-
-This uses `FakeModel`, so it requires no API key.
 
 ## Run the visual debugger
 
@@ -89,38 +85,25 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-In the browser you can choose a scenario and then:
+The browser lets you:
 
-- run the real deterministic Python runtime
-- step forward and backward through execution events
-- auto-play the complete Agent Loop
-- watch Registry and Validator nodes light up
-- verify rejected calls never reach the Calculator node
-- see the matching Python code for each step
-- read Chinese design commentary
-- inspect the raw runtime event payload
+- choose deterministic success and failure scenarios
+- change `MAX_STEPS`
+- step through real Runtime events
+- watch Model Validator and Step Budget nodes light up
+- see rejected actions stop before Tool execution
+- inspect matching Python code and Chinese commentary
+- inspect raw Runtime event payloads
 
 ## Run with a real OpenAI model
 
-Install the SDK:
-
 ```bash
 pip install -r requirements.txt
-```
-
-Set your API key in the environment:
-
-```bash
 export OPENAI_API_KEY="your_api_key_here"
-```
-
-Then run:
-
-```bash
 python run_real.py
 ```
 
-The real adapter uses the OpenAI Responses API function-calling loop. Secrets are never stored in source code.
+Secrets are never stored in source code.
 
 ## Test
 
@@ -128,4 +111,4 @@ The real adapter uses the OpenAI Responses API function-calling loop. Secrets ar
 python -m unittest -v
 ```
 
-Tests are deterministic and API-free. CI checks Python syntax, browser JavaScript syntax, successful tool execution, Registry misses, argument rejection, and visual trace behavior.
+Tests are deterministic and API-free. CI verifies Python syntax, browser JavaScript syntax, Tool validation, Model Response validation, and the MAX_STEPS loop guard.
