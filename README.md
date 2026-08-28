@@ -21,93 +21,94 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V4 — Tool Object
+## Current stage: V5 — Policy Engine
 
-V3 worked, but one capability was defined in several places: Python function in `tools.py`, validation rules elsewhere, model-facing JSON schema in `model_adapters.py`, and retry policy in Runtime configuration. That creates **configuration drift**.
+V4 established one authoritative Tool definition. V5 adds a new boundary:
 
-V4 changes the Registry from:
+> Capability is not permission.
 
-```text
-name → callable
-```
-
-to:
+A Tool can exist, have valid arguments, and still be forbidden from executing.
 
 ```text
-name → Tool Object
+Model Tool Call
+    ↓
+Runtime Guards
+    ↓
+Tool Registry
+    ↓
+Tool.validate(arguments)
+    ↓
+PolicyEngine.evaluate(tool, arguments)
+    ↓
+ALLOW / REQUIRE_APPROVAL / DENY
+    ↓
+Only ALLOW reaches tool.function(...)
 ```
 
-A Tool now owns:
+### Tool facts vs policy rules
+
+Tool objects now include a risk classification:
 
 ```python
 Tool(
     name=...,
-    description=...,
     parameters=...,
     function=...,
     max_retries=...,
-    retryable_errors=...,
+    risk="low" | "medium" | "high",
 )
 ```
 
-The same object is used to:
+`risk` is a capability fact. It does not directly grant or remove permission.
+
+The V5 `PolicyEngine` owns the rule:
 
 ```text
-Tool.parameters
-   ├─→ Model schema
-   └─→ Runtime argument validation
-
-Tool.function
-   └─→ real Python execution
-
-Tool.max_retries + retryable_errors
-   └─→ Runtime retry behavior
+low    → ALLOW
+medium → REQUIRE_APPROVAL
+high   → DENY
 ```
 
-This makes the Tool definition the **single source of truth**.
+This distinction matters because policy can later depend on identity, tenant, resource, environment, arguments, or organization rules without rewriting Tool functions.
 
-### Why the retry example now makes more sense
+### Deterministic policy scenarios
 
-`calculator` declares:
+The visual debugger demonstrates three paths:
 
 ```text
-max_retries = 0
+calculator
+risk=low
+   ↓
+ALLOW
+   ↓
+Python function executes
 ```
-
-`flaky_calculator` declares:
 
 ```text
-max_retries = 2
-retryable_errors = TimeoutError / ConnectionError
+send_message
+risk=medium
+   ↓
+REQUIRE_APPROVAL
+   ↓
+approval_required Observation
+   ↓
+Python function does NOT execute
 ```
-
-So Runtime does not globally decide that "all tools retry twice". It resolves the specific Tool Object and reads that capability's policy.
 
 ```text
-Model proposes flaky_calculator
-        ↓
-Registry resolves Tool Object
-        ↓
-Tool.max_retries = 2
-        ↓
-Attempt 1 → TimeoutError
-        ↓
-Runtime Retry
-        ↓
-Attempt 2 → Success
+delete_record
+risk=high
+   ↓
+DENY
+   ↓
+policy_denied Observation
+   ↓
+Python function does NOT execute
 ```
 
-The normal `calculator` would not retry a transient failure by default because its Tool Object says `max_retries = 0`.
+`send_message` and `delete_record` are simulated teaching functions only; they do not perform external side effects.
 
-### Model schema is no longer duplicated
-
-`OpenAIModel` now receives:
-
-```python
-self.tools = model_tool_schemas()
-```
-
-and `model_tool_schemas()` calls each Tool's `to_model_schema()`. There is no separate hand-maintained calculator schema in the adapter.
+V5 intentionally does **not** implement approval pause/resume yet. It only proves that Policy can stop execution before the function boundary.
 
 ## Run the visual debugger
 
@@ -121,14 +122,15 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Compare these two scenarios first:
+Run these scenarios in order:
 
 ```text
-普通 Calculator · 不重试
-Flaky Calculator · Tool 自带 Retry
+LOW risk → ALLOW → 执行
+MEDIUM risk → REQUIRE_APPROVAL
+HIGH risk → DENY
 ```
 
-When the Registry resolves the Tool, the trace shows its metadata, including `max_retries` and `retryable_errors`.
+Watch the `Policy Engine` node. In the latter two cases there should be no `Tool Attempt` event.
 
 ## Run deterministic tests
 
@@ -136,7 +138,7 @@ When the Registry resolves the Tool, the trace shows its metadata, including `ma
 python -m unittest -v
 ```
 
-Tests are API-free and verify that Registry returns Tool objects, model schemas come from those same objects, validation uses Tool parameters, retry policy is Tool-owned, and the previous MAX_STEPS / duplicate protections still work.
+Tests are API-free and verify Tool risk metadata, ALLOW/REQUIRE_APPROVAL/DENY decisions, blocked execution for medium/high risk, Tool-owned retry behavior, MAX_STEPS, duplicate protection, and Model/Tool validation.
 
 ## Run with a real OpenAI model
 

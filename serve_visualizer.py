@@ -1,4 +1,4 @@
-"""Serve the V4 Tool Object visual debugger with Python's standard library."""
+"""Serve the V5 Policy Engine visual debugger with Python's standard library."""
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -30,8 +30,8 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             self.send_error(400, "Request body must be valid JSON")
             return
 
-        user_message = request_data.get("message", "Please calculate 10 + 20.")
-        scenario = request_data.get("scenario", "success")
+        user_message = request_data.get("message", "Please calculate 8 + 9.")
+        scenario = request_data.get("scenario", "policy_allow")
         max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
 
         if scenario not in FAKE_SCENARIOS:
@@ -92,7 +92,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V4")
+    print("Agent Runtime Visual Debugger · V5")
     print("Open http://127.0.0.1:8000")
     print("Press Ctrl+C to stop.")
 

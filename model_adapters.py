@@ -1,7 +1,8 @@
 """Model adapters for the learning Runtime.
 
-V4 removes duplicated Tool schema definitions from this layer. Real model
-providers now receive schemas generated directly from the Tool Registry.
+V4 removed duplicated Tool schemas from this layer. V5 adds deterministic
+scenarios that request low-, medium-, and high-risk Tools so Policy Engine
+behavior can be observed without a live API.
 """
 
 import json
@@ -44,6 +45,22 @@ FAKE_SCENARIOS = {
     "duplicate_loop": {
         "tool_name": "calculator",
         "arguments": {"a": 4, "b": 5, "operation": "add"},
+    },
+    # V5 policy scenarios.
+    "policy_allow": {
+        "tool_name": "calculator",
+        "arguments": {"a": 8, "b": 9, "operation": "add"},
+    },
+    "policy_approval": {
+        "tool_name": "send_message",
+        "arguments": {
+            "recipient": "research-team@example.com",
+            "message": "Publish the draft market note.",
+        },
+    },
+    "policy_deny": {
+        "tool_name": "delete_record",
+        "arguments": {"record_id": "record-123"},
     },
 }
 
