@@ -3,24 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Runtime Visual Debugger · V2</title>
+  <title>Agent Runtime Visual Debugger · V3</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V2</p>
-        <h1>Runtime Guard：模型也必须被约束</h1>
+        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V3</p>
+        <h1>Retry 与 Loop Detection：同一个动作，谁在重复？</h1>
         <p class="hero-copy">
-          V1 保护 Tool 边界；V2 再向上保护 Model 边界。Runtime 会先验证 Model Response，
-          再用 MAX_STEPS 限制 Tool Call 次数。即使每次 Tool Call 都合法，模型也不能无限循环。
+          V3 把两种“重复”彻底分开：Tool 因 Timeout 临时失败时，Runtime 可以在同一个 step 内重试；
+          如果 Model 在看到 Observation 后又提出完全相同的 Tool Call，则由 Duplicate Detector 阻止第二次真实执行。
         </p>
       </div>
       <div class="principle-card">
-        <span>V2 核心原则</span>
-        <strong>Model 可以犯错</strong>
-        <strong>Runtime 必须有硬边界</strong>
+        <span>V3 核心原则</span>
+        <strong>Retry = Runtime 重复执行</strong>
+        <strong>Loop = Model 重复决策</strong>
       </div>
     </header>
 
@@ -30,15 +30,19 @@
       <label for="scenario">测试场景</label>
       <select id="scenario">
         <option value="success">正常 Tool Call</option>
+        <option value="retry_success">Timeout → Retry → 成功</option>
+        <option value="duplicate_loop">重复 Tool Call → 拦截</option>
+        <option value="infinite_loop">参数变化的无限 Loop → MAX_STEPS</option>
+        <option value="malformed_response">Model Response 格式错误</option>
         <option value="unknown_tool">未知 Tool</option>
         <option value="missing_argument">缺少 Tool 参数</option>
         <option value="invalid_operation">非法 Tool 参数</option>
-        <option value="malformed_response">Model Response 格式错误</option>
-        <option value="infinite_loop">Model 无限 Tool Loop</option>
       </select>
       <label for="max-steps">MAX_STEPS</label>
-      <input id="max-steps" class="number-input" type="number" min="1" max="20" value="3" />
-      <button id="run-btn" class="primary">运行真实 V2</button>
+      <input id="max-steps" class="number-input" type="number" min="1" max="20" value="4" />
+      <label for="max-retries">MAX_RETRIES</label>
+      <input id="max-retries" class="number-input" type="number" min="0" max="5" value="2" />
+      <button id="run-btn" class="primary">运行真实 V3</button>
       <button id="prev-btn">上一步</button>
       <button id="next-btn">下一步</button>
       <button id="auto-btn">自动播放</button>
@@ -49,7 +53,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">ARCHITECTURE</p>
-          <h2>Model Proposal 到真实执行之间的两层防线</h2>
+          <h2>Model 决策与 Tool 执行之间的 Runtime 防线</h2>
         </div>
         <div id="step-counter" class="step-counter">尚未运行</div>
       </div>
@@ -61,17 +65,21 @@
         <div class="arrow">→</div>
         <div class="node" data-node="modelguard"><span>3</span><strong>Model Validator</strong><small>检查 response contract</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="budget"><span>4</span><strong>Step Budget</strong><small>MAX_STEPS 硬限制</small></div>
+        <div class="node" data-node="budget"><span>4</span><strong>Step Budget</strong><small>MAX_STEPS</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="registry"><span>5</span><strong>Tool Registry</strong><small>name → function</small></div>
+        <div class="node" data-node="duplicate"><span>5</span><strong>Duplicate Detector</strong><small>同一动作是否已出现</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="validator"><span>6</span><strong>Tool Validator</strong><small>检查 Tool 参数</small></div>
+        <div class="node" data-node="registry"><span>6</span><strong>Tool Registry</strong><small>name → callable</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="tool"><span>7</span><strong>Calculator</strong><small>验证后才执行</small></div>
+        <div class="node" data-node="validator"><span>7</span><strong>Tool Validator</strong><small>检查参数</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="retry"><span>8</span><strong>Retry Executor</strong><small>仅重试 transient error</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="tool"><span>9</span><strong>Python Tool</strong><small>真正执行</small></div>
         <div class="arrow loop-arrow">↩</div>
-        <div class="node" data-node="observation"><span>8</span><strong>Observation</strong><small>结果回到 Model</small></div>
+        <div class="node" data-node="observation"><span>10</span><strong>Observation</strong><small>结果或错误回 Model</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="final"><span>9</span><strong>Final / Stop</strong><small>正常结束或硬停止</small></div>
+        <div class="node" data-node="final"><span>11</span><strong>Final / Stop</strong><small>正常结束或硬停止</small></div>
       </div>
     </section>
 
@@ -84,7 +92,7 @@
           </div>
         </div>
         <ol id="timeline-list">
-          <li class="empty">点击“运行真实 V2”开始。</li>
+          <li class="empty">点击“运行真实 V3”开始。</li>
         </ol>
       </aside>
 
@@ -107,7 +115,7 @@
           </div>
         </div>
         <div id="explain-body" class="explain-body">
-          <p>重点观察：Tool Validation 解决“动作是否合法”；MAX_STEPS 解决“整个循环是否失控”。</p>
+          <p>重点观察：Retry 不重新问 Model；Duplicate Loop 则发生在 Model 再次做出同一个决策之后。</p>
         </div>
       </aside>
     </section>
@@ -123,7 +131,7 @@
     </section>
 
     <footer>
-      <span>V2 目标：Model Response 必须验证；合法的 Tool Call 也不能无限执行。</span>
+      <span>V3 目标：Transient failure 由 Runtime retry；重复决策由 Duplicate Detector 拦截。</span>
     </footer>
   </main>
 
