@@ -1,8 +1,11 @@
-"""V4 Tool objects: one source of truth for each Runtime capability.
+"""V5 Tool objects: capability facts stay with the Tool.
 
-V3 stored a Tool's function, validation rules, model schema, and retry policy in
-separate places. V4 groups those facts into a single Tool object so Registry,
-Runtime, and Model adapters all read the same definition.
+V4 made Tool the single source of truth for function, schema, validation, and
+retry policy. V5 adds one more *fact* to the Tool: risk classification.
+
+Important boundary:
+- Tool says what the capability is and how risky it is.
+- PolicyEngine decides what that risk means for the current request.
 """
 
 from dataclasses import dataclass
@@ -11,6 +14,7 @@ from typing import Callable
 
 
 RETRYABLE_ERRORS = (TimeoutError, ConnectionError)
+VALID_RISK_LEVELS = {"low", "medium", "high"}
 
 
 @dataclass(frozen=True)
@@ -21,6 +25,11 @@ class Tool:
     function: Callable
     max_retries: int = 0
     retryable_errors: tuple[type[Exception], ...] = RETRYABLE_ERRORS
+    risk: str = "low"
+
+    def __post_init__(self):
+        if self.risk not in VALID_RISK_LEVELS:
+            raise ValueError(f"Unsupported Tool risk level: {self.risk}")
 
     def to_model_schema(self) -> dict:
         """Return the model-facing function schema from the same Tool object."""
@@ -33,10 +42,11 @@ class Tool:
         }
 
     def trace_metadata(self) -> dict:
-        """Small serializable view used by the teaching visualizer."""
+        """Serializable Tool facts shown by the visual debugger."""
         return {
             "name": self.name,
             "description": self.description,
+            "risk": self.risk,
             "max_retries": self.max_retries,
             "retryable_errors": [error.__name__ for error in self.retryable_errors],
         }
@@ -126,6 +136,20 @@ class FlakyCalculator:
 flaky_calculator = FlakyCalculator()
 
 
+def send_message(recipient: str, message: str) -> str:
+    """Simulated side effect used only to teach approval policy.
+
+    No external message is actually sent. The function only returns a string,
+    but the Tool is classified medium-risk so PolicyEngine can stop execution.
+    """
+    return f"Simulated message sent to {recipient}: {message}"
+
+
+def delete_record(record_id: str) -> str:
+    """Simulated destructive capability used only to teach deny policy."""
+    return f"Simulated deletion of record {record_id}"
+
+
 ARITHMETIC_PARAMETERS = {
     "type": "object",
     "properties": {
@@ -137,6 +161,25 @@ ARITHMETIC_PARAMETERS = {
     "additionalProperties": False,
 }
 
+MESSAGE_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "recipient": {"type": "string"},
+        "message": {"type": "string"},
+    },
+    "required": ["recipient", "message"],
+    "additionalProperties": False,
+}
+
+DELETE_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "record_id": {"type": "string"},
+    },
+    "required": ["record_id"],
+    "additionalProperties": False,
+}
+
 
 CALCULATOR_TOOL = Tool(
     name="calculator",
@@ -144,6 +187,7 @@ CALCULATOR_TOOL = Tool(
     parameters=ARITHMETIC_PARAMETERS,
     function=calculator,
     max_retries=0,
+    risk="low",
 )
 
 FLAKY_CALCULATOR_TOOL = Tool(
@@ -152,13 +196,33 @@ FLAKY_CALCULATOR_TOOL = Tool(
     parameters=ARITHMETIC_PARAMETERS,
     function=flaky_calculator,
     max_retries=2,
+    risk="low",
+)
+
+SEND_MESSAGE_TOOL = Tool(
+    name="send_message",
+    description="Simulate sending a message to a recipient.",
+    parameters=MESSAGE_PARAMETERS,
+    function=send_message,
+    max_retries=0,
+    risk="medium",
+)
+
+DELETE_RECORD_TOOL = Tool(
+    name="delete_record",
+    description="Simulate deleting a record by identifier.",
+    parameters=DELETE_PARAMETERS,
+    function=delete_record,
+    max_retries=0,
+    risk="high",
 )
 
 
-# V4 Registry now maps model-visible name -> Tool object, not raw callable.
 TOOL_REGISTRY: dict[str, Tool] = {
     CALCULATOR_TOOL.name: CALCULATOR_TOOL,
     FLAKY_CALCULATOR_TOOL.name: FLAKY_CALCULATOR_TOOL,
+    SEND_MESSAGE_TOOL.name: SEND_MESSAGE_TOOL,
+    DELETE_RECORD_TOOL.name: DELETE_RECORD_TOOL,
 }
 
 
@@ -168,12 +232,12 @@ def resolve_tool(tool_name: str) -> Tool | None:
 
 
 def model_tool_schemas() -> list[dict]:
-    """Generate model schemas directly from the Registry's Tool objects."""
+    """Generate model schemas directly from Registry Tool objects."""
     return [tool.to_model_schema() for tool in TOOL_REGISTRY.values()]
 
 
 def validate_tool_arguments(tool_name: str, arguments) -> dict:
-    """Compatibility helper; Runtime now normally calls Tool.validate directly."""
+    """Compatibility helper; Runtime normally calls Tool.validate directly."""
     tool = resolve_tool(tool_name)
     if tool is None:
         return _error("unknown_tool", f"Unknown tool: {tool_name}")
