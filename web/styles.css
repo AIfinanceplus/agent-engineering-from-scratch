@@ -1,0 +1,159 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f7fb;
+  --panel: #ffffff;
+  --text: #172033;
+  --muted: #64748b;
+  --line: #dce4ef;
+  --accent: #2563eb;
+  --accent-soft: #e8f0ff;
+  --active: #111827;
+  --code: #0f172a;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.shell { max-width: 1500px; margin: 0 auto; padding: 28px; }
+.hero {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 24px;
+  align-items: end;
+  margin-bottom: 20px;
+}
+.hero h1 { margin: 6px 0 12px; font-size: clamp(34px, 5vw, 64px); letter-spacing: -0.04em; }
+.hero-copy { max-width: 920px; color: var(--muted); font-size: 17px; line-height: 1.7; }
+.eyebrow { margin: 0; font-size: 11px; letter-spacing: .16em; font-weight: 800; color: var(--accent); }
+.principle-card {
+  background: var(--active);
+  color: white;
+  border-radius: 18px;
+  padding: 22px;
+  display: grid;
+  gap: 7px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, .12);
+}
+.principle-card span { color: #a5b4fc; font-size: 12px; }
+.principle-card strong { font-size: 20px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .04);
+}
+.controls {
+  padding: 14px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.controls label { font-weight: 700; font-size: 13px; }
+.controls input {
+  min-width: 320px;
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 13px;
+  font: inherit;
+}
+button {
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 10px 13px;
+  cursor: pointer;
+  font-weight: 700;
+}
+button:hover { border-color: #a8b6c9; }
+button.primary { background: var(--accent); color: white; border-color: var(--accent); }
+
+.architecture { padding: 20px; margin-bottom: 18px; }
+.section-heading { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 16px; }
+.section-heading h2 { margin: 4px 0 0; font-size: 21px; }
+.section-heading.compact { margin-bottom: 12px; }
+.step-counter { color: var(--muted); font-weight: 700; }
+.flow {
+  display: grid;
+  grid-template-columns: repeat(13, max-content);
+  gap: 10px;
+  align-items: center;
+  overflow-x: auto;
+  padding: 6px 2px 10px;
+}
+.node {
+  min-width: 145px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  display: grid;
+  gap: 3px;
+  transition: .2s ease;
+  background: white;
+}
+.node span { font-size: 11px; color: var(--muted); font-weight: 800; }
+.node strong { font-size: 14px; }
+.node small { color: var(--muted); }
+.node.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  transform: translateY(-3px);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, .14);
+}
+.arrow { color: #94a3b8; font-size: 22px; font-weight: 800; }
+.loop-arrow { color: var(--accent); }
+
+.workspace {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1.4fr) minmax(300px, .9fr);
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.timeline, .code, .explain, .event { padding: 18px; min-width: 0; }
+#timeline-list { margin: 0; padding-left: 22px; display: grid; gap: 10px; }
+#timeline-list li { color: var(--muted); padding: 8px; border-radius: 9px; cursor: pointer; }
+#timeline-list li.active { background: var(--accent-soft); color: var(--accent); font-weight: 800; }
+#timeline-list li.done { color: var(--text); }
+#timeline-list li.empty { list-style: none; margin-left: -22px; cursor: default; }
+.file-pill { background: #eef2f7; color: #475569; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 800; }
+pre {
+  margin: 0;
+  background: var(--code);
+  color: #dbeafe;
+  border-radius: 14px;
+  padding: 18px;
+  overflow: auto;
+  min-height: 260px;
+  line-height: 1.55;
+}
+code { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; }
+.explain-body { color: #334155; line-height: 1.75; }
+.explain-body strong { color: var(--text); }
+.explain-body .note {
+  border-left: 3px solid var(--accent);
+  padding: 10px 12px;
+  background: #f8fbff;
+  border-radius: 0 10px 10px 0;
+}
+.event pre { min-height: 150px; }
+footer { color: var(--muted); font-size: 13px; padding: 8px 2px 24px; }
+
+@media (max-width: 1100px) {
+  .hero { grid-template-columns: 1fr; }
+  .workspace { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 700px) {
+  .shell { padding: 16px; }
+  .controls input { min-width: 100%; }
+  .hero h1 { font-size: 38px; }
+}
