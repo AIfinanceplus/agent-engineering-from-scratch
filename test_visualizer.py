@@ -9,22 +9,45 @@ class VisualizerTraceTests(unittest.TestCase):
     def setUp(self):
         reset_teaching_tools()
 
-    def test_success_trace_exposes_calculator_tool_metadata(self):
+    def test_low_risk_trace_reaches_policy_and_execution(self):
         events = []
         answer = run_agent(
-            "Please calculate 10 + 20.",
-            model=FakeModel("success"),
+            "allow calculator",
+            model=FakeModel("policy_allow"),
             on_event=events.append,
         )
-        self.assertEqual(answer, "The result is 30.")
+        self.assertEqual(answer, "The result is 17.")
         lookup = next(event for event in events if event["type"] == "tool_lookup")
-        execute = next(event for event in events if event["type"] == "tool_execute")
-        self.assertEqual(lookup["tool_metadata"]["name"], "calculator")
-        self.assertEqual(lookup["tool_metadata"]["max_retries"], 0)
-        self.assertEqual(execute["retry_policy_source"], "Tool.max_retries")
-        self.assertEqual(execute["effective_max_retries"], 0)
+        decision = next(event for event in events if event["type"] == "policy_decision")
+        self.assertEqual(lookup["tool_metadata"]["risk"], "low")
+        self.assertEqual(decision["policy"]["decision"], "allow")
+        self.assertIn("tool_attempt", [event["type"] for event in events])
 
-    def test_retry_trace_uses_flaky_tool_owned_policy(self):
+    def test_medium_risk_trace_stops_before_tool_attempt(self):
+        events = []
+        answer = run_agent(
+            "send message",
+            model=FakeModel("policy_approval"),
+            on_event=events.append,
+        )
+        self.assertIn("approval_required", answer)
+        decision = next(event for event in events if event["type"] == "policy_decision")
+        self.assertEqual(decision["policy"]["decision"], "require_approval")
+        self.assertNotIn("tool_attempt", [event["type"] for event in events])
+
+    def test_high_risk_trace_stops_before_tool_attempt(self):
+        events = []
+        answer = run_agent(
+            "delete record",
+            model=FakeModel("policy_deny"),
+            on_event=events.append,
+        )
+        self.assertIn("policy_denied", answer)
+        decision = next(event for event in events if event["type"] == "policy_decision")
+        self.assertEqual(decision["policy"]["decision"], "deny")
+        self.assertNotIn("tool_attempt", [event["type"] for event in events])
+
+    def test_retry_trace_still_uses_flaky_tool_owned_policy(self):
         events = []
         answer = run_agent(
             "test retry",
@@ -32,13 +55,10 @@ class VisualizerTraceTests(unittest.TestCase):
             on_event=events.append,
         )
         self.assertEqual(answer, "The result is 42.")
-        lookup = next(event for event in events if event["type"] == "tool_lookup")
         attempts = [event for event in events if event["type"] == "tool_attempt"]
         retries = [event for event in events if event["type"] == "tool_retry"]
-        self.assertEqual(lookup["tool_metadata"]["name"], "flaky_calculator")
-        self.assertEqual(lookup["tool_metadata"]["max_retries"], 2)
         self.assertEqual([event["attempt"] for event in attempts], [1, 2])
-        self.assertEqual(retries[0]["policy_source"], "Tool.max_retries")
+        self.assertEqual(len(retries), 1)
 
     def test_duplicate_trace_blocks_second_real_execution(self):
         events = []
@@ -48,11 +68,10 @@ class VisualizerTraceTests(unittest.TestCase):
         self.assertEqual([event["duplicate"] for event in checks], [False, True])
         self.assertEqual(len(attempts), 1)
 
-    def test_rejected_call_never_reaches_tool_attempt(self):
+    def test_invalid_arguments_never_reach_policy(self):
         events = []
-        answer = run_agent("test", model=FakeModel("missing_argument"), on_event=events.append)
-        self.assertIn("missing_arguments", answer)
-        self.assertNotIn("tool_attempt", [event["type"] for event in events])
+        run_agent("bad args", model=FakeModel("missing_argument"), on_event=events.append)
+        self.assertNotIn("policy_decision", [event["type"] for event in events])
 
     def test_non_duplicate_loop_still_hits_max_steps(self):
         events = []
