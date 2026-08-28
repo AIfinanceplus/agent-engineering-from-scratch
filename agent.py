@@ -1,20 +1,19 @@
-"""V4: Agent Runtime driven by Tool objects.
+"""V5: Agent Runtime with an explicit Policy Engine.
 
-V3 proved retry and duplicate-loop protection. V4 removes configuration drift:
-Runtime no longer assembles a Tool from separate function, validation, schema,
-and retry definitions. It resolves one Tool object and reads the capability's
-behavior from that object.
+V4 made Tool the single source of capability facts. V5 separates capability
+from permission: a valid Tool Call still cannot execute until PolicyEngine
+returns ALLOW.
 """
 
 import json
 
 from model_validation import validate_model_response
+from policy import DEFAULT_POLICY, PolicyDecision
 from tools import TOOL_REGISTRY, Tool, calculator, resolve_tool
 
 
 DEFAULT_MAX_STEPS = 5
 
-# Backwards-compatible public name used by earlier lessons/tests.
 tool_registry = TOOL_REGISTRY
 
 
@@ -49,11 +48,7 @@ def _execute_tool_with_retry(
     on_event=None,
     max_retries_override: int | None = None,
 ):
-    """Execute one Tool using retry policy stored on the Tool object.
-
-    `max_retries_override` exists only to keep deterministic regression tests
-    possible. Normal Runtime behavior reads `tool.max_retries`.
-    """
+    """Execute one already-approved Tool using Tool-owned retry policy."""
     max_retries = tool.max_retries if max_retries_override is None else max_retries_override
     total_attempts = max_retries + 1
 
@@ -141,17 +136,39 @@ def _stop_agent(on_event, error: dict, *, reason: str, step: int, max_steps: int
     return content
 
 
+def _policy_observation(decision: PolicyDecision, reason: str) -> dict:
+    if decision is PolicyDecision.REQUIRE_APPROVAL:
+        return {
+            "error": {
+                "code": "approval_required",
+                "message": reason,
+            }
+        }
+
+    return {
+        "error": {
+            "code": "policy_denied",
+            "message": reason,
+        }
+    }
+
+
 def run_agent(
     user_message: str,
     model=None,
     on_event=None,
     max_steps: int = DEFAULT_MAX_STEPS,
     max_retries: int | None = None,
+    policy=None,
 ) -> str:
-    """Run the Agent Loop using Tool objects from the Registry.
+    """Run the Agent Loop with deterministic policy before execution.
 
-    `max_retries=None` means use each Tool's own retry policy. A non-negative
-    value is a teaching/test override retained for V3 regression tests.
+    Order for a Tool Call:
+        Model contract → step/loop guards → Registry → Tool validation
+        → Policy decision → retry/execution.
+
+    V5 surfaces REQUIRE_APPROVAL as an Observation; actual pause/resume approval
+    is intentionally deferred to a later lesson.
     """
     if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < 1:
         raise ValueError("max_steps must be a positive integer")
@@ -167,6 +184,7 @@ def run_agent(
 
         model = FakeModel()
 
+    policy_engine = DEFAULT_POLICY if policy is None else policy
     tool_steps = 0
     seen_calls: set[str] = set()
 
@@ -297,24 +315,47 @@ def run_agent(
                     error=validation["error"],
                 )
             else:
-                effective_retries = tool.max_retries if max_retries is None else max_retries
+                policy_result = policy_engine.evaluate(tool, arguments)
                 _emit(
                     on_event,
-                    "tool_execute",
+                    "policy_decision",
                     tool_name=tool.name,
                     arguments=arguments,
-                    tool_metadata=tool.trace_metadata(),
-                    effective_max_retries=effective_retries,
-                    retry_policy_source=(
-                        "Tool.max_retries" if max_retries is None else "Runtime override"
-                    ),
+                    tool_risk=tool.risk,
+                    policy=policy_result.to_dict(),
                 )
-                observation = _execute_tool_with_retry(
-                    tool=tool,
-                    arguments=arguments,
-                    max_retries_override=max_retries,
-                    on_event=on_event,
-                )
+
+                if policy_result.decision is not PolicyDecision.ALLOW:
+                    observation = _policy_observation(
+                        policy_result.decision,
+                        policy_result.reason,
+                    )
+                    _emit(
+                        on_event,
+                        "tool_rejected",
+                        tool_name=tool.name,
+                        reason=policy_result.decision.value,
+                        error=observation["error"],
+                    )
+                else:
+                    effective_retries = tool.max_retries if max_retries is None else max_retries
+                    _emit(
+                        on_event,
+                        "tool_execute",
+                        tool_name=tool.name,
+                        arguments=arguments,
+                        tool_metadata=tool.trace_metadata(),
+                        effective_max_retries=effective_retries,
+                        retry_policy_source=(
+                            "Tool.max_retries" if max_retries is None else "Runtime override"
+                        ),
+                    )
+                    observation = _execute_tool_with_retry(
+                        tool=tool,
+                        arguments=arguments,
+                        max_retries_override=max_retries,
+                        on_event=on_event,
+                    )
 
         _emit(
             on_event,
