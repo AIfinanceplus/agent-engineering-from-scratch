@@ -13,7 +13,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Syntax check
-        run: python -m py_compile agent.py model_adapters.py run_real.py test_agent.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Python syntax check
+        run: python -m py_compile agent.py model_adapters.py run_real.py serve_visualizer.py test_agent.py test_visualizer.py
+      - name: Browser JavaScript syntax check
+        run: node --check web/app.js
       - name: Unit tests
         run: python -m unittest -v

@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Agent Runtime Visual Debugger</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V0.2</p>
+        <h1>Agent Runtime 可视化调试器</h1>
+        <p class="hero-copy">
+          这不是静态流程图。点击“运行真实 V0.2”后，页面会调用 Python Runtime，
+          收集实际执行事件，再逐步解释 Model、Runtime、Tool Registry 与 Observation 如何协作。
+        </p>
+      </div>
+      <div class="principle-card">
+        <span>核心原则</span>
+        <strong>Model 决定 WHAT</strong>
+        <strong>Runtime 控制 HOW</strong>
+      </div>
+    </header>
+
+    <section class="controls panel">
+      <label for="prompt">用户输入</label>
+      <input id="prompt" value="Please calculate 10 + 20." />
+      <button id="run-btn" class="primary">运行真实 V0.2</button>
+      <button id="prev-btn">上一步</button>
+      <button id="next-btn">下一步</button>
+      <button id="auto-btn">自动播放</button>
+      <button id="reset-btn">重置</button>
+    </section>
+
+    <section class="architecture panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">ARCHITECTURE</p>
+          <h2>一次 Tool Calling 的真实路径</h2>
+        </div>
+        <div id="step-counter" class="step-counter">尚未运行</div>
+      </div>
+
+      <div class="flow" id="flow">
+        <div class="node" data-node="user"><span>1</span><strong>User</strong><small>提出目标</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="model"><span>2</span><strong>Model Adapter</strong><small>决定下一动作</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="runtime"><span>3</span><strong>Runtime</strong><small>解析并控制执行</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="registry"><span>4</span><strong>Tool Registry</strong><small>name → function</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="tool"><span>5</span><strong>Calculator</strong><small>真正做事</small></div>
+        <div class="arrow loop-arrow">↩</div>
+        <div class="node" data-node="observation"><span>6</span><strong>Observation</strong><small>结果返回模型</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="final"><span>7</span><strong>Final Answer</strong><small>结束循环</small></div>
+      </div>
+    </section>
+
+    <section class="workspace">
+      <aside class="timeline panel">
+        <div class="section-heading compact">
+          <div>
+            <p class="eyebrow">TRACE</p>
+            <h2>执行事件</h2>
+          </div>
+        </div>
+        <ol id="timeline-list">
+          <li class="empty">点击“运行真实 V0.2”开始。</li>
+        </ol>
+      </aside>
+
+      <section class="code panel">
+        <div class="section-heading compact">
+          <div>
+            <p class="eyebrow">CODE</p>
+            <h2 id="code-title">对应代码</h2>
+          </div>
+          <span id="code-file" class="file-pill">agent.py</span>
+        </div>
+        <pre><code id="code-panel">等待执行事件…</code></pre>
+      </section>
+
+      <aside class="explain panel">
+        <div class="section-heading compact">
+          <div>
+            <p class="eyebrow">COMMENTARY</p>
+            <h2 id="explain-title">为什么这样设计？</h2>
+          </div>
+        </div>
+        <div id="explain-body" class="explain-body">
+          <p>每一步都会显示中文注释，重点解释职责边界，而不只是逐行翻译代码。</p>
+        </div>
+      </aside>
+    </section>
+
+    <section class="event panel">
+      <div class="section-heading compact">
+        <div>
+          <p class="eyebrow">RUNTIME DATA</p>
+          <h2>当前事件数据</h2>
+        </div>
+      </div>
+      <pre><code id="event-json">{}</code></pre>
+    </section>
+
+    <footer>
+      <span>V0.2 目标：把“运行过程”变成可观察数据，但不让观察器参与决策。</span>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

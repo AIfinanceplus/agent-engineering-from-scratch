@@ -8,6 +8,7 @@ The goal is to understand the system underneath agent frameworks before using La
 
 - V0 — Minimal Agent Loop
 - V0.1 — Replaceable Model Adapter
+- V0.2 — Visual Runtime Debugger
 - V1 — Tool Registry
 - V2 — Validation + MAX_STEPS
 - V3 — Retry + Loop Detection
@@ -20,7 +21,7 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V0.1
+## Current stage: V0.2
 
 V0 introduced the smallest possible loop:
 
@@ -38,7 +39,7 @@ Observation
 Model produces final answer
 ```
 
-V0.1 adds one engineering idea: **the model is replaceable**.
+V0.1 made the model provider replaceable:
 
 ```text
                  Agent Runtime
@@ -48,19 +49,53 @@ V0.1 adds one engineering idea: **the model is replaceable**.
            FakeModel     OpenAIModel
 ```
 
-`agent.py` contains the runtime and tool implementation. `model_adapters.py` converts provider-specific model responses into a tiny runtime-facing contract: either `tool_call` or `final`.
+V0.2 adds **observability without changing control**. `run_agent()` accepts an optional `on_event` callback. The visual debugger uses those real runtime events to animate the architecture, show the matching code, and explain each step in Chinese.
 
-The central design principle is:
+```text
+Actual Python Runtime
+        ↓ emits events
+   on_event observer
+        ↓
+Local Web Server
+        ↓
+Browser Visual Debugger
+```
+
+The observer is intentionally read-only. It can see what happened, but it does not decide what happens next.
+
+The central design principle remains:
 
 > Model decides **what** to do. Runtime controls **how** it is executed.
 
-## Run deterministic V0/V0.1
+## Run deterministic Agent Runtime
 
 ```bash
 python agent.py
 ```
 
 This uses `FakeModel`, so it requires no API key.
+
+## Run the visual debugger
+
+```bash
+python serve_visualizer.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000
+```
+
+In the browser you can:
+
+- run the real deterministic V0.2 runtime
+- step forward and backward through execution events
+- auto-play the complete Agent Loop
+- see which architecture component is active
+- see the matching Python code for each step
+- read Chinese design commentary explaining why the boundary exists
+- inspect the raw runtime event payload
 
 ## Run with a real OpenAI model
 
@@ -90,4 +125,4 @@ The real adapter uses the OpenAI Responses API function-calling loop. Secrets ar
 python -m unittest -v
 ```
 
-The unit tests remain deterministic and do not call a live model API.
+The unit tests remain deterministic and do not call a live model API. CI also checks Python syntax and browser JavaScript syntax.
