@@ -3,24 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Runtime Visual Debugger · V3</title>
+  <title>Agent Runtime Visual Debugger · V4</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V3</p>
-        <h1>Retry 与 Loop Detection：同一个动作，谁在重复？</h1>
+        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V4</p>
+        <h1>Tool Object：一个能力只有一个定义</h1>
         <p class="hero-copy">
-          V3 把两种“重复”彻底分开：Tool 因 Timeout 临时失败时，Runtime 可以在同一个 step 内重试；
-          如果 Model 在看到 Observation 后又提出完全相同的 Tool Call，则由 Duplicate Detector 阻止第二次真实执行。
+          V3 的 function、validation、model schema、retry policy 分散在多个位置。V4 把它们收进一个 Tool 对象：
+          Registry 找到的不再只是 Python function，而是一份完整的 capability definition。
         </p>
       </div>
       <div class="principle-card">
-        <span>V3 核心原则</span>
-        <strong>Retry = Runtime 重复执行</strong>
-        <strong>Loop = Model 重复决策</strong>
+        <span>V4 核心原则</span>
+        <strong>Registry → Tool Object</strong>
+        <strong>Single Source of Truth</strong>
       </div>
     </header>
 
@@ -29,10 +29,10 @@
       <input id="prompt" value="Please calculate 10 + 20." />
       <label for="scenario">测试场景</label>
       <select id="scenario">
-        <option value="success">正常 Tool Call</option>
-        <option value="retry_success">Timeout → Retry → 成功</option>
+        <option value="success">普通 Calculator · 不重试</option>
+        <option value="retry_success">Flaky Calculator · Tool 自带 Retry</option>
         <option value="duplicate_loop">重复 Tool Call → 拦截</option>
-        <option value="infinite_loop">参数变化的无限 Loop → MAX_STEPS</option>
+        <option value="infinite_loop">参数变化 Loop → MAX_STEPS</option>
         <option value="malformed_response">Model Response 格式错误</option>
         <option value="unknown_tool">未知 Tool</option>
         <option value="missing_argument">缺少 Tool 参数</option>
@@ -40,9 +40,7 @@
       </select>
       <label for="max-steps">MAX_STEPS</label>
       <input id="max-steps" class="number-input" type="number" min="1" max="20" value="4" />
-      <label for="max-retries">MAX_RETRIES</label>
-      <input id="max-retries" class="number-input" type="number" min="0" max="5" value="2" />
-      <button id="run-btn" class="primary">运行真实 V3</button>
+      <button id="run-btn" class="primary">运行真实 V4</button>
       <button id="prev-btn">上一步</button>
       <button id="next-btn">下一步</button>
       <button id="auto-btn">自动播放</button>
@@ -53,7 +51,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">ARCHITECTURE</p>
-          <h2>Model 决策与 Tool 执行之间的 Runtime 防线</h2>
+          <h2>Model proposal 如何解析成完整 Tool Capability</h2>
         </div>
         <div id="step-counter" class="step-counter">尚未运行</div>
       </div>
@@ -61,80 +59,51 @@
       <div class="flow" id="flow">
         <div class="node" data-node="user"><span>1</span><strong>User</strong><small>提出目标</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="model"><span>2</span><strong>Model Adapter</strong><small>返回 proposal</small></div>
+        <div class="node" data-node="model"><span>2</span><strong>Model</strong><small>提出 Tool Call</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="modelguard"><span>3</span><strong>Model Validator</strong><small>检查 response contract</small></div>
+        <div class="node" data-node="guards"><span>3</span><strong>Runtime Guards</strong><small>contract / steps / duplicate</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="budget"><span>4</span><strong>Step Budget</strong><small>MAX_STEPS</small></div>
+        <div class="node" data-node="registry"><span>4</span><strong>Tool Registry</strong><small>name → Tool</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="duplicate"><span>5</span><strong>Duplicate Detector</strong><small>同一动作是否已出现</small></div>
+        <div class="node" data-node="toolobject"><span>5</span><strong>Tool Object</strong><small>schema + validate + retry + function</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="registry"><span>6</span><strong>Tool Registry</strong><small>name → callable</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="validator"><span>7</span><strong>Tool Validator</strong><small>检查参数</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="retry"><span>8</span><strong>Retry Executor</strong><small>仅重试 transient error</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="tool"><span>9</span><strong>Python Tool</strong><small>真正执行</small></div>
+        <div class="node" data-node="tool"><span>6</span><strong>Python Function</strong><small>真正执行</small></div>
         <div class="arrow loop-arrow">↩</div>
-        <div class="node" data-node="observation"><span>10</span><strong>Observation</strong><small>结果或错误回 Model</small></div>
+        <div class="node" data-node="observation"><span>7</span><strong>Observation</strong><small>结果或错误</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="final"><span>11</span><strong>Final / Stop</strong><small>正常结束或硬停止</small></div>
+        <div class="node" data-node="final"><span>8</span><strong>Final / Stop</strong><small>结束</small></div>
       </div>
     </section>
 
     <section class="workspace">
       <aside class="timeline panel">
-        <div class="section-heading compact">
-          <div>
-            <p class="eyebrow">TRACE</p>
-            <h2>执行事件</h2>
-          </div>
-        </div>
-        <ol id="timeline-list">
-          <li class="empty">点击“运行真实 V3”开始。</li>
-        </ol>
+        <div class="section-heading compact"><div><p class="eyebrow">TRACE</p><h2>执行事件</h2></div></div>
+        <ol id="timeline-list"><li class="empty">点击“运行真实 V4”开始。</li></ol>
       </aside>
 
       <section class="code panel">
         <div class="section-heading compact">
-          <div>
-            <p class="eyebrow">CODE</p>
-            <h2 id="code-title">对应代码</h2>
-          </div>
+          <div><p class="eyebrow">CODE</p><h2 id="code-title">对应代码</h2></div>
           <span id="code-file" class="file-pill">agent.py</span>
         </div>
         <pre><code id="code-panel">等待执行事件…</code></pre>
       </section>
 
       <aside class="explain panel">
-        <div class="section-heading compact">
-          <div>
-            <p class="eyebrow">COMMENTARY</p>
-            <h2 id="explain-title">为什么这样设计？</h2>
-          </div>
-        </div>
+        <div class="section-heading compact"><div><p class="eyebrow">COMMENTARY</p><h2 id="explain-title">为什么这样设计？</h2></div></div>
         <div id="explain-body" class="explain-body">
-          <p>重点观察：Retry 不重新问 Model；Duplicate Loop 则发生在 Model 再次做出同一个决策之后。</p>
+          <p>推荐对比普通 Calculator 和 Flaky Calculator：它们由不同 Tool Object 声明自己的 retry policy。</p>
         </div>
       </aside>
     </section>
 
     <section class="event panel">
-      <div class="section-heading compact">
-        <div>
-          <p class="eyebrow">RUNTIME DATA</p>
-          <h2>当前事件数据</h2>
-        </div>
-      </div>
+      <div class="section-heading compact"><div><p class="eyebrow">RUNTIME DATA</p><h2>当前事件数据</h2></div></div>
       <pre><code id="event-json">{}</code></pre>
     </section>
 
-    <footer>
-      <span>V3 目标：Transient failure 由 Runtime retry；重复决策由 Duplicate Detector 拦截。</span>
-    </footer>
+    <footer><span>V4 目标：Model schema、validation、retry policy 和 Python function 来自同一个 Tool definition。</span></footer>
   </main>
-
   <script src="app.js"></script>
 </body>
 </html>
