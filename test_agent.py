@@ -2,7 +2,7 @@ import unittest
 
 from agent import calculator, run_agent
 from model_adapters import FakeModel
-from runtime_validation import validate_model_response
+from model_validation import validate_model_response
 from tools import resolve_tool, validate_tool_arguments
 
 
