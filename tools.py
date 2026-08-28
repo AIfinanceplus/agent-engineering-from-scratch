@@ -1,8 +1,9 @@
-"""V1 tool registry helpers.
+"""V3 tool registry helpers.
 
-This module owns the executable tool functions plus the runtime-side registry
-and argument validation rules. The model can *request* a tool call, but the
-runtime still decides whether that request is valid and safe to execute.
+The registry still maps model-visible names to callables. V3 adds one special
+teaching tool, ``flaky_calculator``, that fails once with TimeoutError and then
+succeeds. This lets the Runtime demonstrate transient-error retry behavior
+without using a real network dependency.
 """
 
 from numbers import Real
@@ -18,9 +19,33 @@ def calculator(a: float, b: float, operation: str) -> float:
     raise ValueError(f"Unsupported operation: {operation}")
 
 
-# V1 registry: model-visible name -> executable Python function.
+class FlakyCalculator:
+    """Deterministic callable that times out once, then delegates to calculator.
+
+    The mutable counter is only for the V3 teaching scenario. Production retry
+    tests would normally use a fake/mocked external dependency instead.
+    """
+
+    def __init__(self):
+        self.attempts = 0
+
+    def reset(self) -> None:
+        self.attempts = 0
+
+    def __call__(self, a: float, b: float, operation: str) -> float:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise TimeoutError("Simulated transient timeout")
+        return calculator(a, b, operation)
+
+
+flaky_calculator = FlakyCalculator()
+
+
+# V3 registry: model-visible name -> executable Python callable.
 TOOL_REGISTRY: dict[str, Callable] = {
     "calculator": calculator,
+    "flaky_calculator": flaky_calculator,
 }
 
 
@@ -29,12 +54,21 @@ TOOL_ARGUMENT_RULES = {
     "calculator": {
         "required": {"a", "b", "operation"},
         "allowed": {"a", "b", "operation"},
-    }
+    },
+    "flaky_calculator": {
+        "required": {"a", "b", "operation"},
+        "allowed": {"a", "b", "operation"},
+    },
 }
 
 
+def reset_teaching_tools() -> None:
+    """Reset mutable teaching-tool state before a deterministic scenario."""
+    flaky_calculator.reset()
+
+
 def resolve_tool(tool_name: str):
-    """Return the executable function, or None for an unknown tool name."""
+    """Return the executable callable, or None for an unknown tool name."""
     return TOOL_REGISTRY.get(tool_name)
 
 
@@ -87,7 +121,7 @@ def validate_tool_arguments(tool_name: str, arguments) -> dict:
             },
         }
 
-    if tool_name == "calculator":
+    if tool_name in {"calculator", "flaky_calculator"}:
         if not isinstance(arguments["a"], Real) or isinstance(arguments["a"], bool):
             return _type_error("a", "number")
         if not isinstance(arguments["b"], Real) or isinstance(arguments["b"], bool):

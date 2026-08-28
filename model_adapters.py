@@ -1,8 +1,9 @@
 """Model adapters for the learning runtime.
 
 FakeModel is deterministic and can intentionally produce good, bad, malformed,
-or looping responses so Runtime guards are observable. OpenAIModel normalizes
-provider-specific Responses API output into the same tiny runtime contract.
+looping, duplicate, or retry-triggering responses so Runtime behavior can be
+observed without a live API. OpenAIModel normalizes provider-specific Responses
+API output into the same tiny runtime contract.
 """
 
 import json
@@ -53,15 +54,29 @@ FAKE_SCENARIOS = {
             "arguments": "this should have been a dictionary",
         }
     },
+    # V2 loop: arguments change every turn so exact-duplicate detection will
+    # not stop it. MAX_STEPS remains the protection for this behavior.
     "infinite_loop": {
         "tool_name": "calculator",
         "arguments": {"a": 1, "b": 1, "operation": "add"},
+    },
+    # V3 retry: the Tool itself times out once. The Model does not re-issue
+    # the call; Runtime retry handles the transient failure internally.
+    "retry_success": {
+        "tool_name": "flaky_calculator",
+        "arguments": {"a": 6, "b": 7, "operation": "multiply"},
+    },
+    # V3 duplicate loop: after seeing a successful Observation, the Model asks
+    # for exactly the same action again instead of using the existing result.
+    "duplicate_loop": {
+        "tool_name": "calculator",
+        "arguments": {"a": 4, "b": 5, "operation": "add"},
     },
 }
 
 
 class FakeModel:
-    """Deterministic stand-in used to test runtime mechanics."""
+    """Deterministic stand-in used to test Runtime mechanics."""
 
     def __init__(self, scenario: str = "success"):
         if scenario not in FAKE_SCENARIOS:
@@ -94,7 +109,26 @@ class FakeModel:
         result,
     ) -> dict:
         if self.scenario == "infinite_loop":
-            return self._tool_call(FAKE_SCENARIOS["infinite_loop"])
+            # Change one argument each turn so this is a loop, but not an exact
+            # duplicate. V2 MAX_STEPS must still catch it.
+            next_proposal = {
+                "tool_name": "calculator",
+                "arguments": {
+                    "a": self.turn + 1,
+                    "b": 1,
+                    "operation": "add",
+                },
+            }
+            return self._tool_call(next_proposal)
+
+        if self.scenario == "duplicate_loop":
+            if isinstance(result, dict) and "error" in result:
+                error = result["error"]
+                return {
+                    "type": "final",
+                    "content": f"Duplicate blocked [{error['code']}]: {error['message']}",
+                }
+            return self._tool_call(FAKE_SCENARIOS["duplicate_loop"])
 
         if isinstance(result, dict) and "error" in result:
             error = result["error"]

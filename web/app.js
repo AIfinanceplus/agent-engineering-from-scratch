@@ -6,6 +6,7 @@ const resetButton = document.querySelector('#reset-btn');
 const promptInput = document.querySelector('#prompt');
 const scenarioSelect = document.querySelector('#scenario');
 const maxStepsInput = document.querySelector('#max-steps');
+const maxRetriesInput = document.querySelector('#max-retries');
 const timelineList = document.querySelector('#timeline-list');
 const codePanel = document.querySelector('#code-panel');
 const codeTitle = document.querySelector('#code-title');
@@ -28,29 +29,29 @@ function eventMeta(event) {
     return {
       node: 'user', label: 'User Input', title: '用户目标进入 Runtime', file: 'agent.py',
       code: `_emit(on_event, "user_input", message=user_message)`,
-      explanation: `<p>Trace 从用户目标开始。用户文字是输入数据，不是执行权限。</p>`,
+      explanation: `<p>Trace 从用户目标开始。输入文字本身没有执行权限。</p>`,
     };
   }
 
   if (event.type === 'model_request') {
     return {
-      node: 'model', label: event.phase === 'start' ? 'Model Request' : 'Model Continue',
+      node: 'model',
+      label: event.phase === 'start' ? 'Model Request' : 'Model Continue',
       title: event.phase === 'start' ? 'Runtime 请求 Model 决定下一步' : 'Observation 回到 Model',
       file: 'agent.py',
       code: event.phase === 'start'
         ? `response = model.start(user_message)`
         : `response = model.continue_with_tool_result(..., result=observation)`,
-      explanation: `<p>Model 负责提出下一动作，但它返回的内容仍然只是 proposal。</p>`,
+      explanation: `<p>Model 负责提出动作；Runtime 负责验证、执行和约束。</p>`,
     };
   }
 
   if (event.type === 'model_response') {
-    const responseType = event.response?.type ?? typeof event.response;
     return {
-      node: 'model', label: `Model Response · ${responseType}`,
-      title: 'Model 返回 Runtime-facing response', file: 'model_adapters.py',
-      code: `response = ${pretty(event.response)}\n\n# 下一步必须先经过 Model Validator。`,
-      explanation: `<p><strong>V2 新规则：</strong>即使 Adapter 已经做过 normalize，Runtime 仍不直接信任 response shape。</p>`,
+      node: 'model', label: `Model Response · ${event.response?.type ?? 'unknown'}`,
+      title: 'Model 返回 proposal', file: 'model_adapters.py',
+      code: `response = ${pretty(event.response)}`,
+      explanation: `<p>这仍然只是 proposal。下一步必须通过 Model Validator。</p>`,
     };
   }
 
@@ -59,31 +60,42 @@ function eventMeta(event) {
     return {
       node: 'modelguard', label: ok ? 'Model Validation Passed' : 'Model Validation Failed',
       title: ok ? 'Model Response contract 合法' : 'Model Response contract 被拒绝',
-      file: 'runtime_validation.py',
+      file: 'model_validation.py',
       code: `response_validation = validate_model_response(response)\n\n# ${pretty(event.validation)}`,
       explanation: ok
-        ? `<p>Runtime 确认这是合法的 <code>final</code> 或 <code>tool_call</code> 结构。</p>`
-        : `<p>错误发生在 Tool Registry <strong>之前</strong>。Runtime 无法安全解释这个 response，因此直接受控停止。</p><p class="note">不要用 try/except 把坏协议“糊过去”；协议错误应该明确暴露。</p>`,
+        ? `<p>Runtime 已确认 response 是可安全解释的结构。</p>`
+        : `<p>协议错误发生在 Tool 层之前，因此直接 fail safely。</p>`,
     };
   }
 
   if (event.type === 'runtime_step') {
     return {
       node: 'budget', label: `Runtime Step ${event.step}/${event.max_steps}`,
-      title: 'Runtime 消耗一个 Tool Call budget', file: 'agent.py',
-      code: `if tool_steps >= max_steps:\n    stop()\n\ntool_steps += 1\n# step = ${event.step}, max_steps = ${event.max_steps}`,
-      explanation: `<p>每个 Tool Call proposal 都消耗一次预算。MAX_STEPS 属于 Runtime，Model 无法提高这个上限。</p>`,
+      title: '消耗一个 Model Tool Call budget', file: 'agent.py',
+      code: `tool_steps += 1\n# step = ${event.step}, max_steps = ${event.max_steps}`,
+      explanation: `<p>一次 Model 提议的 Tool Call 占 1 个 step。Runtime 内部 retry 不额外占 step。</p>`,
+    };
+  }
+
+  if (event.type === 'duplicate_check') {
+    return {
+      node: 'duplicate',
+      label: event.duplicate ? 'Duplicate Detected' : 'No Duplicate',
+      title: event.duplicate ? '发现完全相同的 Tool Call' : '这是新的 Model 动作',
+      file: 'agent.py',
+      code: `call_key = _tool_call_key(tool_name, arguments)\nis_duplicate = call_key in seen_calls\n\n# duplicate = ${event.duplicate}\n# key = ${event.call_key}`,
+      explanation: event.duplicate
+        ? `<p>Model 已经看到过这个动作的 Observation，却又提出完全相同的 name + arguments。</p><p class="note">这不是 retry，而是 Model-level loop。</p>`
+        : `<p>这个 Model 动作之前没有出现过，因此继续进入 Tool Registry。</p>`,
     };
   }
 
   if (event.type === 'tool_lookup') {
     return {
       node: 'registry', label: event.found ? 'Registry Hit' : 'Registry Miss',
-      title: event.found ? 'Registry 找到真实能力' : 'Registry 找不到该 Tool', file: 'tools.py',
-      code: `tool = resolve_tool(tool_name)\n# tool_name = ${JSON.stringify(event.tool_name)}\n# found = ${event.found}`,
-      explanation: event.found
-        ? `<p>字符串名字被解析为显式注册的 Python function。</p>`
-        : `<p>不存在的能力不会被执行，而会变成错误 Observation。</p>`,
+      title: event.found ? 'Registry 找到真实能力' : 'Registry 找不到 Tool', file: 'tools.py',
+      code: `tool = resolve_tool(tool_name)\n# found = ${event.found}`,
+      explanation: `<p>只有 Registry 显式注册的 callable 才能进入执行路径。</p>`,
     };
   }
 
@@ -93,35 +105,71 @@ function eventMeta(event) {
       node: 'validator', label: ok ? 'Tool Validation Passed' : 'Tool Validation Failed',
       title: ok ? 'Tool 参数合法' : 'Tool 参数被拒绝', file: 'tools.py',
       code: `validation = validate_tool_arguments(tool_name, arguments)\n\n# ${pretty(event.validation)}`,
-      explanation: ok
-        ? `<p>通过 Tool 层的确定性参数检查后，才允许执行。</p>`
-        : `<p>Model Response 的结构可以合法，但具体 Tool 参数仍可能非法。这是两层不同验证。</p>`,
-    };
-  }
-
-  if (event.type === 'tool_rejected') {
-    return {
-      node: 'validator', label: 'Tool Rejected', title: 'Runtime 拒绝执行 Tool', file: 'agent.py',
-      code: `if not validation["ok"]:\n    observation = {"error": validation["error"]}\n    # 不执行 tool(**arguments)`,
-      explanation: `<p>拒绝执行是 Runtime 的正常输出路径，不是 Python 崩溃。</p>`,
+      explanation: `<p>Model contract 合法不代表 Tool 参数一定合法，所以需要第二层验证。</p>`,
     };
   }
 
   if (event.type === 'tool_execute') {
     return {
-      node: 'tool', label: 'Tool Execute', title: 'Python Function 真正执行', file: 'agent.py',
-      code: `observation = tool(**arguments)\n# ${event.tool_name}(${pretty(event.arguments)})`,
-      explanation: `<p>只有 Model contract、Step Budget、Registry、Tool Validation 全部通过，才会来到执行边界。</p>`,
+      node: 'retry', label: 'Enter Retry Executor', title: 'Runtime 准备执行 Tool', file: 'agent.py',
+      code: `observation = _execute_tool_with_retry(\n    tool_name=tool_name,\n    tool=tool,\n    arguments=arguments,\n    max_retries=${event.max_retries},\n)`,
+      explanation: `<p>从这里开始，Runtime 可以在不重新咨询 Model 的情况下处理 transient failure。</p>`,
     };
   }
 
-  if (event.type === 'tool_result' || event.type === 'tool_error' || event.type === 'tool_observation') {
-    const value = event.observation ?? event.result ?? event.error;
+  if (event.type === 'tool_attempt') {
     return {
-      node: 'observation', label: event.type === 'tool_observation' ? 'Observation' : event.type,
-      title: '真实结果进入 Observation', file: 'agent.py',
-      code: `observation = ${pretty(value)}`,
-      explanation: `<p>成功或错误都被转换成 Model 下一轮可以看到的真实 Observation。</p>`,
+      node: 'tool', label: `Tool Attempt ${event.attempt}/${event.total_attempts}`,
+      title: 'Python Tool 真正执行一次', file: 'agent.py',
+      code: `result = tool(**arguments)\n# attempt ${event.attempt} of ${event.total_attempts}`,
+      explanation: `<p>这是一次真实 Python 调用。初次执行和 retry attempt 都会经过这里。</p>`,
+    };
+  }
+
+  if (event.type === 'tool_retry') {
+    return {
+      node: 'retry', label: `Retry → Attempt ${event.next_attempt}`,
+      title: 'Transient failure 触发 Runtime Retry', file: 'agent.py',
+      code: `except RETRYABLE_ERRORS as exc:\n    if attempt < total_attempts:\n        continue\n\n# ${event.error_type}: ${event.error}`,
+      explanation: `<p><strong>${event.error_type}</strong> 被定义为 retryable。Runtime 重复同一个动作，不重新问 Model。</p><p class="note">Retry = execution recovery，不是 replanning。</p>`,
+    };
+  }
+
+  if (event.type === 'tool_rejected') {
+    const duplicate = event.reason === 'duplicate_tool_call';
+    return {
+      node: duplicate ? 'duplicate' : 'validator', label: duplicate ? 'Duplicate Blocked' : 'Tool Rejected',
+      title: duplicate ? '第二次真实执行被阻止' : 'Runtime 拒绝执行 Tool', file: 'agent.py',
+      code: `observation = {"error": ${pretty(event.error)}}\n# 不执行新的 Python Tool`,
+      explanation: duplicate
+        ? `<p>第一次调用的结果已经存在，第二次完全相同的 Model proposal 不再真实执行，而是返回 structured Observation。</p>`
+        : `<p>确定性验证失败，因此 Tool 不执行。</p>`,
+    };
+  }
+
+  if (event.type === 'tool_result') {
+    return {
+      node: 'observation', label: 'Tool Result', title: 'Tool 最终成功', file: 'agent.py',
+      code: `return result\n# result = ${pretty(event.result)}\n# total attempts used = ${event.attempts}`,
+      explanation: `<p>最终结果是 <code>${event.result}</code>，共执行 ${event.attempts} 次。只有一个 Model step。</p>`,
+    };
+  }
+
+  if (event.type === 'tool_error') {
+    return {
+      node: 'observation', label: 'Tool Error', title: 'Tool failure 被规范化', file: 'agent.py',
+      code: `return {"error": ${pretty(event.error)}}`,
+      explanation: event.retryable
+        ? `<p>Retry 次数已经耗尽，failure 变成 Observation。</p>`
+        : `<p>这是 non-retryable error，因此 Runtime 不重复执行同一动作。</p>`,
+    };
+  }
+
+  if (event.type === 'tool_observation') {
+    return {
+      node: 'observation', label: 'Observation', title: '执行结果回到 Model', file: 'agent.py',
+      code: `observation = ${pretty(event.observation)}`,
+      explanation: `<p>无论成功、验证拒绝、duplicate，最终都统一形成 Observation。</p>`,
     };
   }
 
@@ -129,27 +177,26 @@ function eventMeta(event) {
     const byBudget = event.reason === 'max_steps';
     return {
       node: byBudget ? 'budget' : 'modelguard',
-      label: byBudget ? 'MAX_STEPS Stop' : 'Invalid Response Stop',
-      title: byBudget ? 'Runtime 强制终止无限循环' : 'Runtime 因协议错误停止',
-      file: 'agent.py',
-      code: `_stop_agent(\n    reason=${JSON.stringify(event.reason)},\n    step=${event.step},\n    max_steps=${event.max_steps},\n)\n\n# ${pretty(event.error)}`,
+      label: byBudget ? 'MAX_STEPS Stop' : 'Runtime Stop',
+      title: byBudget ? 'MAX_STEPS 强制停止' : 'Runtime 因协议错误停止', file: 'agent.py',
+      code: pretty(event),
       explanation: byBudget
-        ? `<p>前 ${event.step} 次 Tool Call 都可能完全合法，但 Runtime 仍拒绝第 ${event.step + 1} 次执行。</p><p class="note"><strong>合法 ≠ 可以无限执行。</strong></p>`
-        : `<p>Response contract 不可信时，Runtime 选择 fail safely，而不是猜 Model 到底想表达什么。</p>`,
+        ? `<p>即使每个动作都不同且合法，整个循环仍受全局 step budget 约束。</p>`
+        : `<p>Runtime 无法安全解释 Model response，因此停止。</p>`,
     };
   }
 
   if (event.type === 'final') {
     return {
       node: 'final', label: event.stopped ? 'Stopped Answer' : 'Final Answer',
-      title: event.stopped ? 'Runtime 安全停止' : 'Agent Loop 正常完成', file: 'agent.py',
+      title: event.stopped ? 'Runtime 安全停止' : 'Agent Loop 完成', file: 'agent.py',
       code: `return ${JSON.stringify(event.content)}`,
-      explanation: `<p><strong>最终输出：</strong>${event.content}</p><p class="note">V2 允许两种健康结局：正常完成，或被 Runtime 明确、安全地停止。</p>`,
+      explanation: `<p><strong>最终输出：</strong>${event.content}</p>`,
     };
   }
 
   return {
-    node: 'runtime', label: event.type, title: 'Runtime Event', file: 'agent.py',
+    node: 'model', label: event.type, title: 'Runtime Event', file: 'agent.py',
     code: pretty(event), explanation: '<p>这是一个 Runtime 观察事件。</p>',
   };
 }
@@ -203,12 +250,12 @@ function resetView() {
   events = [];
   currentIndex = -1;
   highlightNode('');
-  timelineList.innerHTML = '<li class="empty">点击“运行真实 V2”开始。</li>';
+  timelineList.innerHTML = '<li class="empty">点击“运行真实 V3”开始。</li>';
   codeTitle.textContent = '对应代码';
   codeFile.textContent = 'agent.py';
   codePanel.textContent = '等待执行事件…';
   explainTitle.textContent = '为什么这样设计？';
-  explainBody.innerHTML = '<p>推荐先跑“Model Response 格式错误”，再跑“Model 无限 Tool Loop”。</p>';
+  explainBody.innerHTML = '<p>推荐先跑“Timeout → Retry → 成功”，再跑“重复 Tool Call → 拦截”。</p>';
   eventJson.textContent = '{}';
   stepCounter.textContent = '尚未运行';
 }
@@ -219,14 +266,14 @@ async function runTrace() {
   runButton.textContent = 'Runtime 执行中…';
 
   try {
-    const maxSteps = Number.parseInt(maxStepsInput.value, 10);
     const response = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message: promptInput.value,
         scenario: scenarioSelect.value,
-        max_steps: maxSteps,
+        max_steps: Number.parseInt(maxStepsInput.value, 10),
+        max_retries: Number.parseInt(maxRetriesInput.value, 10),
       }),
     });
     const data = await response.json();
@@ -239,7 +286,7 @@ async function runTrace() {
     explainBody.innerHTML = `<p class="note">${error.message}</p>`;
   } finally {
     runButton.disabled = false;
-    runButton.textContent = '运行真实 V2';
+    runButton.textContent = '运行真实 V3';
   }
 }
 
@@ -261,7 +308,7 @@ autoButton.addEventListener('click', () => {
       return;
     }
     showStep(currentIndex + 1);
-  }, 900);
+  }, 850);
 });
 
 resetView();
