@@ -5,7 +5,7 @@ from model_adapters import FakeModel
 
 
 class VisualizerTraceTests(unittest.TestCase):
-    def test_success_trace_includes_validation_before_execution(self):
+    def test_success_trace_shows_model_and_tool_validation(self):
         events = []
 
         answer = run_agent(
@@ -23,6 +23,8 @@ class VisualizerTraceTests(unittest.TestCase):
                 "user_input",
                 "model_request",
                 "model_response",
+                "model_validation",
+                "runtime_step",
                 "tool_lookup",
                 "tool_validation",
                 "tool_execute",
@@ -30,14 +32,16 @@ class VisualizerTraceTests(unittest.TestCase):
                 "tool_observation",
                 "model_request",
                 "model_response",
+                "model_validation",
                 "final",
             ],
         )
 
-        self.assertTrue(events[3]["found"])
-        self.assertEqual(events[4]["validation"], {"ok": True})
-        self.assertEqual(events[6]["result"], 30)
-        self.assertEqual(events[7]["observation"], 30)
+        self.assertEqual(events[3]["validation"], {"ok": True})
+        self.assertEqual(events[4]["step"], 1)
+        self.assertTrue(events[5]["found"])
+        self.assertEqual(events[6]["validation"], {"ok": True})
+        self.assertEqual(events[8]["result"], 30)
 
     def test_rejected_call_never_reaches_tool_execute(self):
         events = []
@@ -67,6 +71,34 @@ class VisualizerTraceTests(unittest.TestCase):
 
         self.assertFalse(lookup["found"])
         self.assertEqual(rejected["error"]["code"], "unknown_tool")
+
+    def test_malformed_response_trace_stops_at_model_guard(self):
+        events = []
+        run_agent(
+            "test",
+            model=FakeModel("malformed_response"),
+            on_event=events.append,
+        )
+
+        event_types = [event["type"] for event in events]
+        self.assertEqual(event_types[-2:], ["runtime_stop", "final"])
+        self.assertNotIn("runtime_step", event_types)
+        self.assertNotIn("tool_lookup", event_types)
+
+    def test_loop_trace_visibly_hits_runtime_limit(self):
+        events = []
+        run_agent(
+            "test",
+            model=FakeModel("infinite_loop"),
+            on_event=events.append,
+            max_steps=2,
+        )
+
+        steps = [event for event in events if event["type"] == "runtime_step"]
+        stop = next(event for event in events if event["type"] == "runtime_stop")
+
+        self.assertEqual(len(steps), 2)
+        self.assertEqual(stop["reason"], "max_steps")
 
 
 if __name__ == "__main__":
