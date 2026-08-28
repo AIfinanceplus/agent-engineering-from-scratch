@@ -1,33 +1,12 @@
-"""Model adapters for the learning runtime.
+"""Model adapters for the learning Runtime.
 
-FakeModel is deterministic and can intentionally produce good, bad, malformed,
-looping, duplicate, or retry-triggering responses so Runtime behavior can be
-observed without a live API. OpenAIModel normalizes provider-specific Responses
-API output into the same tiny runtime contract.
+V4 removes duplicated Tool schema definitions from this layer. Real model
+providers now receive schemas generated directly from the Tool Registry.
 """
 
 import json
 
-
-CALCULATOR_TOOL_SCHEMA = {
-    "type": "function",
-    "name": "calculator",
-    "description": "Perform a basic arithmetic calculation.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "a": {"type": "number"},
-            "b": {"type": "number"},
-            "operation": {
-                "type": "string",
-                "enum": ["add", "multiply"],
-            },
-        },
-        "required": ["a", "b", "operation"],
-        "additionalProperties": False,
-    },
-    "strict": True,
-}
+from tools import model_tool_schemas
 
 
 FAKE_SCENARIOS = {
@@ -54,20 +33,14 @@ FAKE_SCENARIOS = {
             "arguments": "this should have been a dictionary",
         }
     },
-    # V2 loop: arguments change every turn so exact-duplicate detection will
-    # not stop it. MAX_STEPS remains the protection for this behavior.
     "infinite_loop": {
         "tool_name": "calculator",
         "arguments": {"a": 1, "b": 1, "operation": "add"},
     },
-    # V3 retry: the Tool itself times out once. The Model does not re-issue
-    # the call; Runtime retry handles the transient failure internally.
     "retry_success": {
         "tool_name": "flaky_calculator",
         "arguments": {"a": 6, "b": 7, "operation": "multiply"},
     },
-    # V3 duplicate loop: after seeing a successful Observation, the Model asks
-    # for exactly the same action again instead of using the existing result.
     "duplicate_loop": {
         "tool_name": "calculator",
         "arguments": {"a": 4, "b": 5, "operation": "add"},
@@ -109,8 +82,6 @@ class FakeModel:
         result,
     ) -> dict:
         if self.scenario == "infinite_loop":
-            # Change one argument each turn so this is a loop, but not an exact
-            # duplicate. V2 MAX_STEPS must still catch it.
             next_proposal = {
                 "tool_name": "calculator",
                 "arguments": {
@@ -146,8 +117,9 @@ class FakeModel:
 class OpenAIModel:
     """OpenAI Responses API adapter.
 
-    The API key is read by the OpenAI SDK from the OPENAI_API_KEY environment
-    variable. No secret is stored in this repository.
+    Provider-specific API details stay here, while Tool definitions come from
+    the Runtime's Tool Registry. The API key is read by the SDK from the
+    OPENAI_API_KEY environment variable.
     """
 
     def __init__(self, model: str = "gpt-5.6"):
@@ -155,7 +127,7 @@ class OpenAIModel:
 
         self.client = OpenAI()
         self.model = model
-        self.tools = [CALCULATOR_TOOL_SCHEMA]
+        self.tools = model_tool_schemas()
 
     def start(self, user_message: str) -> dict:
         response = self.client.responses.create(
