@@ -2,10 +2,11 @@ import unittest
 
 from agent import calculator, run_agent
 from model_adapters import FakeModel
+from runtime_validation import validate_model_response
 from tools import resolve_tool, validate_tool_arguments
 
 
-class AgentV1Tests(unittest.TestCase):
+class AgentV2Tests(unittest.TestCase):
     def test_calculator_add(self):
         self.assertEqual(calculator(10, 20, "add"), 30)
 
@@ -39,12 +40,56 @@ class AgentV1Tests(unittest.TestCase):
         self.assertIn("invalid_argument_value", answer)
         self.assertIn("add", answer)
 
-    def test_validator_accepts_valid_arguments(self):
+    def test_tool_validator_accepts_valid_arguments(self):
         result = validate_tool_arguments(
             "calculator",
             {"a": 1, "b": 2, "operation": "add"},
         )
         self.assertEqual(result, {"ok": True})
+
+    def test_model_response_validator_accepts_final(self):
+        self.assertEqual(
+            validate_model_response({"type": "final", "content": "done"}),
+            {"ok": True},
+        )
+
+    def test_malformed_model_response_stops_before_tool_boundary(self):
+        events = []
+        answer = run_agent(
+            "test",
+            model=FakeModel("malformed_response"),
+            on_event=events.append,
+        )
+
+        self.assertIn("invalid_tool_call", answer)
+        event_types = [event["type"] for event in events]
+        self.assertIn("model_validation", event_types)
+        self.assertIn("runtime_stop", event_types)
+        self.assertNotIn("tool_lookup", event_types)
+        self.assertNotIn("tool_execute", event_types)
+
+    def test_max_steps_stops_loop_before_next_tool_execution(self):
+        events = []
+        answer = run_agent(
+            "loop forever",
+            model=FakeModel("infinite_loop"),
+            on_event=events.append,
+            max_steps=3,
+        )
+
+        self.assertIn("max_steps_exceeded", answer)
+        tool_executes = [event for event in events if event["type"] == "tool_execute"]
+        runtime_steps = [event for event in events if event["type"] == "runtime_step"]
+        stops = [event for event in events if event["type"] == "runtime_stop"]
+
+        self.assertEqual(len(tool_executes), 3)
+        self.assertEqual([event["step"] for event in runtime_steps], [1, 2, 3])
+        self.assertEqual(stops[-1]["reason"], "max_steps")
+        self.assertEqual(stops[-1]["step"], 3)
+
+    def test_max_steps_must_be_positive_integer(self):
+        with self.assertRaises(ValueError):
+            run_agent("test", model=FakeModel("success"), max_steps=0)
 
 
 if __name__ == "__main__":
