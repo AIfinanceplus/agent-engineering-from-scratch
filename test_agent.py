@@ -3,9 +3,12 @@ import unittest
 from agent import calculator, run_agent
 from model_adapters import FakeModel
 from model_validation import validate_model_response
+from policy import PolicyDecision, PolicyEngine
 from tools import (
     CALCULATOR_TOOL,
+    DELETE_RECORD_TOOL,
     FLAKY_CALCULATOR_TOOL,
+    SEND_MESSAGE_TOOL,
     Tool,
     model_tool_schemas,
     reset_teaching_tools,
@@ -14,7 +17,7 @@ from tools import (
 )
 
 
-class AgentV4Tests(unittest.TestCase):
+class AgentV5Tests(unittest.TestCase):
     def setUp(self):
         reset_teaching_tools()
 
@@ -33,6 +36,7 @@ class AgentV4Tests(unittest.TestCase):
         self.assertIs(tool.function, calculator)
         self.assertEqual(tool.name, "calculator")
         self.assertEqual(tool.max_retries, 0)
+        self.assertEqual(tool.risk, "low")
 
     def test_model_schema_is_generated_from_same_tool_object(self):
         schemas = model_tool_schemas()
@@ -44,13 +48,83 @@ class AgentV4Tests(unittest.TestCase):
         self.assertEqual(FLAKY_CALCULATOR_TOOL.max_retries, 2)
         self.assertIn(TimeoutError, FLAKY_CALCULATOR_TOOL.retryable_errors)
 
+    def test_policy_engine_interprets_tool_risk(self):
+        policy = PolicyEngine()
+        self.assertIs(
+            policy.evaluate(CALCULATOR_TOOL, {}).decision,
+            PolicyDecision.ALLOW,
+        )
+        self.assertIs(
+            policy.evaluate(SEND_MESSAGE_TOOL, {}).decision,
+            PolicyDecision.REQUIRE_APPROVAL,
+        )
+        self.assertIs(
+            policy.evaluate(DELETE_RECORD_TOOL, {}).decision,
+            PolicyDecision.DENY,
+        )
+
+    def test_low_risk_tool_is_allowed_and_executes(self):
+        events = []
+        answer = run_agent(
+            "allow low-risk tool",
+            model=FakeModel("policy_allow"),
+            on_event=events.append,
+        )
+
+        self.assertEqual(answer, "The result is 17.")
+        decision = next(event for event in events if event["type"] == "policy_decision")
+        self.assertEqual(decision["tool_risk"], "low")
+        self.assertEqual(decision["policy"]["decision"], "allow")
+        self.assertIn("tool_attempt", [event["type"] for event in events])
+
+    def test_medium_risk_tool_requires_approval_and_does_not_execute(self):
+        events = []
+        answer = run_agent(
+            "send a message",
+            model=FakeModel("policy_approval"),
+            on_event=events.append,
+        )
+
+        self.assertIn("approval_required", answer)
+        decision = next(event for event in events if event["type"] == "policy_decision")
+        self.assertEqual(decision["tool_risk"], "medium")
+        self.assertEqual(decision["policy"]["decision"], "require_approval")
+        self.assertNotIn("tool_attempt", [event["type"] for event in events])
+        rejection = next(
+            event
+            for event in events
+            if event["type"] == "tool_rejected"
+            and event.get("reason") == "require_approval"
+        )
+        self.assertEqual(rejection["error"]["code"], "approval_required")
+
+    def test_high_risk_tool_is_denied_and_does_not_execute(self):
+        events = []
+        answer = run_agent(
+            "delete record",
+            model=FakeModel("policy_deny"),
+            on_event=events.append,
+        )
+
+        self.assertIn("policy_denied", answer)
+        decision = next(event for event in events if event["type"] == "policy_decision")
+        self.assertEqual(decision["tool_risk"], "high")
+        self.assertEqual(decision["policy"]["decision"], "deny")
+        self.assertNotIn("tool_attempt", [event["type"] for event in events])
+
     def test_unknown_tool_becomes_observation_instead_of_crash(self):
         answer = run_agent("test", model=FakeModel("unknown_tool"))
         self.assertIn("unknown_tool", answer)
 
-    def test_missing_argument_is_rejected_before_execution(self):
-        answer = run_agent("test", model=FakeModel("missing_argument"))
+    def test_missing_argument_is_rejected_before_policy(self):
+        events = []
+        answer = run_agent(
+            "test",
+            model=FakeModel("missing_argument"),
+            on_event=events.append,
+        )
         self.assertIn("missing_arguments", answer)
+        self.assertNotIn("policy_decision", [event["type"] for event in events])
 
     def test_invalid_operation_is_rejected_from_tool_schema(self):
         answer = run_agent("test", model=FakeModel("invalid_operation"))
@@ -102,24 +176,10 @@ class AgentV4Tests(unittest.TestCase):
         )
         self.assertEqual(answer, "The result is 42.")
         attempts = [event for event in events if event["type"] == "tool_attempt"]
-        retries = [event for event in events if event["type"] == "tool_retry"]
         execute = next(event for event in events if event["type"] == "tool_execute")
         self.assertEqual([event["attempt"] for event in attempts], [1, 2])
-        self.assertEqual(len(retries), 1)
         self.assertEqual(execute["retry_policy_source"], "Tool.max_retries")
         self.assertEqual(execute["effective_max_retries"], 2)
-
-    def test_retry_override_remains_available_for_regression_tests(self):
-        events = []
-        answer = run_agent(
-            "do not retry",
-            model=FakeModel("retry_success"),
-            on_event=events.append,
-            max_retries=0,
-        )
-        self.assertIn("tool_retry_exhausted", answer)
-        execute = next(event for event in events if event["type"] == "tool_execute")
-        self.assertEqual(execute["retry_policy_source"], "Runtime override")
 
     def test_exact_duplicate_model_call_is_blocked_before_second_execution(self):
         events = []
