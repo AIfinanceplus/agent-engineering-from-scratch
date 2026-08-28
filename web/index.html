@@ -3,33 +3,35 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Runtime Visual Debugger · V4</title>
+  <title>Agent Runtime Visual Debugger · V5</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V4</p>
-        <h1>Tool Object：一个能力只有一个定义</h1>
+        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V5</p>
+        <h1>Policy Engine：有能力，不等于有权限</h1>
         <p class="hero-copy">
-          V3 的 function、validation、model schema、retry policy 分散在多个位置。V4 把它们收进一个 Tool 对象：
-          Registry 找到的不再只是 Python function，而是一份完整的 capability definition。
+          Tool Object 描述 capability：schema、function、retry、risk。Policy Engine 则独立决定当前请求是否允许执行。
+          即使 Tool 存在、参数完全合法，也可能得到 ALLOW、REQUIRE_APPROVAL 或 DENY。
         </p>
       </div>
       <div class="principle-card">
-        <span>V4 核心原则</span>
-        <strong>Registry → Tool Object</strong>
-        <strong>Single Source of Truth</strong>
+        <span>V5 核心原则</span>
+        <strong>Capability ≠ Permission</strong>
+        <strong>Policy before Execution</strong>
       </div>
     </header>
 
     <section class="controls panel">
       <label for="prompt">用户输入</label>
-      <input id="prompt" value="Please calculate 10 + 20." />
+      <input id="prompt" value="Please calculate 8 + 9." />
       <label for="scenario">测试场景</label>
       <select id="scenario">
-        <option value="success">普通 Calculator · 不重试</option>
+        <option value="policy_allow">LOW risk → ALLOW → 执行</option>
+        <option value="policy_approval">MEDIUM risk → REQUIRE_APPROVAL</option>
+        <option value="policy_deny">HIGH risk → DENY</option>
         <option value="retry_success">Flaky Calculator · Tool 自带 Retry</option>
         <option value="duplicate_loop">重复 Tool Call → 拦截</option>
         <option value="infinite_loop">参数变化 Loop → MAX_STEPS</option>
@@ -40,7 +42,7 @@
       </select>
       <label for="max-steps">MAX_STEPS</label>
       <input id="max-steps" class="number-input" type="number" min="1" max="20" value="4" />
-      <button id="run-btn" class="primary">运行真实 V4</button>
+      <button id="run-btn" class="primary">运行真实 V5</button>
       <button id="prev-btn">上一步</button>
       <button id="next-btn">下一步</button>
       <button id="auto-btn">自动播放</button>
@@ -51,7 +53,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">ARCHITECTURE</p>
-          <h2>Model proposal 如何解析成完整 Tool Capability</h2>
+          <h2>从 Capability 到 Permission，再到 Execution</h2>
         </div>
         <div id="step-counter" class="step-counter">尚未运行</div>
       </div>
@@ -65,20 +67,22 @@
         <div class="arrow">→</div>
         <div class="node" data-node="registry"><span>4</span><strong>Tool Registry</strong><small>name → Tool</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="toolobject"><span>5</span><strong>Tool Object</strong><small>schema + validate + retry + function</small></div>
+        <div class="node" data-node="toolobject"><span>5</span><strong>Tool Object</strong><small>validate + risk + retry + function</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="tool"><span>6</span><strong>Python Function</strong><small>真正执行</small></div>
+        <div class="node" data-node="policy"><span>6</span><strong>Policy Engine</strong><small>ALLOW / APPROVAL / DENY</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="tool"><span>7</span><strong>Python Function</strong><small>只有 ALLOW 才执行</small></div>
         <div class="arrow loop-arrow">↩</div>
-        <div class="node" data-node="observation"><span>7</span><strong>Observation</strong><small>结果或错误</small></div>
+        <div class="node" data-node="observation"><span>8</span><strong>Observation</strong><small>结果或政策错误</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="final"><span>8</span><strong>Final / Stop</strong><small>结束</small></div>
+        <div class="node" data-node="final"><span>9</span><strong>Final / Stop</strong><small>结束</small></div>
       </div>
     </section>
 
     <section class="workspace">
       <aside class="timeline panel">
         <div class="section-heading compact"><div><p class="eyebrow">TRACE</p><h2>执行事件</h2></div></div>
-        <ol id="timeline-list"><li class="empty">点击“运行真实 V4”开始。</li></ol>
+        <ol id="timeline-list"><li class="empty">点击“运行真实 V5”开始。</li></ol>
       </aside>
 
       <section class="code panel">
@@ -92,7 +96,7 @@
       <aside class="explain panel">
         <div class="section-heading compact"><div><p class="eyebrow">COMMENTARY</p><h2 id="explain-title">为什么这样设计？</h2></div></div>
         <div id="explain-body" class="explain-body">
-          <p>推荐对比普通 Calculator 和 Flaky Calculator：它们由不同 Tool Object 声明自己的 retry policy。</p>
+          <p>推荐依次跑 LOW、MEDIUM、HIGH 三种 risk，观察相同“合法 Tool Call”如何得到不同 Policy Decision。</p>
         </div>
       </aside>
     </section>
@@ -102,7 +106,7 @@
       <pre><code id="event-json">{}</code></pre>
     </section>
 
-    <footer><span>V4 目标：Model schema、validation、retry policy 和 Python function 来自同一个 Tool definition。</span></footer>
+    <footer><span>V5 目标：Tool 描述能力事实，Policy Engine 独立决定是否允许执行。</span></footer>
   </main>
   <script src="app.js"></script>
 </body>
