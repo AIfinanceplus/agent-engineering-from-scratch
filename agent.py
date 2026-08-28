@@ -6,7 +6,7 @@ model itself:
 2. cap the number of tool-call attempts with MAX_STEPS.
 """
 
-from runtime_validation import validate_model_response
+from model_validation import validate_model_response
 from tools import (
     TOOL_REGISTRY,
     calculator,
