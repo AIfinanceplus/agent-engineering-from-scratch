@@ -1,27 +1,18 @@
-"""Serve the V3 Agent Runtime visual debugger with Python's standard library.
-
-Run:
-    python serve_visualizer.py
-
-Then open:
-    http://127.0.0.1:8000
-"""
+"""Serve the V4 Tool Object visual debugger with Python's standard library."""
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 
-from agent import DEFAULT_MAX_RETRIES, DEFAULT_MAX_STEPS, run_agent
+from agent import DEFAULT_MAX_STEPS, run_agent
 from model_adapters import FAKE_SCENARIOS, FakeModel
-from tools import reset_teaching_tools
+from tools import TOOL_REGISTRY, reset_teaching_tools
 
 
 WEB_DIR = Path(__file__).parent / "web"
 
 
 class VisualizerHandler(SimpleHTTPRequestHandler):
-    """Serve static UI files and one endpoint that runs the real Runtime."""
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
@@ -42,17 +33,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         user_message = request_data.get("message", "Please calculate 10 + 20.")
         scenario = request_data.get("scenario", "success")
         max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
-        max_retries = request_data.get("max_retries", DEFAULT_MAX_RETRIES)
 
         if scenario not in FAKE_SCENARIOS:
-            self.send_json(
-                400,
-                {
-                    "ok": False,
-                    "error": f"Unknown scenario: {scenario}",
-                    "events": [],
-                },
-            )
+            self.send_json(400, {"ok": False, "error": f"Unknown scenario: {scenario}", "events": []})
             return
 
         if (
@@ -61,30 +44,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             or max_steps < 1
             or max_steps > 20
         ):
-            self.send_json(
-                400,
-                {
-                    "ok": False,
-                    "error": "max_steps must be an integer from 1 to 20",
-                    "events": [],
-                },
-            )
-            return
-
-        if (
-            not isinstance(max_retries, int)
-            or isinstance(max_retries, bool)
-            or max_retries < 0
-            or max_retries > 5
-        ):
-            self.send_json(
-                400,
-                {
-                    "ok": False,
-                    "error": "max_retries must be an integer from 0 to 5",
-                    "events": [],
-                },
-            )
+            self.send_json(400, {"ok": False, "error": "max_steps must be an integer from 1 to 20", "events": []})
             return
 
         events = []
@@ -96,23 +56,21 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 model=FakeModel(scenario=scenario),
                 on_event=events.append,
                 max_steps=max_steps,
-                max_retries=max_retries,
             )
             payload = {
                 "ok": True,
                 "scenario": scenario,
                 "max_steps": max_steps,
-                "max_retries": max_retries,
+                "tool_registry": [tool.trace_metadata() for tool in TOOL_REGISTRY.values()],
                 "final_answer": final_answer,
                 "events": events,
             }
             status = 200
-        except Exception as exc:  # Debug UI should surface unexpected failures.
+        except Exception as exc:
             payload = {
                 "ok": False,
                 "scenario": scenario,
                 "max_steps": max_steps,
-                "max_retries": max_retries,
                 "error": f"{exc.__class__.__name__}: {exc}",
                 "events": events,
             }
@@ -134,7 +92,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V3")
+    print("Agent Runtime Visual Debugger · V4")
     print("Open http://127.0.0.1:8000")
     print("Press Ctrl+C to stop.")
 

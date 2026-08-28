@@ -1,47 +1,29 @@
-"""V3: a model-agnostic Agent Runtime with retry and loop detection.
+"""V4: Agent Runtime driven by Tool objects.
 
-V1 protected the Tool boundary. V2 constrained the model with response
-validation and MAX_STEPS. V3 adds two different protections:
-
-1. Runtime retry for transient Tool failures such as TimeoutError.
-2. Exact duplicate Tool Call detection for model-level loops.
-
-A retry is the Runtime repeating the SAME approved action because execution
-failed transiently. A duplicate Tool Call is the MODEL proposing the same
-action again after an Observation. They are intentionally different concepts.
+V3 proved retry and duplicate-loop protection. V4 removes configuration drift:
+Runtime no longer assembles a Tool from separate function, validation, schema,
+and retry definitions. It resolves one Tool object and reads the capability's
+behavior from that object.
 """
 
 import json
 
 from model_validation import validate_model_response
-from tools import (
-    TOOL_REGISTRY,
-    calculator,
-    resolve_tool,
-    validate_tool_arguments,
-)
+from tools import TOOL_REGISTRY, Tool, calculator, resolve_tool
 
 
 DEFAULT_MAX_STEPS = 5
-DEFAULT_MAX_RETRIES = 2
-RETRYABLE_ERRORS = (TimeoutError, ConnectionError)
 
 # Backwards-compatible public name used by earlier lessons/tests.
 tool_registry = TOOL_REGISTRY
 
 
 def _emit(on_event, event_type: str, **payload) -> None:
-    """Send a read-only execution event to an optional observer."""
     if on_event is not None:
         on_event({"type": event_type, **payload})
 
 
 def _tool_call_key(tool_name: str, arguments: dict) -> str:
-    """Create a stable identity for one model-proposed action.
-
-    Sorting JSON keys means {"a": 1, "b": 2} and {"b": 2, "a": 1}
-    are treated as the same action.
-    """
     normalized_arguments = json.dumps(
         arguments,
         sort_keys=True,
@@ -52,7 +34,6 @@ def _tool_call_key(tool_name: str, arguments: dict) -> str:
 
 
 def _execution_error(tool_name: str, exc: Exception) -> dict:
-    """Normalize a non-retryable Python exception into an Observation."""
     return {
         "error": {
             "code": "tool_execution_error",
@@ -63,69 +44,71 @@ def _execution_error(tool_name: str, exc: Exception) -> dict:
 
 def _execute_tool_with_retry(
     *,
-    tool_name: str,
-    tool,
+    tool: Tool,
     arguments: dict,
-    max_retries: int,
     on_event=None,
+    max_retries_override: int | None = None,
 ):
-    """Execute one Tool Call, retrying only transient failures.
+    """Execute one Tool using retry policy stored on the Tool object.
 
-    max_retries=2 means at most 3 total execution attempts:
-    initial attempt + retry #1 + retry #2.
-
-    These retries remain inside ONE model step. The model is not consulted
-    between attempts because the Runtime is repeating the exact same action.
+    `max_retries_override` exists only to keep deterministic regression tests
+    possible. Normal Runtime behavior reads `tool.max_retries`.
     """
+    max_retries = tool.max_retries if max_retries_override is None else max_retries_override
     total_attempts = max_retries + 1
 
     for attempt in range(1, total_attempts + 1):
         _emit(
             on_event,
             "tool_attempt",
-            tool_name=tool_name,
+            tool_name=tool.name,
             arguments=arguments,
             attempt=attempt,
             total_attempts=total_attempts,
+            retry_policy={
+                "max_retries": max_retries,
+                "retryable_errors": [error.__name__ for error in tool.retryable_errors],
+            },
         )
 
         try:
-            result = tool(**arguments)
-        except RETRYABLE_ERRORS as exc:
+            result = tool.function(**arguments)
+        except tool.retryable_errors as exc:
             if attempt < total_attempts:
                 _emit(
                     on_event,
                     "tool_retry",
-                    tool_name=tool_name,
+                    tool_name=tool.name,
                     attempt=attempt,
                     next_attempt=attempt + 1,
                     error_type=exc.__class__.__name__,
                     error=str(exc),
+                    policy_source="Tool.max_retries",
                 )
                 continue
 
             error = {
                 "code": "tool_retry_exhausted",
                 "message": (
-                    f"{tool_name} still failed after {total_attempts} "
+                    f"{tool.name} still failed after {total_attempts} "
                     f"attempt(s): {exc}"
                 ),
             }
             _emit(
                 on_event,
                 "tool_error",
-                tool_name=tool_name,
+                tool_name=tool.name,
                 retryable=True,
                 attempts=attempt,
                 error=error,
             )
             return {"error": error}
         except Exception as exc:
-            observation = _execution_error(tool_name, exc)
+            observation = _execution_error(tool.name, exc)
             _emit(
                 on_event,
                 "tool_error",
-                tool_name=tool_name,
+                tool_name=tool.name,
                 retryable=False,
                 attempts=attempt,
                 error=observation["error"],
@@ -135,7 +118,7 @@ def _execute_tool_with_retry(
             _emit(
                 on_event,
                 "tool_result",
-                tool_name=tool_name,
+                tool_name=tool.name,
                 result=result,
                 attempts=attempt,
             )
@@ -145,7 +128,6 @@ def _execute_tool_with_retry(
 
 
 def _stop_agent(on_event, error: dict, *, reason: str, step: int, max_steps: int) -> str:
-    """Stop the Runtime safely and expose the reason as trace data."""
     content = f"Agent stopped [{error['code']}]: {error['message']}"
     _emit(
         on_event,
@@ -164,17 +146,21 @@ def run_agent(
     model=None,
     on_event=None,
     max_steps: int = DEFAULT_MAX_STEPS,
-    max_retries: int = DEFAULT_MAX_RETRIES,
+    max_retries: int | None = None,
 ) -> str:
-    """Run the Agent Loop with deterministic Runtime guards.
+    """Run the Agent Loop using Tool objects from the Registry.
 
-    `max_steps` counts model-proposed Tool Calls.
-    `max_retries` counts extra Runtime execution attempts for one Tool Call.
+    `max_retries=None` means use each Tool's own retry policy. A non-negative
+    value is a teaching/test override retained for V3 regression tests.
     """
     if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < 1:
         raise ValueError("max_steps must be a positive integer")
-    if not isinstance(max_retries, int) or isinstance(max_retries, bool) or max_retries < 0:
-        raise ValueError("max_retries must be a non-negative integer")
+    if max_retries is not None and (
+        not isinstance(max_retries, int)
+        or isinstance(max_retries, bool)
+        or max_retries < 0
+    ):
+        raise ValueError("max_retries must be None or a non-negative integer")
 
     if model is None:
         from model_adapters import FakeModel
@@ -269,26 +255,36 @@ def run_agent(
                 error=observation["error"],
             )
         else:
-            # Remember the model action before execution. Runtime retries happen
-            # internally and do NOT create new entries in this set.
             seen_calls.add(call_key)
-
             tool = resolve_tool(tool_name)
+
             _emit(
                 on_event,
                 "tool_lookup",
                 tool_name=tool_name,
                 found=tool is not None,
                 registry_keys=list(tool_registry.keys()),
+                tool_metadata=tool.trace_metadata() if tool is not None else None,
             )
 
-            validation = validate_tool_arguments(tool_name, arguments)
+            if tool is None:
+                validation = {
+                    "ok": False,
+                    "error": {
+                        "code": "unknown_tool",
+                        "message": f"Unknown tool: {tool_name}",
+                    },
+                }
+            else:
+                validation = tool.validate(arguments)
+
             _emit(
                 on_event,
                 "tool_validation",
                 tool_name=tool_name,
                 arguments=arguments,
                 validation=validation,
+                validator_source="Tool.validate" if tool is not None else "Registry",
             )
 
             if not validation["ok"]:
@@ -301,18 +297,22 @@ def run_agent(
                     error=validation["error"],
                 )
             else:
+                effective_retries = tool.max_retries if max_retries is None else max_retries
                 _emit(
                     on_event,
                     "tool_execute",
-                    tool_name=tool_name,
+                    tool_name=tool.name,
                     arguments=arguments,
-                    max_retries=max_retries,
+                    tool_metadata=tool.trace_metadata(),
+                    effective_max_retries=effective_retries,
+                    retry_policy_source=(
+                        "Tool.max_retries" if max_retries is None else "Runtime override"
+                    ),
                 )
                 observation = _execute_tool_with_retry(
-                    tool_name=tool_name,
                     tool=tool,
                     arguments=arguments,
-                    max_retries=max_retries,
+                    max_retries_override=max_retries,
                     on_event=on_event,
                 )
 

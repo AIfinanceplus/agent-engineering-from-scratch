@@ -1,6 +1,6 @@
 # Agent Engineering from Scratch
 
-A step-by-step learning repository for building an agent runtime from first principles.
+A step-by-step learning repository for building an Agent Runtime from first principles.
 
 The goal is to understand the system underneath agent frameworks before using LangGraph, Agents SDKs, or other abstractions.
 
@@ -21,94 +21,93 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V3
+## Current stage: V4 — Tool Object
 
-V1 protected the Tool boundary. V2 constrained the model with Model Response Validation and `MAX_STEPS`. V3 separates two kinds of repetition that look similar in a trace but belong to different layers.
+V3 worked, but one capability was defined in several places: Python function in `tools.py`, validation rules elsewhere, model-facing JSON schema in `model_adapters.py`, and retry policy in Runtime configuration. That creates **configuration drift**.
 
-```text
-User
-  ↓
-Model Adapter
-  ↓
-Model Response Validator
-  ↓
-MAX_STEPS Budget
-  ↓
-Duplicate Tool Call Detector    ← did the Model propose this exact action before?
-  ↓
-Tool Registry
-  ↓
-Tool Argument Validator
-  ↓
-Retry Executor                  ← retry transient execution failures internally
-  ↓
-Python Tool
-  ↓
-Observation
-  ↓
-Model
-  ↓
-Final Answer or Runtime Stop
-```
-
-The core distinction is:
+V4 changes the Registry from:
 
 ```text
-Runtime Retry
-same Model Tool Call
-    ↓
-Tool Attempt #1 → Timeout
-    ↓
-Tool Attempt #2 → Success
-
-Model Duplicate Loop
-Tool Call A → Observation
-    ↓
-Model proposes Tool Call A again
-    ↓
-Duplicate Detector blocks second execution
+name → callable
 ```
 
-A retry does **not** consume another Model step. It is the Runtime repeating the same action because execution failed transiently. A duplicate Tool Call is a new Model decision and therefore does consume another `MAX_STEPS` slot.
-
-`max_retries=2` means:
+to:
 
 ```text
-initial attempt + retry #1 + retry #2 = at most 3 Tool executions
+name → Tool Object
 ```
 
-Only selected transient exceptions are retryable in V3:
+A Tool now owns:
 
 ```python
-RETRYABLE_ERRORS = (TimeoutError, ConnectionError)
+Tool(
+    name=...,
+    description=...,
+    parameters=...,
+    function=...,
+    max_retries=...,
+    retryable_errors=...,
+)
 ```
 
-Deterministic validation errors and ordinary Python exceptions are not blindly retried.
+The same object is used to:
 
-### V3 deterministic scenarios
+```text
+Tool.parameters
+   ├─→ Model schema
+   └─→ Runtime argument validation
 
-The visual debugger can reproduce these cases without an API key:
+Tool.function
+   └─→ real Python execution
 
-- `success` — normal Tool Call completes on the first attempt
-- `retry_success` — `flaky_calculator` raises `TimeoutError` once, Runtime retries, second attempt succeeds
-- `duplicate_loop` — Model proposes exactly the same `calculator` call twice; second real execution is blocked
-- `infinite_loop` — Model keeps proposing different valid calls; duplicate detection does not fire and `MAX_STEPS` remains the guard
-- `malformed_response` — Model Response contract fails before Tool lookup
-- `unknown_tool` — Registry rejects an unavailable capability
-- `missing_argument` — Tool validator rejects missing data
-- `invalid_operation` — Tool validator rejects an invalid value
-
-The important principle is:
-
-> Retry handles execution uncertainty. Replanning handles decision uncertainty.
-
-V3 still does not implement model replanning logic explicitly; it only creates structured Observations that a real model could use to choose a different next action.
-
-## Run deterministic Agent Runtime
-
-```bash
-python agent.py
+Tool.max_retries + retryable_errors
+   └─→ Runtime retry behavior
 ```
+
+This makes the Tool definition the **single source of truth**.
+
+### Why the retry example now makes more sense
+
+`calculator` declares:
+
+```text
+max_retries = 0
+```
+
+`flaky_calculator` declares:
+
+```text
+max_retries = 2
+retryable_errors = TimeoutError / ConnectionError
+```
+
+So Runtime does not globally decide that "all tools retry twice". It resolves the specific Tool Object and reads that capability's policy.
+
+```text
+Model proposes flaky_calculator
+        ↓
+Registry resolves Tool Object
+        ↓
+Tool.max_retries = 2
+        ↓
+Attempt 1 → TimeoutError
+        ↓
+Runtime Retry
+        ↓
+Attempt 2 → Success
+```
+
+The normal `calculator` would not retry a transient failure by default because its Tool Object says `max_retries = 0`.
+
+### Model schema is no longer duplicated
+
+`OpenAIModel` now receives:
+
+```python
+self.tools = model_tool_schemas()
+```
+
+and `model_tool_schemas()` calls each Tool's `to_model_schema()`. There is no separate hand-maintained calculator schema in the adapter.
 
 ## Run the visual debugger
 
@@ -116,23 +115,28 @@ python agent.py
 python serve_visualizer.py
 ```
 
-Then open:
+Open:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-The browser lets you:
+Compare these two scenarios first:
 
-- choose deterministic success/failure/loop/retry scenarios
-- change `MAX_STEPS`
-- change `MAX_RETRIES`
-- step through real Runtime events
-- see each Tool attempt separately
-- see transient failure trigger a Runtime retry without another Model call
-- see exact duplicate Model actions blocked before second Tool execution
-- compare duplicate loops with changing-argument loops that require `MAX_STEPS`
-- inspect matching Python code, Chinese commentary, and raw event payloads
+```text
+普通 Calculator · 不重试
+Flaky Calculator · Tool 自带 Retry
+```
+
+When the Registry resolves the Tool, the trace shows its metadata, including `max_retries` and `retryable_errors`.
+
+## Run deterministic tests
+
+```bash
+python -m unittest -v
+```
+
+Tests are API-free and verify that Registry returns Tool objects, model schemas come from those same objects, validation uses Tool parameters, retry policy is Tool-owned, and the previous MAX_STEPS / duplicate protections still work.
 
 ## Run with a real OpenAI model
 
@@ -143,11 +147,3 @@ python run_real.py
 ```
 
 Secrets are never stored in source code.
-
-## Test
-
-```bash
-python -m unittest -v
-```
-
-Tests are deterministic and API-free. CI verifies Python syntax, browser JavaScript syntax, Tool/Model validation, MAX_STEPS, transient retry behavior, retry exhaustion, and exact duplicate Tool Call blocking.
