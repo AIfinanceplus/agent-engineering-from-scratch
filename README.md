@@ -9,8 +9,8 @@ The goal is to understand the system underneath agent frameworks before using La
 - V0 — Minimal Agent Loop
 - V0.1 — Replaceable Model Adapter
 - V0.2 — Visual Runtime Debugger
-- V1 — Tool Registry
-- V2 — Validation + MAX_STEPS
+- V1 — Tool Registry + Basic Validation
+- V2 — MAX_STEPS + Model Response Validation
 - V3 — Retry + Loop Detection
 - V4 — Tool Object
 - V5 — Policy Engine
@@ -21,51 +21,53 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V0.2
+## Current stage: V1
 
-V0 introduced the smallest possible loop:
+V0 introduced the smallest possible Agent Loop. V0.1 made the model provider replaceable. V0.2 made execution observable in the browser.
+
+V1 adds the first explicit **trust boundary** around model-proposed tool calls:
 
 ```text
 User
   ↓
-Model decides an action
+Model proposes Tool Call
   ↓
-Tool Call
+Runtime
   ↓
-Runtime executes Python function
+Tool Registry         ← does this capability exist?
   ↓
-Observation
+Argument Validator    ← are the arguments valid?
   ↓
-Model produces final answer
+Python Tool           ← execute only if validation passed
+  ↓
+Observation           ← success OR structured error
+  ↓
+Model
+  ↓
+Final Answer
 ```
 
-V0.1 made the model provider replaceable:
+The important change is that the runtime no longer does this blindly:
 
-```text
-                 Agent Runtime
-                      ↓
-                Model Contract
-                 ↙         ↘
-           FakeModel     OpenAIModel
+```python
+tool = tool_registry[tool_name]
+result = tool(**arguments)
 ```
 
-V0.2 adds **observability without changing control**. `run_agent()` accepts an optional `on_event` callback. The visual debugger uses those real runtime events to animate the architecture, show the matching code, and explain each step in Chinese.
+Instead it resolves and validates first. Unknown tool names, missing arguments, and invalid values are converted into structured Observations rather than uncaught Python exceptions.
 
-```text
-Actual Python Runtime
-        ↓ emits events
-   on_event observer
-        ↓
-Local Web Server
-        ↓
-Browser Visual Debugger
-```
+> Model proposes an action. Runtime decides whether that proposal is executable.
 
-The observer is intentionally read-only. It can see what happened, but it does not decide what happens next.
+### V1 deterministic failure scenarios
 
-The central design principle remains:
+The visual debugger can reproduce four scenarios without an API key:
 
-> Model decides **what** to do. Runtime controls **how** it is executed.
+- `success` — valid calculator call reaches Python execution
+- `unknown_tool` — Registry miss becomes `unknown_tool`
+- `missing_argument` — call is rejected before execution
+- `invalid_operation` — invalid enum-like value is rejected before execution
+
+The rejected scenarios intentionally never emit `tool_execute`.
 
 ## Run deterministic Agent Runtime
 
@@ -87,14 +89,15 @@ Then open:
 http://127.0.0.1:8000
 ```
 
-In the browser you can:
+In the browser you can choose a scenario and then:
 
-- run the real deterministic V0.2 runtime
+- run the real deterministic Python runtime
 - step forward and backward through execution events
 - auto-play the complete Agent Loop
-- see which architecture component is active
+- watch Registry and Validator nodes light up
+- verify rejected calls never reach the Calculator node
 - see the matching Python code for each step
-- read Chinese design commentary explaining why the boundary exists
+- read Chinese design commentary
 - inspect the raw runtime event payload
 
 ## Run with a real OpenAI model
@@ -125,4 +128,4 @@ The real adapter uses the OpenAI Responses API function-calling loop. Secrets ar
 python -m unittest -v
 ```
 
-The unit tests remain deterministic and do not call a live model API. CI also checks Python syntax and browser JavaScript syntax.
+Tests are deterministic and API-free. CI checks Python syntax, browser JavaScript syntax, successful tool execution, Registry misses, argument rejection, and visual trace behavior.

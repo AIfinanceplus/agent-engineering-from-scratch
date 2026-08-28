@@ -1,4 +1,4 @@
-"""Serve the V0.2 Agent Runtime visual debugger with Python's standard library.
+"""Serve the V1 Agent Runtime visual debugger with Python's standard library.
 
 Run:
     python serve_visualizer.py
@@ -12,14 +12,14 @@ import json
 from pathlib import Path
 
 from agent import run_agent
-from model_adapters import FakeModel
+from model_adapters import FAKE_SCENARIOS, FakeModel
 
 
 WEB_DIR = Path(__file__).parent / "web"
 
 
 class VisualizerHandler(SimpleHTTPRequestHandler):
-    """Serve static UI files and one tiny endpoint that runs the real runtime."""
+    """Serve static UI files and one endpoint that runs the real runtime."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
@@ -39,28 +39,46 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         user_message = request_data.get("message", "Please calculate 10 + 20.")
+        scenario = request_data.get("scenario", "success")
+
+        if scenario not in FAKE_SCENARIOS:
+            self.send_json(
+                400,
+                {
+                    "ok": False,
+                    "error": f"Unknown scenario: {scenario}",
+                    "events": [],
+                },
+            )
+            return
+
         events = []
 
         try:
             final_answer = run_agent(
                 user_message,
-                model=FakeModel(),
+                model=FakeModel(scenario=scenario),
                 on_event=events.append,
             )
             payload = {
                 "ok": True,
+                "scenario": scenario,
                 "final_answer": final_answer,
                 "events": events,
             }
             status = 200
-        except Exception as exc:  # Debug UI should show runtime failures as data.
+        except Exception as exc:  # Debug UI should surface unexpected failures.
             payload = {
                 "ok": False,
+                "scenario": scenario,
                 "error": f"{exc.__class__.__name__}: {exc}",
                 "events": events,
             }
             status = 500
 
+        self.send_json(status, payload)
+
+    def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -75,7 +93,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger")
+    print("Agent Runtime Visual Debugger · V1")
     print("Open http://127.0.0.1:8000")
     print("Press Ctrl+C to stop.")
 

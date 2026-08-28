@@ -3,31 +3,38 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Runtime Visual Debugger</title>
+  <title>Agent Runtime Visual Debugger · V1</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V0.2</p>
-        <h1>Agent Runtime 可视化调试器</h1>
+        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V1</p>
+        <h1>Tool Registry 信任边界</h1>
         <p class="hero-copy">
-          这不是静态流程图。点击“运行真实 V0.2”后，页面会调用 Python Runtime，
-          收集实际执行事件，再逐步解释 Model、Runtime、Tool Registry 与 Observation 如何协作。
+          V1 不再假设 Model 一定会给出正确 Tool Call。选择一个场景后，页面会真正执行 Python Runtime，
+          让你看到 Registry Lookup、参数验证、拒绝执行与 Observation 如何保护系统。
         </p>
       </div>
       <div class="principle-card">
-        <span>核心原则</span>
-        <strong>Model 决定 WHAT</strong>
-        <strong>Runtime 控制 HOW</strong>
+        <span>V1 核心原则</span>
+        <strong>Model 提议动作</strong>
+        <strong>Runtime 验证后执行</strong>
       </div>
     </header>
 
     <section class="controls panel">
       <label for="prompt">用户输入</label>
       <input id="prompt" value="Please calculate 10 + 20." />
-      <button id="run-btn" class="primary">运行真实 V0.2</button>
+      <label for="scenario">测试场景</label>
+      <select id="scenario">
+        <option value="success">正常 Tool Call</option>
+        <option value="unknown_tool">未知 Tool</option>
+        <option value="missing_argument">缺少参数</option>
+        <option value="invalid_operation">非法 operation</option>
+      </select>
+      <button id="run-btn" class="primary">运行真实 V1</button>
       <button id="prev-btn">上一步</button>
       <button id="next-btn">下一步</button>
       <button id="auto-btn">自动播放</button>
@@ -38,7 +45,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">ARCHITECTURE</p>
-          <h2>一次 Tool Calling 的真实路径</h2>
+          <h2>一次 Tool Call 穿过 Runtime 信任边界</h2>
         </div>
         <div id="step-counter" class="step-counter">尚未运行</div>
       </div>
@@ -46,17 +53,19 @@
       <div class="flow" id="flow">
         <div class="node" data-node="user"><span>1</span><strong>User</strong><small>提出目标</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="model"><span>2</span><strong>Model Adapter</strong><small>决定下一动作</small></div>
+        <div class="node" data-node="model"><span>2</span><strong>Model Adapter</strong><small>提议下一动作</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="runtime"><span>3</span><strong>Runtime</strong><small>解析并控制执行</small></div>
+        <div class="node" data-node="runtime"><span>3</span><strong>Runtime</strong><small>控制执行流程</small></div>
         <div class="arrow">→</div>
         <div class="node" data-node="registry"><span>4</span><strong>Tool Registry</strong><small>name → function</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="tool"><span>5</span><strong>Calculator</strong><small>真正做事</small></div>
-        <div class="arrow loop-arrow">↩</div>
-        <div class="node" data-node="observation"><span>6</span><strong>Observation</strong><small>结果返回模型</small></div>
+        <div class="node" data-node="validator"><span>5</span><strong>Validator</strong><small>检查参数与能力</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="final"><span>7</span><strong>Final Answer</strong><small>结束循环</small></div>
+        <div class="node" data-node="tool"><span>6</span><strong>Calculator</strong><small>只有验证通过才执行</small></div>
+        <div class="arrow loop-arrow">↩</div>
+        <div class="node" data-node="observation"><span>7</span><strong>Observation</strong><small>结果或错误回模型</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="final"><span>8</span><strong>Final Answer</strong><small>结束这一轮</small></div>
       </div>
     </section>
 
@@ -69,7 +78,7 @@
           </div>
         </div>
         <ol id="timeline-list">
-          <li class="empty">点击“运行真实 V0.2”开始。</li>
+          <li class="empty">点击“运行真实 V1”开始。</li>
         </ol>
       </aside>
 
@@ -92,7 +101,7 @@
           </div>
         </div>
         <div id="explain-body" class="explain-body">
-          <p>每一步都会显示中文注释，重点解释职责边界，而不只是逐行翻译代码。</p>
+          <p>重点观察：Model 的输出是不可信输入。Registry 与 Validator 是 Runtime 的确定性边界。</p>
         </div>
       </aside>
     </section>
@@ -108,7 +117,7 @@
     </section>
 
     <footer>
-      <span>V0.2 目标：把“运行过程”变成可观察数据，但不让观察器参与决策。</span>
+      <span>V1 目标：坏 Tool Call 应该被拒绝并成为 Observation，而不是让 Runtime 崩溃。</span>
     </footer>
   </main>
 

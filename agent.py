@@ -1,41 +1,44 @@
-"""V0.2: a minimal model-agnostic agent runtime with observable execution.
+"""V1: a model-agnostic agent runtime with a defensive Tool Registry boundary.
 
-The runtime still controls execution exactly as before. The only new idea is an
-optional `on_event` callback that lets a debugger observe what is happening
-without changing the decisions made by the model or the runtime.
+The model proposes tool calls. The runtime resolves the name, validates the
+arguments, executes only valid calls, and turns failures into Observations
+instead of crashing the whole agent loop.
 """
 
-
-def calculator(a: float, b: float, operation: str) -> float:
-    """A real Python function that performs the work."""
-    if operation == "add":
-        return a + b
-    if operation == "multiply":
-        return a * b
-    raise ValueError(f"Unsupported operation: {operation}")
+from tools import (
+    TOOL_REGISTRY,
+    calculator,
+    resolve_tool,
+    validate_tool_arguments,
+)
 
 
-# Runtime-side mapping from model-visible tool name to real implementation.
-tool_registry = {
-    "calculator": calculator,
-}
+# Backwards-compatible public name used by earlier lessons/tests.
+tool_registry = TOOL_REGISTRY
 
 
 def _emit(on_event, event_type: str, **payload) -> None:
-    """Send a read-only execution event to an optional observer.
-
-    This is instrumentation, not control logic: the observer can see what the
-    runtime is doing, but it cannot decide which tool runs next.
-    """
+    """Send a read-only execution event to an optional observer."""
     if on_event is not None:
         on_event({"type": event_type, **payload})
 
 
-def run_agent(user_message: str, model=None, on_event=None) -> str:
-    """Run Model -> Tool -> Observation -> Model until a final answer exists.
+def _execution_error(tool_name: str, exc: Exception) -> dict:
+    """Normalize a Python exception into a model-visible Observation."""
+    return {
+        "error": {
+            "code": "tool_execution_error",
+            "message": f"{tool_name} failed: {exc}",
+        }
+    }
 
-    `model` is intentionally injected so the runtime remains provider-agnostic.
-    `on_event` is optional and exists only for tracing / visualization.
+
+def run_agent(user_message: str, model=None, on_event=None) -> str:
+    """Run Model -> Registry -> Tool -> Observation -> Model until final.
+
+    V1 adds a trust boundary around model-proposed tool calls:
+    unknown names and invalid arguments become Observations instead of uncaught
+    runtime exceptions.
     """
     if model is None:
         from model_adapters import FakeModel
@@ -56,30 +59,66 @@ def run_agent(user_message: str, model=None, on_event=None) -> str:
         if response["type"] != "tool_call":
             raise RuntimeError(f"Unknown model response type: {response['type']}")
 
-        tool_name = response["tool_name"]
-        arguments = response["arguments"]
+        tool_name = response.get("tool_name", "")
+        arguments = response.get("arguments")
+        tool = resolve_tool(tool_name)
 
         _emit(
             on_event,
             "tool_lookup",
             tool_name=tool_name,
+            found=tool is not None,
             registry_keys=list(tool_registry.keys()),
         )
 
-        tool = tool_registry[tool_name]
+        validation = validate_tool_arguments(tool_name, arguments)
+        _emit(
+            on_event,
+            "tool_validation",
+            tool_name=tool_name,
+            arguments=arguments,
+            validation=validation,
+        )
+
+        if not validation["ok"]:
+            observation = {"error": validation["error"]}
+            _emit(
+                on_event,
+                "tool_rejected",
+                tool_name=tool_name,
+                error=validation["error"],
+            )
+        else:
+            _emit(
+                on_event,
+                "tool_execute",
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+
+            try:
+                observation = tool(**arguments)
+            except Exception as exc:
+                observation = _execution_error(tool_name, exc)
+                _emit(
+                    on_event,
+                    "tool_error",
+                    tool_name=tool_name,
+                    error=observation["error"],
+                )
+            else:
+                _emit(
+                    on_event,
+                    "tool_result",
+                    tool_name=tool_name,
+                    result=observation,
+                )
 
         _emit(
             on_event,
-            "tool_execute",
+            "tool_observation",
             tool_name=tool_name,
-            arguments=arguments,
-        )
-        result = tool(**arguments)
-        _emit(
-            on_event,
-            "tool_result",
-            tool_name=tool_name,
-            result=result,
+            observation=observation,
         )
 
         _emit(
@@ -89,14 +128,14 @@ def run_agent(user_message: str, model=None, on_event=None) -> str:
             previous_response_id=response.get("response_id"),
             call_id=response.get("call_id"),
             tool_name=tool_name,
-            result=result,
+            result=observation,
         )
 
         response = model.continue_with_tool_result(
             previous_response_id=response.get("response_id"),
             call_id=response.get("call_id"),
             tool_name=tool_name,
-            result=result,
+            result=observation,
         )
         _emit(on_event, "model_response", response=response)
 
