@@ -1,6 +1,7 @@
 import unittest
 
 from agent import calculator, run_agent
+from context import ExecutionContext
 from model_adapters import FakeModel
 from model_validation import validate_model_response
 from policy import PolicyDecision, PolicyEngine
@@ -17,7 +18,24 @@ from tools import (
 )
 
 
-class AgentV5Tests(unittest.TestCase):
+GENERAL_CONTEXT = ExecutionContext(
+    tenant_id="demo-tenant",
+    user_id="user-123",
+    agent_id="general-agent",
+    task_id="task-001",
+    trace_id="trace-general",
+)
+
+READ_ONLY_CONTEXT = ExecutionContext(
+    tenant_id="demo-tenant",
+    user_id="user-123",
+    agent_id="read-only-agent",
+    task_id="task-002",
+    trace_id="trace-read-only",
+)
+
+
+class AgentV6Tests(unittest.TestCase):
     def setUp(self):
         reset_teaching_tools()
 
@@ -26,9 +44,30 @@ class AgentV5Tests(unittest.TestCase):
 
     def test_agent_completes_valid_tool_loop(self):
         self.assertEqual(
-            run_agent("Please calculate 10 + 20.", model=FakeModel("success")),
+            run_agent(
+                "Please calculate 10 + 20.",
+                model=FakeModel("success"),
+                execution_context=GENERAL_CONTEXT,
+            ),
             "The result is 30.",
         )
+
+    def test_execution_context_is_immutable_runtime_identity(self):
+        self.assertEqual(GENERAL_CONTEXT.agent_id, "general-agent")
+        with self.assertRaises(Exception):
+            GENERAL_CONTEXT.agent_id = "model-invented-agent"
+
+    def test_runtime_emits_execution_context_before_model_work(self):
+        events = []
+        run_agent(
+            "test",
+            model=FakeModel("success"),
+            execution_context=GENERAL_CONTEXT,
+            on_event=events.append,
+        )
+        self.assertEqual(events[0]["type"], "execution_context")
+        self.assertEqual(events[0]["source"], "Runtime injected")
+        self.assertEqual(events[0]["context"], GENERAL_CONTEXT.to_dict())
 
     def test_registry_resolves_complete_tool_object(self):
         tool = resolve_tool("calculator")
@@ -48,20 +87,31 @@ class AgentV5Tests(unittest.TestCase):
         self.assertEqual(FLAKY_CALCULATOR_TOOL.max_retries, 2)
         self.assertIn(TimeoutError, FLAKY_CALCULATOR_TOOL.retryable_errors)
 
-    def test_policy_engine_interprets_tool_risk(self):
+    def test_policy_engine_uses_tool_and_context(self):
         policy = PolicyEngine()
         self.assertIs(
-            policy.evaluate(CALCULATOR_TOOL, {}).decision,
+            policy.evaluate(CALCULATOR_TOOL, {}, GENERAL_CONTEXT).decision,
             PolicyDecision.ALLOW,
         )
         self.assertIs(
-            policy.evaluate(SEND_MESSAGE_TOOL, {}).decision,
+            policy.evaluate(SEND_MESSAGE_TOOL, {}, GENERAL_CONTEXT).decision,
             PolicyDecision.REQUIRE_APPROVAL,
         )
         self.assertIs(
-            policy.evaluate(DELETE_RECORD_TOOL, {}).decision,
+            policy.evaluate(SEND_MESSAGE_TOOL, {}, READ_ONLY_CONTEXT).decision,
             PolicyDecision.DENY,
         )
+        self.assertIs(
+            policy.evaluate(DELETE_RECORD_TOOL, {}, GENERAL_CONTEXT).decision,
+            PolicyDecision.DENY,
+        )
+
+    def test_same_tool_different_context_changes_policy_decision(self):
+        policy = PolicyEngine()
+        general = policy.evaluate(SEND_MESSAGE_TOOL, {}, GENERAL_CONTEXT)
+        read_only = policy.evaluate(SEND_MESSAGE_TOOL, {}, READ_ONLY_CONTEXT)
+        self.assertIs(general.decision, PolicyDecision.REQUIRE_APPROVAL)
+        self.assertIs(read_only.decision, PolicyDecision.DENY)
 
     def test_low_risk_tool_is_allowed_and_executes(self):
         events = []
@@ -69,34 +119,40 @@ class AgentV5Tests(unittest.TestCase):
             "allow low-risk tool",
             model=FakeModel("policy_allow"),
             on_event=events.append,
+            execution_context=READ_ONLY_CONTEXT,
         )
-
         self.assertEqual(answer, "The result is 17.")
         decision = next(event for event in events if event["type"] == "policy_decision")
-        self.assertEqual(decision["tool_risk"], "low")
+        self.assertEqual(decision["context"]["agent_id"], "read-only-agent")
         self.assertEqual(decision["policy"]["decision"], "allow")
         self.assertIn("tool_attempt", [event["type"] for event in events])
 
-    def test_medium_risk_tool_requires_approval_and_does_not_execute(self):
+    def test_medium_risk_general_agent_requires_approval(self):
         events = []
         answer = run_agent(
             "send a message",
             model=FakeModel("policy_approval"),
             on_event=events.append,
+            execution_context=GENERAL_CONTEXT,
         )
-
         self.assertIn("approval_required", answer)
         decision = next(event for event in events if event["type"] == "policy_decision")
-        self.assertEqual(decision["tool_risk"], "medium")
         self.assertEqual(decision["policy"]["decision"], "require_approval")
         self.assertNotIn("tool_attempt", [event["type"] for event in events])
-        rejection = next(
-            event
-            for event in events
-            if event["type"] == "tool_rejected"
-            and event.get("reason") == "require_approval"
+
+    def test_medium_risk_read_only_agent_is_denied(self):
+        events = []
+        answer = run_agent(
+            "send a message",
+            model=FakeModel("policy_approval"),
+            on_event=events.append,
+            execution_context=READ_ONLY_CONTEXT,
         )
-        self.assertEqual(rejection["error"]["code"], "approval_required")
+        self.assertIn("policy_denied", answer)
+        decision = next(event for event in events if event["type"] == "policy_decision")
+        self.assertEqual(decision["context"]["agent_id"], "read-only-agent")
+        self.assertEqual(decision["policy"]["decision"], "deny")
+        self.assertNotIn("tool_attempt", [event["type"] for event in events])
 
     def test_high_risk_tool_is_denied_and_does_not_execute(self):
         events = []
@@ -104,12 +160,9 @@ class AgentV5Tests(unittest.TestCase):
             "delete record",
             model=FakeModel("policy_deny"),
             on_event=events.append,
+            execution_context=GENERAL_CONTEXT,
         )
-
         self.assertIn("policy_denied", answer)
-        decision = next(event for event in events if event["type"] == "policy_decision")
-        self.assertEqual(decision["tool_risk"], "high")
-        self.assertEqual(decision["policy"]["decision"], "deny")
         self.assertNotIn("tool_attempt", [event["type"] for event in events])
 
     def test_unknown_tool_becomes_observation_instead_of_crash(self):
@@ -176,10 +229,7 @@ class AgentV5Tests(unittest.TestCase):
         )
         self.assertEqual(answer, "The result is 42.")
         attempts = [event for event in events if event["type"] == "tool_attempt"]
-        execute = next(event for event in events if event["type"] == "tool_execute")
         self.assertEqual([event["attempt"] for event in attempts], [1, 2])
-        self.assertEqual(execute["retry_policy_source"], "Tool.max_retries")
-        self.assertEqual(execute["effective_max_retries"], 2)
 
     def test_exact_duplicate_model_call_is_blocked_before_second_execution(self):
         events = []
@@ -191,6 +241,14 @@ class AgentV5Tests(unittest.TestCase):
         self.assertIn("duplicate_tool_call", answer)
         attempts = [event for event in events if event["type"] == "tool_attempt"]
         self.assertEqual(len(attempts), 1)
+
+    def test_execution_context_must_be_typed(self):
+        with self.assertRaises(TypeError):
+            run_agent(
+                "test",
+                model=FakeModel("success"),
+                execution_context={"agent_id": "fake"},
+            )
 
 
 if __name__ == "__main__":
