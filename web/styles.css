@@ -19,7 +19,7 @@ body {
   color: var(--text);
 }
 
-.shell { max-width: 1580px; margin: 0 auto; padding: 28px; }
+.shell { max-width: 1680px; margin: 0 auto; padding: 28px; }
 .hero {
   display: grid;
   grid-template-columns: 1fr 320px;
@@ -28,7 +28,7 @@ body {
   margin-bottom: 20px;
 }
 .hero h1 { margin: 6px 0 12px; font-size: clamp(34px, 5vw, 64px); letter-spacing: -0.04em; }
-.hero-copy { max-width: 980px; color: var(--muted); font-size: 17px; line-height: 1.7; }
+.hero-copy { max-width: 1040px; color: var(--muted); font-size: 17px; line-height: 1.7; }
 .eyebrow { margin: 0; font-size: 11px; letter-spacing: .16em; font-weight: 800; color: var(--accent); }
 .principle-card {
   background: var(--active);
@@ -67,7 +67,12 @@ body {
   color: var(--text);
 }
 .controls input { min-width: 320px; flex: 1; }
-.controls select { min-width: 180px; }
+.controls select { min-width: 220px; }
+.controls .number-input {
+  min-width: 90px;
+  max-width: 100px;
+  flex: 0 0 100px;
+}
 button {
   border: 1px solid var(--line);
   background: white;
@@ -87,7 +92,7 @@ button.primary { background: var(--accent); color: white; border-color: var(--ac
 .step-counter { color: var(--muted); font-weight: 700; }
 .flow {
   display: grid;
-  grid-template-columns: repeat(15, max-content);
+  grid-template-columns: repeat(17, max-content);
   gap: 10px;
   align-items: center;
   overflow-x: auto;
@@ -157,6 +162,10 @@ footer { color: var(--muted); font-size: 13px; padding: 8px 2px 24px; }
 
 @media (max-width: 700px) {
   .shell { padding: 16px; }
-  .controls input, .controls select { min-width: 100%; }
+  .controls input, .controls select, .controls .number-input {
+    min-width: 100%;
+    max-width: none;
+    flex: 1 1 100%;
+  }
   .hero h1 { font-size: 38px; }
 }
