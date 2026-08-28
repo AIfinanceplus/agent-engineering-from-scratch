@@ -3,24 +3,24 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Runtime Visual Debugger · V1</title>
+  <title>Agent Runtime Visual Debugger · V2</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V1</p>
-        <h1>Tool Registry 信任边界</h1>
+        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V2</p>
+        <h1>Runtime Guard：模型也必须被约束</h1>
         <p class="hero-copy">
-          V1 不再假设 Model 一定会给出正确 Tool Call。选择一个场景后，页面会真正执行 Python Runtime，
-          让你看到 Registry Lookup、参数验证、拒绝执行与 Observation 如何保护系统。
+          V1 保护 Tool 边界；V2 再向上保护 Model 边界。Runtime 会先验证 Model Response，
+          再用 MAX_STEPS 限制 Tool Call 次数。即使每次 Tool Call 都合法，模型也不能无限循环。
         </p>
       </div>
       <div class="principle-card">
-        <span>V1 核心原则</span>
-        <strong>Model 提议动作</strong>
-        <strong>Runtime 验证后执行</strong>
+        <span>V2 核心原则</span>
+        <strong>Model 可以犯错</strong>
+        <strong>Runtime 必须有硬边界</strong>
       </div>
     </header>
 
@@ -31,10 +31,14 @@
       <select id="scenario">
         <option value="success">正常 Tool Call</option>
         <option value="unknown_tool">未知 Tool</option>
-        <option value="missing_argument">缺少参数</option>
-        <option value="invalid_operation">非法 operation</option>
+        <option value="missing_argument">缺少 Tool 参数</option>
+        <option value="invalid_operation">非法 Tool 参数</option>
+        <option value="malformed_response">Model Response 格式错误</option>
+        <option value="infinite_loop">Model 无限 Tool Loop</option>
       </select>
-      <button id="run-btn" class="primary">运行真实 V1</button>
+      <label for="max-steps">MAX_STEPS</label>
+      <input id="max-steps" class="number-input" type="number" min="1" max="20" value="3" />
+      <button id="run-btn" class="primary">运行真实 V2</button>
       <button id="prev-btn">上一步</button>
       <button id="next-btn">下一步</button>
       <button id="auto-btn">自动播放</button>
@@ -45,7 +49,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">ARCHITECTURE</p>
-          <h2>一次 Tool Call 穿过 Runtime 信任边界</h2>
+          <h2>Model Proposal 到真实执行之间的两层防线</h2>
         </div>
         <div id="step-counter" class="step-counter">尚未运行</div>
       </div>
@@ -53,19 +57,21 @@
       <div class="flow" id="flow">
         <div class="node" data-node="user"><span>1</span><strong>User</strong><small>提出目标</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="model"><span>2</span><strong>Model Adapter</strong><small>提议下一动作</small></div>
+        <div class="node" data-node="model"><span>2</span><strong>Model Adapter</strong><small>返回 proposal</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="runtime"><span>3</span><strong>Runtime</strong><small>控制执行流程</small></div>
+        <div class="node" data-node="modelguard"><span>3</span><strong>Model Validator</strong><small>检查 response contract</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="registry"><span>4</span><strong>Tool Registry</strong><small>name → function</small></div>
+        <div class="node" data-node="budget"><span>4</span><strong>Step Budget</strong><small>MAX_STEPS 硬限制</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="validator"><span>5</span><strong>Validator</strong><small>检查参数与能力</small></div>
+        <div class="node" data-node="registry"><span>5</span><strong>Tool Registry</strong><small>name → function</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="tool"><span>6</span><strong>Calculator</strong><small>只有验证通过才执行</small></div>
+        <div class="node" data-node="validator"><span>6</span><strong>Tool Validator</strong><small>检查 Tool 参数</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="tool"><span>7</span><strong>Calculator</strong><small>验证后才执行</small></div>
         <div class="arrow loop-arrow">↩</div>
-        <div class="node" data-node="observation"><span>7</span><strong>Observation</strong><small>结果或错误回模型</small></div>
+        <div class="node" data-node="observation"><span>8</span><strong>Observation</strong><small>结果回到 Model</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="final"><span>8</span><strong>Final Answer</strong><small>结束这一轮</small></div>
+        <div class="node" data-node="final"><span>9</span><strong>Final / Stop</strong><small>正常结束或硬停止</small></div>
       </div>
     </section>
 
@@ -78,7 +84,7 @@
           </div>
         </div>
         <ol id="timeline-list">
-          <li class="empty">点击“运行真实 V1”开始。</li>
+          <li class="empty">点击“运行真实 V2”开始。</li>
         </ol>
       </aside>
 
@@ -101,7 +107,7 @@
           </div>
         </div>
         <div id="explain-body" class="explain-body">
-          <p>重点观察：Model 的输出是不可信输入。Registry 与 Validator 是 Runtime 的确定性边界。</p>
+          <p>重点观察：Tool Validation 解决“动作是否合法”；MAX_STEPS 解决“整个循环是否失控”。</p>
         </div>
       </aside>
     </section>
@@ -117,7 +123,7 @@
     </section>
 
     <footer>
-      <span>V1 目标：坏 Tool Call 应该被拒绝并成为 Observation，而不是让 Runtime 崩溃。</span>
+      <span>V2 目标：Model Response 必须验证；合法的 Tool Call 也不能无限执行。</span>
     </footer>
   </main>
 
