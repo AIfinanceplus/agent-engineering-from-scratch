@@ -1,8 +1,8 @@
 """Model adapters for the learning runtime.
 
-FakeModel is deterministic and can intentionally produce good or bad tool calls
-so the Runtime trust boundary can be observed. OpenAIModel normalizes provider-
-specific Responses API output into the same tiny runtime-facing contract.
+FakeModel is deterministic and can intentionally produce good, bad, malformed,
+or looping responses so Runtime guards are observable. OpenAIModel normalizes
+provider-specific Responses API output into the same tiny runtime contract.
 """
 
 import json
@@ -46,6 +46,17 @@ FAKE_SCENARIOS = {
         "tool_name": "calculator",
         "arguments": {"a": 10, "b": 20, "operation": "divide"},
     },
+    "malformed_response": {
+        "response": {
+            "type": "tool_call",
+            "tool_name": "calculator",
+            "arguments": "this should have been a dictionary",
+        }
+    },
+    "infinite_loop": {
+        "tool_name": "calculator",
+        "arguments": {"a": 1, "b": 1, "operation": "add"},
+    },
 }
 
 
@@ -56,16 +67,23 @@ class FakeModel:
         if scenario not in FAKE_SCENARIOS:
             raise ValueError(f"Unknown fake scenario: {scenario}")
         self.scenario = scenario
+        self.turn = 0
 
-    def start(self, user_message: str) -> dict:
-        proposal = FAKE_SCENARIOS[self.scenario]
+    def _tool_call(self, proposal: dict) -> dict:
+        self.turn += 1
         return {
             "type": "tool_call",
-            "response_id": f"fake-response-{self.scenario}",
-            "call_id": f"fake-call-{self.scenario}",
+            "response_id": f"fake-response-{self.scenario}-{self.turn}",
+            "call_id": f"fake-call-{self.scenario}-{self.turn}",
             "tool_name": proposal["tool_name"],
             "arguments": dict(proposal["arguments"]),
         }
+
+    def start(self, user_message: str) -> dict:
+        scenario = FAKE_SCENARIOS[self.scenario]
+        if "response" in scenario:
+            return dict(scenario["response"])
+        return self._tool_call(scenario)
 
     def continue_with_tool_result(
         self,
@@ -75,6 +93,9 @@ class FakeModel:
         tool_name,
         result,
     ) -> dict:
+        if self.scenario == "infinite_loop":
+            return self._tool_call(FAKE_SCENARIOS["infinite_loop"])
+
         if isinstance(result, dict) and "error" in result:
             error = result["error"]
             return {
