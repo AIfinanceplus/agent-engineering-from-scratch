@@ -186,6 +186,15 @@ class APIOnlyPlannerEvalTests(unittest.TestCase):
         self.assertEqual(second["case"]["case_id"], "api-freshness-causal-guardrails")
         self.assertEqual(second["case"]["check_ids"], list(QUALITY_CHECKS))
 
+    def test_eval_allows_successful_runtime_retries(self):
+        result = generic_live_result()
+        result["trace"]["metrics"]["tool_attempts"] = 7
+        report = score_api_result(APIEvalCase("api-retry-contract"), result)
+        self.assertTrue(report["passed"], report["failures"])
+        attempts = next(check for check in report["checks"] if check["check_id"] == "tool_attempts")
+        self.assertTrue(attempts["actual"])
+        self.assertTrue(attempts["expected"])
+
 
 if __name__ == "__main__":
     unittest.main()
