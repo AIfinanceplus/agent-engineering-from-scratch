@@ -1,8 +1,8 @@
-"""Serve the V9 Planner + DAG Scheduler visual debugger.
+"""Serve the V10 research evidence + citation debugger.
 
-V9 makes the plan the primary UI. The V8 crash/resume endpoint remains
-available for backward-compatible experiments, but the default teaching path is
-Planner -> Scheduler -> existing task Runtime.
+Primary path: ResearchPlanner -> DAG Scheduler -> existing Runtime ->
+EvidenceStore -> verified synthesis/citations. Legacy V8 actions remain callable
+for backward-compatible experiments but are not part of the main UI.
 """
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -13,9 +13,9 @@ from agent import DEFAULT_MAX_STEPS, SimulatedCrash, run_agent
 from checkpoint import JsonCheckpointStore
 from context import ExecutionContext
 from model_adapters import FAKE_SCENARIOS, FakeModel
-from planner import DeterministicPlanner
+from planner import ResearchPlanner
 from scheduler import DAGScheduler
-from tools import TOOL_REGISTRY, reset_teaching_tools
+from tools import reset_teaching_tools
 
 
 ROOT_DIR = Path(__file__).parent
@@ -26,9 +26,9 @@ CONTEXT_PRESETS = {
     "general": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
-        agent_id="general-agent",
-        task_id="visual-plan-root",
-        trace_id="visual-plan-trace",
+        agent_id="research-agent",
+        task_id="visual-research-root",
+        trace_id="visual-research-trace",
     ),
     "read_only": ExecutionContext(
         tenant_id="demo-tenant",
@@ -51,41 +51,34 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
         content_length = int(self.headers.get("Content-Length", "0"))
         raw_body = self.rfile.read(content_length) if content_length else b"{}"
-
         try:
             request_data = json.loads(raw_body.decode("utf-8"))
         except json.JSONDecodeError:
             self.send_error(400, "Request body must be valid JSON")
             return
 
-        action = request_data.get("action", "plan")
+        action = request_data.get("action", "research")
         goal = request_data.get(
             "goal",
-            "Calculate two independent values, then combine their results.",
+            "Use only the collected synthetic evidence to estimate the combined contribution and cite every supporting source.",
         )
         context_preset = request_data.get("context_preset", "general")
-
         if context_preset not in CONTEXT_PRESETS:
-            self.send_json(
-                400,
-                {"ok": False, "error": f"Unknown context preset: {context_preset}", "events": []},
-            )
+            self.send_json(400, {"ok": False, "error": "Unknown context preset", "events": []})
             return
 
         execution_context = CONTEXT_PRESETS[context_preset]
-
-        if action == "plan":
-            self.run_plan(goal, execution_context)
+        if action == "research":
+            self.run_research(goal, execution_context)
             return
 
         self.run_legacy_v8(request_data, action, execution_context)
 
-    def run_plan(self, goal: str, execution_context: ExecutionContext) -> None:
+    def run_research(self, goal: str, execution_context: ExecutionContext) -> None:
         events = []
         reset_teaching_tools()
-
         try:
-            plan = DeterministicPlanner().plan(goal)
+            plan = ResearchPlanner().plan(goal)
             result = DAGScheduler().run(
                 plan,
                 execution_context=execution_context,
@@ -93,61 +86,40 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             )
             payload = {
                 "ok": result["ok"],
-                "action": "plan",
+                "action": "research",
                 "goal": goal,
                 "execution_context": execution_context.to_dict(),
                 "plan": result["plan"],
                 "results": result.get("results", {}),
                 "final_result": result.get("final_result"),
+                "final_artifact": result.get("final_artifact"),
+                "evidence": result.get("evidence", []),
+                "citations": result.get("citations", []),
                 "events": events,
             }
+            status = 200 if result["ok"] else 500
             if not result["ok"]:
                 payload["error"] = result.get("error")
-                status = 500
-            else:
-                status = 200
         except Exception as exc:
             payload = {
                 "ok": False,
-                "action": "plan",
+                "action": "research",
                 "goal": goal,
                 "error": f"{exc.__class__.__name__}: {exc}",
                 "events": events,
             }
             status = 500
-
         self.send_json(status, payload)
 
-    def run_legacy_v8(
-        self,
-        request_data: dict,
-        action: str,
-        execution_context: ExecutionContext,
-    ) -> None:
-        """Keep V8 crash/resume callable without making it primary UI."""
+    def run_legacy_v8(self, request_data, action, execution_context):
         if action not in {"run", "crash", "resume", "clear"}:
             self.send_json(400, {"ok": False, "error": f"Unknown action: {action}", "events": []})
             return
-
         scenario = request_data.get("scenario", "multi_step")
         max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
-        user_message = request_data.get(
-            "message",
-            "Calculate 10 + 20, then calculate 6 × 7.",
-        )
-
         if scenario not in FAKE_SCENARIOS:
-            self.send_json(400, {"ok": False, "error": f"Unknown scenario: {scenario}", "events": []})
+            self.send_json(400, {"ok": False, "error": "Unknown scenario", "events": []})
             return
-        if (
-            not isinstance(max_steps, int)
-            or isinstance(max_steps, bool)
-            or max_steps < 1
-            or max_steps > 20
-        ):
-            self.send_json(400, {"ok": False, "error": "max_steps must be an integer from 1 to 20", "events": []})
-            return
-
         state_store = JsonCheckpointStore(CHECKPOINT_DIR)
         if action == "clear":
             state_store.clear(execution_context.task_id)
@@ -155,16 +127,13 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
         if action in {"run", "crash"}:
             state_store.clear(execution_context.task_id)
-
         events = []
-        reset_teaching_tools()
         crashed = False
         final_answer = None
         error_text = None
-
         try:
             final_answer = run_agent(
-                user_message,
+                request_data.get("message", "Calculate 10 + 20, then 6 × 7."),
                 model=FakeModel(scenario=scenario),
                 on_event=events.append,
                 max_steps=max_steps,
@@ -181,20 +150,14 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             error_text = f"{exc.__class__.__name__}: {exc}"
             status = 500
-
-        latest_state = state_store.load(execution_context.task_id)
-        self.send_json(
-            status,
-            {
-                "ok": status == 200,
-                "action": action,
-                "final_answer": final_answer,
-                "crashed": crashed,
-                "error": error_text,
-                "latest_state": latest_state.to_dict() if latest_state else None,
-                "events": events,
-            },
-        )
+        self.send_json(status, {
+            "ok": status == 200,
+            "action": action,
+            "final_answer": final_answer,
+            "crashed": crashed,
+            "error": error_text,
+            "events": events,
+        })
 
     def send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -210,11 +173,10 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V9")
+    print("Agent Runtime Visual Debugger · V10")
     print("Open http://127.0.0.1:8000")
-    print("Primary view: Planner + DAG Scheduler")
+    print("Primary view: Evidence -> Synthesis -> Citation")
     print("Press Ctrl+C to stop.")
-
     try:
         server.serve_forever()
     except KeyboardInterrupt:

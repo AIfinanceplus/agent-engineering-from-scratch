@@ -1,9 +1,9 @@
-"""V9 dependency-aware DAG Scheduler.
+"""Dependency-aware DAG Scheduler with V10 evidence lineage.
 
-The Scheduler never invents new tasks. It reads a validated ExecutionPlan,
-computes READY/BLOCKED tasks from dependencies, and hands one READY task to the
-existing Agent Runtime. This keeps planning, scheduling, and execution as three
-separate responsibilities.
+Planner decides WHAT. Scheduler decides WHEN. The existing Agent Runtime still
+controls HOW each selected Task executes. V10 adds an EvidenceStore beside the
+plan so provenance is registered when evidence enters the system, not invented
+at final-answer time.
 """
 
 from dataclasses import replace
@@ -11,6 +11,7 @@ from typing import Any
 
 from agent import run_agent
 from context import ExecutionContext
+from evidence import EvidenceRecord, EvidenceStore
 from planner import ExecutionPlan, PlanTask, validate_plan
 from state import InMemoryStateStore
 
@@ -21,10 +22,8 @@ class PlannedTaskModel:
     def __init__(self, task: PlanTask, arguments: dict):
         self.task = task
         self.arguments = arguments
-        self.started = False
 
     def start(self, user_message: str) -> dict:
-        self.started = True
         return {
             "type": "tool_call",
             "response_id": f"planned-response-{self.task.task_id}",
@@ -49,17 +48,12 @@ class PlannedTaskModel:
             }
         return {
             "type": "final",
-            "content": f"Task {self.task.task_id} completed with result {result}.",
+            "content": f"Task {self.task.task_id} completed.",
         }
 
 
 class DAGScheduler:
-    """Sequential teaching scheduler with explicit READY/BLOCKED transitions.
-
-    A and B may both become READY in the same scheduler tick. V9 deliberately
-    executes one READY task at a time so dependency semantics stay visible.
-    Parallel execution can be layered on later without changing the DAG model.
-    """
+    """Sequential teaching scheduler with explicit dependency transitions."""
 
     def run(
         self,
@@ -67,10 +61,12 @@ class DAGScheduler:
         *,
         execution_context: ExecutionContext,
         on_event=None,
+        evidence_store: EvidenceStore | None = None,
     ) -> dict:
         validate_plan(plan)
         plan.status = "running"
         results: dict[str, Any] = {}
+        provenance = EvidenceStore() if evidence_store is None else evidence_store
 
         self._emit(on_event, "plan_created", plan=plan.to_dict())
 
@@ -84,7 +80,6 @@ class DAGScheduler:
             self._refresh_statuses(plan)
             ready = [task for task in plan.tasks if task.status == "ready"]
             blocked = [task for task in plan.tasks if task.status == "blocked"]
-
             self._emit(
                 on_event,
                 "scheduler_tick",
@@ -100,7 +95,7 @@ class DAGScheduler:
                     "message": "No READY task exists while unfinished tasks remain.",
                 }
                 self._emit(on_event, "plan_failed", error=error, plan=plan.to_dict())
-                return {"ok": False, "plan": plan.to_dict(), "error": error, "results": results}
+                return self._failure(plan, results, provenance, error)
 
             task = ready[0]
             task.status = "running"
@@ -155,12 +150,7 @@ class DAGScheduler:
                     answer=answer,
                     plan=plan.to_dict(),
                 )
-                return {
-                    "ok": False,
-                    "plan": plan.to_dict(),
-                    "error": task.error,
-                    "results": results,
-                }
+                return self._failure(plan, results, provenance, task.error)
 
             result = task_state.last_observation
             if task_state.status != "completed" or (
@@ -170,10 +160,7 @@ class DAGScheduler:
                 task.error = (
                     result.get("error")
                     if isinstance(result, dict) and "error" in result
-                    else {
-                        "code": "task_runtime_failed",
-                        "message": answer,
-                    }
+                    else {"code": "task_runtime_failed", "message": answer}
                 )
                 plan.status = "failed"
                 self._emit(
@@ -184,14 +171,10 @@ class DAGScheduler:
                     answer=answer,
                     plan=plan.to_dict(),
                 )
-                return {
-                    "ok": False,
-                    "plan": plan.to_dict(),
-                    "error": task.error,
-                    "results": results,
-                }
+                return self._failure(plan, results, provenance, task.error)
 
             task.result = result
+            self._register_provenance(task, result, provenance, on_event)
             task.status = "completed"
             results[task.task_id] = result
             self._emit(
@@ -205,11 +188,24 @@ class DAGScheduler:
 
         plan.status = "completed"
         final_task = plan.tasks[-1] if plan.tasks else None
-        final_result = results.get(final_task.task_id) if final_task else None
+        final_artifact = results.get(final_task.task_id) if final_task else None
+        final_result = (
+            final_artifact.get("answer")
+            if isinstance(final_artifact, dict) and final_artifact.get("kind") == "synthesis"
+            else final_artifact
+        )
+        citations = (
+            provenance.citations(final_artifact.get("evidence_ids", []))
+            if isinstance(final_artifact, dict) and final_artifact.get("kind") == "synthesis"
+            else []
+        )
         self._emit(
             on_event,
             "plan_completed",
             final_result=final_result,
+            final_artifact=final_artifact,
+            citations=citations,
+            evidence=provenance.all(),
             results=dict(results),
             plan=plan.to_dict(),
         )
@@ -218,6 +214,58 @@ class DAGScheduler:
             "plan": plan.to_dict(),
             "results": results,
             "final_result": final_result,
+            "final_artifact": final_artifact,
+            "evidence": provenance.all(),
+            "citations": citations,
+        }
+
+    @classmethod
+    def _register_provenance(
+        cls,
+        task: PlanTask,
+        result,
+        provenance: EvidenceStore,
+        on_event,
+    ) -> None:
+        if not isinstance(result, dict):
+            return
+
+        if result.get("kind") == "evidence":
+            record = EvidenceRecord.from_dict(result)
+            provenance.add(record)
+            task.evidence_ids = [record.evidence_id]
+            cls._emit(
+                on_event,
+                "evidence_registered",
+                task_id=task.task_id,
+                evidence=record.to_dict(),
+            )
+            return
+
+        if result.get("kind") == "synthesis":
+            evidence_ids = list(result.get("evidence_ids", []))
+            citations = provenance.citations(evidence_ids)
+            task.evidence_ids = evidence_ids
+            task.citation_ids = [item["citation"] for item in citations]
+            cls._emit(
+                on_event,
+                "synthesis_verified",
+                task_id=task.task_id,
+                answer=result.get("answer"),
+                confidence=result.get("confidence"),
+                evidence_ids=evidence_ids,
+                citations=citations,
+            )
+
+    @staticmethod
+    def _failure(plan, results, provenance, error):
+        return {
+            "ok": False,
+            "plan": plan.to_dict(),
+            "error": error,
+            "results": results,
+            "evidence": provenance.all(),
+            "citations": [],
         }
 
     @staticmethod

@@ -1,16 +1,15 @@
-"""V5 Tool objects: capability facts stay with the Tool.
+"""Tool objects: capability facts stay with the Tool.
 
-V4 made Tool the single source of truth for function, schema, validation, and
-retry policy. V5 adds one more *fact* to the Tool: risk classification.
-
-Important boundary:
-- Tool says what the capability is and how risky it is.
-- PolicyEngine decides what that risk means for the current request.
+V10 adds two teaching research capabilities. They return structured evidence
+and synthesis objects while the existing Runtime still owns validation, policy,
+retry, state, and execution.
 """
 
 from dataclasses import dataclass
 from numbers import Real
 from typing import Callable
+
+from evidence import lookup_synthetic_evidence, synthesize_two_evidence
 
 
 RETRYABLE_ERRORS = (TimeoutError, ConnectionError)
@@ -32,7 +31,6 @@ class Tool:
             raise ValueError(f"Unsupported Tool risk level: {self.risk}")
 
     def to_model_schema(self) -> dict:
-        """Return the model-facing function schema from the same Tool object."""
         return {
             "type": "function",
             "name": self.name,
@@ -42,7 +40,6 @@ class Tool:
         }
 
     def trace_metadata(self) -> dict:
-        """Serializable Tool facts shown by the visual debugger."""
         return {
             "name": self.name,
             "description": self.description,
@@ -52,7 +49,6 @@ class Tool:
         }
 
     def validate(self, arguments) -> dict:
-        """Validate arguments against the subset of JSON Schema used here."""
         if not isinstance(arguments, dict):
             return _error("invalid_arguments", "Tool arguments must be a JSON object.")
 
@@ -96,6 +92,13 @@ class Tool:
                     {"argument": name, "expected": "string"},
                 )
 
+            if expected_type == "object" and not isinstance(value, dict):
+                return _error(
+                    "invalid_argument_type",
+                    f"{name} must be an object.",
+                    {"argument": name, "expected": "object"},
+                )
+
             allowed_values = rule.get("enum")
             if allowed_values is not None and value not in allowed_values:
                 allowed_text = ", ".join(repr(item) for item in allowed_values)
@@ -109,7 +112,6 @@ class Tool:
 
 
 def calculator(a: float, b: float, operation: str) -> float:
-    """Perform the actual calculation."""
     if operation == "add":
         return a + b
     if operation == "multiply":
@@ -118,8 +120,6 @@ def calculator(a: float, b: float, operation: str) -> float:
 
 
 class FlakyCalculator:
-    """Teaching callable that times out once, then succeeds."""
-
     def __init__(self):
         self.attempts = 0
 
@@ -137,16 +137,10 @@ flaky_calculator = FlakyCalculator()
 
 
 def send_message(recipient: str, message: str) -> str:
-    """Simulated side effect used only to teach approval policy.
-
-    No external message is actually sent. The function only returns a string,
-    but the Tool is classified medium-risk so PolicyEngine can stop execution.
-    """
     return f"Simulated message sent to {recipient}: {message}"
 
 
 def delete_record(record_id: str) -> str:
-    """Simulated destructive capability used only to teach deny policy."""
     return f"Simulated deletion of record {record_id}"
 
 
@@ -173,10 +167,27 @@ MESSAGE_PARAMETERS = {
 
 DELETE_PARAMETERS = {
     "type": "object",
-    "properties": {
-        "record_id": {"type": "string"},
-    },
+    "properties": {"record_id": {"type": "string"}},
     "required": ["record_id"],
+    "additionalProperties": False,
+}
+
+EVIDENCE_LOOKUP_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "topic": {"type": "string", "enum": ["energy", "shelter"]},
+    },
+    "required": ["topic"],
+    "additionalProperties": False,
+}
+
+SYNTHESIS_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "evidence_a": {"type": "object"},
+        "evidence_b": {"type": "object"},
+    },
+    "required": ["evidence_a", "evidence_b"],
     "additionalProperties": False,
 }
 
@@ -217,27 +228,47 @@ DELETE_RECORD_TOOL = Tool(
     risk="high",
 )
 
+EVIDENCE_LOOKUP_TOOL = Tool(
+    name="lookup_evidence",
+    description="Retrieve one synthetic teaching evidence record with provenance.",
+    parameters=EVIDENCE_LOOKUP_PARAMETERS,
+    function=lookup_synthetic_evidence,
+    max_retries=0,
+    risk="low",
+)
+
+SYNTHESIZE_EVIDENCE_TOOL = Tool(
+    name="synthesize_evidence",
+    description="Synthesize two collected evidence records while preserving citation IDs.",
+    parameters=SYNTHESIS_PARAMETERS,
+    function=synthesize_two_evidence,
+    max_retries=0,
+    risk="low",
+)
+
 
 TOOL_REGISTRY: dict[str, Tool] = {
-    CALCULATOR_TOOL.name: CALCULATOR_TOOL,
-    FLAKY_CALCULATOR_TOOL.name: FLAKY_CALCULATOR_TOOL,
-    SEND_MESSAGE_TOOL.name: SEND_MESSAGE_TOOL,
-    DELETE_RECORD_TOOL.name: DELETE_RECORD_TOOL,
+    tool.name: tool
+    for tool in (
+        CALCULATOR_TOOL,
+        FLAKY_CALCULATOR_TOOL,
+        SEND_MESSAGE_TOOL,
+        DELETE_RECORD_TOOL,
+        EVIDENCE_LOOKUP_TOOL,
+        SYNTHESIZE_EVIDENCE_TOOL,
+    )
 }
 
 
 def resolve_tool(tool_name: str) -> Tool | None:
-    """Return the complete Tool object, or None for an unknown capability."""
     return TOOL_REGISTRY.get(tool_name)
 
 
 def model_tool_schemas() -> list[dict]:
-    """Generate model schemas directly from Registry Tool objects."""
     return [tool.to_model_schema() for tool in TOOL_REGISTRY.values()]
 
 
 def validate_tool_arguments(tool_name: str, arguments) -> dict:
-    """Compatibility helper; Runtime normally calls Tool.validate directly."""
     tool = resolve_tool(tool_name)
     if tool is None:
         return _error("unknown_tool", f"Unknown tool: {tool_name}")
