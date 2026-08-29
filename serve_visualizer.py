@@ -1,4 +1,9 @@
-"""Serve the V8 durable checkpoint visual debugger."""
+"""Serve the V9 Planner + DAG Scheduler visual debugger.
+
+V9 makes the plan the primary UI. The V8 crash/resume endpoint remains
+available for backward-compatible experiments, but the default teaching path is
+Planner -> Scheduler -> existing task Runtime.
+"""
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -8,6 +13,8 @@ from agent import DEFAULT_MAX_STEPS, SimulatedCrash, run_agent
 from checkpoint import JsonCheckpointStore
 from context import ExecutionContext
 from model_adapters import FAKE_SCENARIOS, FakeModel
+from planner import DeterministicPlanner
+from scheduler import DAGScheduler
 from tools import TOOL_REGISTRY, reset_teaching_tools
 
 
@@ -15,21 +22,20 @@ ROOT_DIR = Path(__file__).parent
 WEB_DIR = ROOT_DIR / "web"
 CHECKPOINT_DIR = ROOT_DIR / ".checkpoints"
 
-# Browser chooses only a preset key. Identity itself remains Runtime-owned.
 CONTEXT_PRESETS = {
     "general": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="general-agent",
-        task_id="visual-task-general",
-        trace_id="visual-trace-general",
+        task_id="visual-plan-root",
+        trace_id="visual-plan-trace",
     ),
     "read_only": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="read-only-agent",
-        task_id="visual-task-read-only",
-        trace_id="visual-trace-read-only",
+        task_id="visual-read-only-root",
+        trace_id="visual-read-only-trace",
     ),
 }
 
@@ -52,23 +58,86 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             self.send_error(400, "Request body must be valid JSON")
             return
 
-        action = request_data.get("action", "run")
+        action = request_data.get("action", "plan")
+        goal = request_data.get(
+            "goal",
+            "Calculate two independent values, then combine their results.",
+        )
+        context_preset = request_data.get("context_preset", "general")
+
+        if context_preset not in CONTEXT_PRESETS:
+            self.send_json(
+                400,
+                {"ok": False, "error": f"Unknown context preset: {context_preset}", "events": []},
+            )
+            return
+
+        execution_context = CONTEXT_PRESETS[context_preset]
+
+        if action == "plan":
+            self.run_plan(goal, execution_context)
+            return
+
+        self.run_legacy_v8(request_data, action, execution_context)
+
+    def run_plan(self, goal: str, execution_context: ExecutionContext) -> None:
+        events = []
+        reset_teaching_tools()
+
+        try:
+            plan = DeterministicPlanner().plan(goal)
+            result = DAGScheduler().run(
+                plan,
+                execution_context=execution_context,
+                on_event=events.append,
+            )
+            payload = {
+                "ok": result["ok"],
+                "action": "plan",
+                "goal": goal,
+                "execution_context": execution_context.to_dict(),
+                "plan": result["plan"],
+                "results": result.get("results", {}),
+                "final_result": result.get("final_result"),
+                "events": events,
+            }
+            if not result["ok"]:
+                payload["error"] = result.get("error")
+                status = 500
+            else:
+                status = 200
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "action": "plan",
+                "goal": goal,
+                "error": f"{exc.__class__.__name__}: {exc}",
+                "events": events,
+            }
+            status = 500
+
+        self.send_json(status, payload)
+
+    def run_legacy_v8(
+        self,
+        request_data: dict,
+        action: str,
+        execution_context: ExecutionContext,
+    ) -> None:
+        """Keep V8 crash/resume callable without making it primary UI."""
+        if action not in {"run", "crash", "resume", "clear"}:
+            self.send_json(400, {"ok": False, "error": f"Unknown action: {action}", "events": []})
+            return
+
+        scenario = request_data.get("scenario", "multi_step")
+        max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
         user_message = request_data.get(
             "message",
             "Calculate 10 + 20, then calculate 6 × 7.",
         )
-        scenario = request_data.get("scenario", "multi_step")
-        context_preset = request_data.get("context_preset", "general")
-        max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
 
-        if action not in {"run", "crash", "resume", "clear"}:
-            self.send_json(400, {"ok": False, "error": f"Unknown action: {action}", "events": []})
-            return
         if scenario not in FAKE_SCENARIOS:
             self.send_json(400, {"ok": False, "error": f"Unknown scenario: {scenario}", "events": []})
-            return
-        if context_preset not in CONTEXT_PRESETS:
-            self.send_json(400, {"ok": False, "error": f"Unknown context preset: {context_preset}", "events": []})
             return
         if (
             not isinstance(max_steps, int)
@@ -79,26 +148,11 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "max_steps must be an integer from 1 to 20", "events": []})
             return
 
-        execution_context = CONTEXT_PRESETS[context_preset]
         state_store = JsonCheckpointStore(CHECKPOINT_DIR)
-
         if action == "clear":
             state_store.clear(execution_context.task_id)
-            self.send_json(
-                200,
-                {
-                    "ok": True,
-                    "action": action,
-                    "checkpoint_exists": False,
-                    "latest_state": None,
-                    "state_history": [],
-                    "events": [],
-                },
-            )
+            self.send_json(200, {"ok": True, "action": action, "events": []})
             return
-
-        # A normal run or crash demo starts a fresh task history. Resume keeps
-        # the durable file created by the previous request/process.
         if action in {"run", "crash"}:
             state_store.clear(execution_context.task_id)
 
@@ -129,27 +183,21 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             status = 500
 
         latest_state = state_store.load(execution_context.task_id)
-        payload = {
-            "ok": status == 200,
-            "action": action,
-            "scenario": scenario,
-            "context_preset": context_preset,
-            "execution_context": execution_context.to_dict(),
-            "max_steps": max_steps,
-            "tool_registry": [tool.trace_metadata() for tool in TOOL_REGISTRY.values()],
-            "final_answer": final_answer,
-            "crashed": crashed,
-            "error": error_text,
-            "checkpoint_exists": state_store.exists(execution_context.task_id),
-            "checkpoint_path": state_store.checkpoint_path(execution_context.task_id),
-            "latest_state": latest_state.to_dict() if latest_state is not None else None,
-            "state_history": state_store.history(execution_context.task_id),
-            "events": events,
-        }
-        self.send_json(status, payload)
+        self.send_json(
+            status,
+            {
+                "ok": status == 200,
+                "action": action,
+                "final_answer": final_answer,
+                "crashed": crashed,
+                "error": error_text,
+                "latest_state": latest_state.to_dict() if latest_state else None,
+                "events": events,
+            },
+        )
 
     def send_json(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -162,9 +210,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V8")
+    print("Agent Runtime Visual Debugger · V9")
     print("Open http://127.0.0.1:8000")
-    print(f"Durable checkpoints: {CHECKPOINT_DIR}")
+    print("Primary view: Planner + DAG Scheduler")
     print("Press Ctrl+C to stop.")
 
     try:
