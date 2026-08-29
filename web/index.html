@@ -3,34 +3,28 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Research Workbench · R1 CPI</title>
+  <title>Agent Research Workbench · R2 API-only</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="eval.css" />
+  <link rel="stylesheet" href="r2.css" />
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <span class="version">R1</span>
+        <span class="version">R2</span>
         <div>
-          <strong>CPI Research Workbench</strong>
-          <small>Real source adapter · BLS evidence · deterministic analysis · verified citations</small>
+          <strong>Macro API Workbench</strong>
+          <small>BLS API · FRED API · EIA API · Evidence · Freshness · Evals</small>
         </div>
       </div>
-      <div class="principle">Source → Evidence → Analysis → Citation</div>
+      <div class="principle">API → Evidence → Analysis → Citation</div>
     </header>
 
     <section class="controlbar">
       <label class="goal-field">
         <span>Research Question</span>
-        <input id="goal" value="Compare the latest headline and core CPI year-over-year rates using BLS evidence only." />
-      </label>
-      <label class="compact-field">
-        <span>Data</span>
-        <select id="data-mode">
-          <option value="fixture">Fixture Replay</option>
-          <option value="live">Live BLS</option>
-        </select>
+        <input id="goal" value="Assess inflation pressure using headline CPI, core CPI, market inflation expectations, and gasoline prices." />
       </label>
       <label class="compact-field">
         <span>Identity</span>
@@ -39,8 +33,8 @@
           <option value="read_only">read-only-agent</option>
         </select>
       </label>
-      <button id="run-btn" class="primary">运行 CPI 研究</button>
-      <button id="eval-btn">运行 V11 Evals</button>
+      <button id="run-btn" class="primary">运行 API 研究</button>
+      <button id="eval-btn">运行 API Evals</button>
       <div class="step-controls">
         <button id="prev-btn">←</button>
         <button id="next-btn">→</button>
@@ -51,21 +45,21 @@
 
     <section class="summary-strip v11-summary">
       <div><span>Status</span><strong id="plan-status">未运行</strong></div>
-      <div><span>Progress</span><strong id="plan-progress">0 / 3</strong></div>
+      <div><span>Progress</span><strong id="plan-progress">0 / 5</strong></div>
       <div><span>Evidence / Pass</span><strong id="evidence-count">0</strong></div>
       <div><span>Trace</span><strong id="trace-kpi">—</strong></div>
-      <div><span>Mode / Eval</span><strong id="eval-kpi">—</strong></div>
+      <div><span>Mode / Eval</span><strong id="eval-kpi">API ONLY</strong></div>
       <div class="result-summary"><span>Final</span><strong id="final-result">—</strong></div>
     </section>
 
     <section class="studio">
       <aside class="pane plan-pane">
         <div class="pane-header">
-          <div><span id="left-kicker" class="kicker">SOURCE PLAN</span><h2 id="left-title">CPI 研究任务</h2></div>
+          <div><span id="left-kicker" class="kicker">API SOURCE PLAN</span><h2 id="left-title">H1 / C1 / F1 / G1 / A1</h2></div>
           <span id="plan-badge" class="badge neutral">planned</span>
         </div>
-        <div id="dag-hint" class="dag-hint"><span>H1</span><span>+</span><span>C1</span><span>→</span><span>A1</span></div>
-        <div id="plan-list" class="plan-list"><div class="empty-state">运行后显示 BLS Source Tasks 与 Analysis Task。</div></div>
+        <div id="dag-hint" class="dag-hint"><span>H1</span><span>+</span><span>C1</span><span>+</span><span>F1</span><span>+</span><span>G1</span><span>→</span><span>A1</span></div>
+        <div id="plan-list" class="plan-list"><div class="empty-state">运行后显示 BLS / FRED / EIA API Tasks。</div></div>
         <div id="legend" class="legend">
           <span><i class="dot ready"></i>READY</span>
           <span><i class="dot running"></i>RUNNING</span>
@@ -76,35 +70,35 @@
 
       <section class="pane run-pane">
         <div class="pane-header">
-          <div><span id="run-kicker" class="kicker">RUN / TRACE</span><h2 id="run-title">真实研究过程</h2></div>
+          <div><span id="run-kicker" class="kicker">API RUN / TRACE</span><h2 id="run-title">BLS + FRED + EIA</h2></div>
           <span id="event-counter" class="subtle">尚未运行</span>
         </div>
         <div id="mode-strip" class="mode-strip run-mode">
-          <strong id="mode-label">MACRO RUN</strong>
-          <span id="mode-help">Source → Evidence → Analysis → Citation</span>
+          <strong id="mode-label">R2 API-ONLY</strong>
+          <span id="mode-help">One click = one POST = one API research run</span>
         </div>
         <div id="current-action" class="current-action">
           <strong>等待运行</strong>
-          <span>先用 Fixture Replay 看清结构，再切到 Live BLS。</span>
+          <span>只使用真实 BLS / FRED / EIA API。</span>
         </div>
-        <ol id="timeline" class="timeline"><li class="empty-state">点击“运行 CPI 研究”开始。</li></ol>
+        <ol id="timeline" class="timeline"><li class="empty-state">点击“运行 API 研究”开始。</li></ol>
       </section>
 
       <aside class="pane code-pane">
         <div class="pane-header">
           <div><span class="kicker">CODE</span><h2 id="code-title">对应代码</h2></div>
-          <span id="code-file" class="file-pill">macro_sources.py</span>
+          <span id="code-file" class="file-pill">r2_api_planner.py</span>
         </div>
         <pre class="code-window"><code id="code-panel">等待执行事件…</code></pre>
 
         <div class="explanation">
           <span class="kicker">WHY / NEXT</span>
-          <div id="explain-body"><p>这里解释 Source Adapter 如何进入 Planner / Runtime / EvidenceStore。</p></div>
+          <div id="explain-body"><p>活跃 R2 只保留 API 路径；上游错误会显示具体 provider / task。</p></div>
         </div>
 
         <section id="support-box" class="citation-box">
           <div class="citation-head"><span id="support-kicker" class="kicker">CITATIONS</span><strong id="citation-title">尚未形成</strong></div>
-          <div id="citation-list" class="citation-list"><div class="empty-state">Analysis 完成后显示来源；Eval 模式显示当前 check。</div></div>
+          <div id="citation-list" class="citation-list"><div class="empty-state">成功时显示 citations；失败时显示具体 API source error。</div></div>
         </section>
 
         <details class="details-box">
@@ -112,7 +106,7 @@
           <pre><code id="trace-detail">{}</code></pre>
         </details>
         <details class="details-box">
-          <summary>Eval report / suite</summary>
+          <summary>API Eval report / suite</summary>
           <pre><code id="eval-detail">{}</code></pre>
         </details>
         <details class="details-box">
@@ -126,8 +120,8 @@
       </aside>
     </section>
 
-    <footer>Fixture Replay 只用于可重复教学与 CI；切到 Live BLS 后由本地 Runtime 直接访问 BLS Public Data API。V11 Eval Mode 仍保留用于回归学习。</footer>
+    <footer>Active R2 is API-only. FRED_API_KEY and EIA_API_KEY stay in the Runtime environment and never enter Tool arguments, Evidence, citations, or Trace.</footer>
   </main>
-  <script src="r1_app.js"></script>
+  <script src="r2_api_app.js"></script>
 </body>
 </html>

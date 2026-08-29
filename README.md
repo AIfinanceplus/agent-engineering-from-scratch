@@ -1,181 +1,125 @@
 # Agent Engineering from Scratch
 
-A step-by-step learning repository for building an Agent Runtime and then turning it into a grounded research Agent.
+A step-by-step repository for building an Agent Runtime and turning it into a grounded research Agent.
 
 ## Phase 1 — Runtime from scratch
 
-- V0 — Minimal Agent Loop
-- V0.1 — Replaceable Model Adapter
-- V0.2 — Visual Runtime Debugger
-- V1 — Tool Registry + Basic Validation
-- V2 — MAX_STEPS + Model Response Validation
-- V3 — Retry + Loop Detection
-- V4 — Tool Object
-- V5 — Policy Engine
-- V6 — ExecutionContext
-- V7 — StateStore
-- V8 — Checkpoint / Durable Execution
-- V9 — Planner + DAG Scheduler
-- V10 — Evidence / Synthesis / Citation
-- V11 — Tracing + Evals
+V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, ExecutionContext, StateStore, checkpointing, Planner/DAG Scheduler, Evidence/Citation, Tracing, and Evals.
 
 ## Phase 2 — Research Agent
 
-- R1 — Real Source Adapter: BLS CPI
-- R2 — Multi-source macro evidence
+- R1 — Real BLS source adapter
+- R2 — API-only multi-source macro research
 - R3 — Research decomposition + query generation
 - R4 — Source quality / freshness / contradiction
 - R5 — Investment & policy synthesis + domain evals
 
-## Current stage: R1 — Real BLS Source Adapter
+## Current stage: R2 — API-only multi-source macro research
 
-Phase 1 proved that the Agent Runtime can plan, execute Tools, preserve state, validate citations, trace runs, and evaluate quality. R1 changes the data boundary:
-
-> Stop using only bundled teaching evidence. Connect the same Runtime to a real public source without giving up reproducibility.
-
-The first research question is deliberately narrow:
-
-```text
-Compare the latest headline and core CPI year-over-year rates
-using BLS evidence only.
-```
-
-## R1 architecture
+The active R2 application has one data path only:
 
 ```text
 Research Question
-       ↓
-CPIResearchPlanner
-       ↓
-┌─────────────────────┐       ┌─────────────────────┐
-│ H1                  │       │ C1                  │
-│ Headline CPI        │       │ Core CPI            │
-│ CUSR0000SA0         │       │ CUSR0000SA0L1E      │
-│ fetch_bls_series    │       │ fetch_bls_series    │
-└──────────┬──────────┘       └──────────┬──────────┘
-           │ Evidence                     │ Evidence
-           └──────────────┬───────────────┘
-                          ↓
-                    ┌───────────┐
-                    │ A1        │
-                    │ compare   │
-                    │ CPI YoY   │
-                    └─────┬─────┘
-                          ↓
-              Synthesis + Citations
-                          ↓
-                        Trace
+      ↓
+APIMacroPlanner
+      ↓
+H1 BLS Headline CPI API
+C1 BLS Core CPI API
+F1 FRED 5Y Breakeven API
+G1 EIA Weekly Gasoline API
+      ↓
+A1 Cross-source synthesis
+      ↓
+EvidenceStore → Citations → Trace → API Evals
 ```
 
-The important boundary is:
+There is no user-visible Fixture/Live switch and no `mode` argument in the active R2 Planner or Tool schemas.
+
+### Active source routes
 
 ```text
-Source Task
-= fetch / normalize / attach provenance
+BLS
+https://api.bls.gov/publicAPI/v1/timeseries/data/{series_id}
 
-Analysis Task
-= consume already-collected Evidence
-= no hidden re-fetch
+FRED
+https://api.stlouisfed.org/fred/series/observations
+FRED_API_KEY required
+
+EIA
+https://api.eia.gov/v2/petroleum/pri/gnd/data/
+EIA_API_KEY required
 ```
 
-## Source Adapter
-
-`macro_sources.py` introduces `BLSAdapter`.
-
-It supports two modes with the same normalized output contract:
+The EIA adapter uses the current petroleum REST route with:
 
 ```text
-fixture
-→ deterministic replay
-→ CI / learning / debugging
-→ never presented as current BLS data
-
-live
-→ HTTP GET to the BLS Public Data API
-→ real observations from the local Runtime
+frequency=weekly
+data[0]=value
+facets[series][]=EMM_EPMR_PTE_NUS_DPG
+sort by period desc
+length=8
 ```
 
-A normalized source result includes:
+FRED requests only a recent observation window instead of downloading the entire series history.
 
-```text
-kind = evidence
-evidence_id
-series_id
-source_mode
-latest value
-history[]
-claim
-publisher
-source URI
-confidence
+### Credentials
+
+Set the keys in the shell before starting the workbench:
+
+```bash
+export FRED_API_KEY="..."
+export EIA_API_KEY="..."
+python3 serve_visualizer.py
 ```
 
-The Tool layer registers:
+Credentials are Runtime-owned. They do not enter Planner arguments, Tool arguments, Evidence, citations, or Trace.
 
-```python
-fetch_bls_series(...)
-compare_cpi_series(...)
-```
+### Failure behavior
 
-Both still pass through the existing Runtime:
+External API failure is no longer returned as a generic HTTP 500. `/api/run` returns HTTP 200 with a structured application result:
 
-```text
-Tool proposal
-→ validation
-→ Policy
-→ Retry
-→ execution
-→ AgentState
-→ EvidenceStore
-→ Trace
-```
-
-For live BLS requests, `TimeoutError` and `ConnectionError` remain retryable Runtime execution failures. Analysis errors are not treated as transient network retries.
-
-## CPI analysis
-
-`macro_analysis.py` computes the latest year-over-year rate from the collected monthly history:
-
-```python
-yoy = (latest / same_month_previous_year - 1) * 100
-```
-
-A1 receives the complete H1/C1 evidence objects through DAG dependency resolution:
-
-```python
+```json
 {
-    "headline": {"from_task": "H1"},
-    "core": {"from_task": "C1"},
+  "ok": false,
+  "stage": "source_or_runtime",
+  "error": {
+    "task_id": "G1",
+    "provider": "EIA",
+    "message": "..."
+  }
 }
 ```
 
-Only when H1 and C1 are complete does Scheduler resolve those references into actual Evidence objects.
+This makes the failing provider visible in the UI and keeps web-server health separate from upstream data-source health.
 
-The synthesis carries both evidence IDs, and `EvidenceStore` verifies them before citations are returned.
+### API Evals
 
-## Why fixture and live are separate
-
-CI should test our Agent, not the availability of an external website.
+The visible eval path uses only the R2 task names:
 
 ```text
-CI
-→ fixture replay
-→ deterministic parser / planner / analysis / citation tests
-
-Local research
-→ Live BLS
-→ same Source Adapter contract
-→ real network response
+H1 / C1 / F1 / G1 / A1
 ```
 
-`BLSAdapter` also accepts an injected transport, so tests verify the live BLS JSON response shape and URL construction without sending a network request.
+Checks include:
 
-## Research Workbench
+- five-task contract;
+- four API Evidence records;
+- BLS/FRED/EIA provider coverage;
+- four grounded citations;
+- freshness coverage;
+- five Tool attempts;
+- causal guardrail: gasoline/breakeven are descriptive signals, not causal CPI attribution.
 
-Run:
+The two scoring profiles share one live research run to avoid unnecessarily repeating external API requests.
+
+### CI
+
+CI does not depend on internet availability. Adapter tests inject API-shaped JSON responses into the same production parsers. This is HTTP transport mocking for parser/contract tests, not a second product data mode.
+
+Run locally:
 
 ```bash
-python serve_visualizer.py
+python3 serve_visualizer.py
 ```
 
 Open:
@@ -184,44 +128,4 @@ Open:
 http://127.0.0.1:8000
 ```
 
-The R1 UI keeps the compact three-pane structure:
-
-```text
-SOURCE PLAN        RUN / TRACE             CODE
-H1 headline        fetch                    matching Python
-C1 core            evidence registration   WHY / NEXT
-A1 analysis        analysis                 citations
-```
-
-Use the Data selector:
-
-```text
-Fixture Replay
-→ recommended first
-→ deterministic teaching flow
-
-Live BLS
-→ real BLS request from your local Python Runtime
-```
-
-V11 Eval Mode remains available from the same workbench as a regression-learning tool.
-
-## Tests
-
-```bash
-python -m unittest -v
-```
-
-R1 adds tests for:
-
-- normalized fixture Evidence contract;
-- BLS live API JSON parsing with an injected transport;
-- official BLS series URL construction;
-- CPI YoY calculation from monthly history;
-- H1/C1 → A1 Planner dependencies;
-- full fixture research run through the existing Runtime;
-- two BLS Evidence records and two verified citations;
-- Trace Tool-attempt accounting;
-- all V0–V11 regression tests.
-
-The fixture values are intentionally teaching-only. Select `Live BLS` when you want the workbench to retrieve current observations from the external source.
+The active UI script is `web/r2_api_app.js`.
