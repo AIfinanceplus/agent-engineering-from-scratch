@@ -1,9 +1,8 @@
 """Serve the active R7 forecasting + scenario tracking workbench.
 
 R7 preserves source health, dynamic research decomposition, Evidence quality, and
-R6 domain synthesis. It adds a falsifiable forecast layer plus UI-visible durable
-research checkpoints:
-Evidence -> S1 -> D1 -> F1 Forecast Pack -> later check/settlement.
+R6 domain synthesis. It adds falsifiable forecasts, durable research checkpoints,
+and a one-way NDJSON live stream used by UI V3.
 
 Research checkpoint snapshots survive process death, but orchestration-level
 restore/resume is intentionally not wired yet. The UI labels that distinction.
@@ -22,6 +21,7 @@ from r7_checkpoint import JsonResearchCheckpointStore, ResearchCheckpointRecorde
 from r7_evals import make_r7_eval_suite
 from r7_forecast import JsonForecastStore, evaluate_forecast_pack
 from r7_planner import R7ResearchPlanner
+from r7_streaming import encode_stream_message
 from r7_tooling import register_r7_tools
 from scheduler import DAGScheduler
 
@@ -50,12 +50,16 @@ CONTEXT_PRESETS = {
 }
 
 
+def _new_run_id() -> str:
+    return f"RUN-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S-%f')}"
+
+
 class VisualizerHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(WEB_DIR), **kwargs)
 
     def do_POST(self):
-        if self.path != "/api/run":
+        if self.path not in {"/api/run", "/api/stream"}:
             self.send_error(404, "Not found")
             return
 
@@ -65,6 +69,10 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             request_data = json.loads(raw_body.decode("utf-8"))
         except json.JSONDecodeError:
             self.send_json(400, {"ok": False, "error": "Request body must be valid JSON"})
+            return
+
+        if self.path == "/api/stream":
+            self._stream_research(request_data)
             return
 
         action = request_data.get("action", "r7_run")
@@ -133,6 +141,68 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         self.send_json(400, {"ok": False, "error": f"Unknown action: {action}"})
+
+    def _stream_research(self, request_data: dict) -> None:
+        action = request_data.get("action", "r7_run")
+        if action != "r7_run":
+            self.send_json(400, {"ok": False, "error": "Live stream currently supports r7_run only"})
+            return
+
+        context_preset = request_data.get("context_preset", "general")
+        if context_preset not in CONTEXT_PRESETS:
+            self.send_json(400, {"ok": False, "error": "Unknown context preset"})
+            return
+        execution_context = CONTEXT_PRESETS[context_preset]
+
+        domain = request_data.get("domain", "investment")
+        if domain not in {"investment", "policy"}:
+            self.send_json(400, {"ok": False, "error": "domain must be investment or policy"})
+            return
+        question = request_data.get(
+            "goal",
+            "Assess current inflation pressure using headline CPI, core CPI, market inflation expectations, and gasoline prices.",
+        )
+        run_id = _new_run_id()
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def stream_sink(message_type: str, **payload) -> None:
+            self.wfile.write(encode_stream_message(message_type, **payload))
+            self.wfile.flush()
+
+        try:
+            stream_sink(
+                "start",
+                run_id=run_id,
+                question=question,
+                domain=domain,
+                reference_date=date.today().isoformat(),
+            )
+            result = self.execute_research(
+                question,
+                domain,
+                execution_context,
+                save_forecast=True,
+                run_id=run_id,
+                event_sink=stream_sink,
+            )
+            stream_sink("result", result=result)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        except Exception as exc:
+            try:
+                stream_sink(
+                    "error",
+                    error={"code": exc.__class__.__name__, "message": str(exc)},
+                )
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
 
     def _source_health(self, request_data: dict) -> None:
         try:
@@ -292,12 +362,25 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         execution_context: ExecutionContext,
         *,
         save_forecast: bool,
+        run_id: str | None = None,
+        event_sink=None,
     ) -> dict:
         reference_date = date.today().isoformat()
-        run_id = f"RUN-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S-%f')}"
-        events = [
+        run_id = run_id or _new_run_id()
+        events: list[dict] = []
+        checkpoint_recorder: ResearchCheckpointRecorder | None = None
+
+        def publish_event(event: dict) -> None:
+            events.append(event)
+            checkpoint = checkpoint_recorder.observe(event) if checkpoint_recorder else None
+            if event_sink is not None:
+                event_sink("event", event=event)
+                if checkpoint is not None:
+                    event_sink("checkpoint", checkpoint=checkpoint)
+
+        publish_event(
             {"type": "research_question_received", "question": question, "domain": domain}
-        ]
+        )
 
         try:
             blueprint_obj, plan = R7ResearchPlanner().build(
@@ -306,6 +389,8 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 reference_date=reference_date,
             )
             blueprint = blueprint_obj.to_dict()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            raise
         except Exception as exc:
             return {
                 "ok": False,
@@ -320,15 +405,15 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 "latest_checkpoint": None,
             }
 
-        events.append(
+        publish_event(
             {
                 "type": "decomposition_created",
                 "subquestions": blueprint["subquestions"],
                 "intents": blueprint["intents"],
             }
         )
-        events.append({"type": "queries_compiled", "queries": blueprint["queries"]})
-        events.append(
+        publish_event({"type": "queries_compiled", "queries": blueprint["queries"]})
+        publish_event(
             {
                 "type": "domain_lens_selected",
                 "domain": domain,
@@ -369,16 +454,12 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             store=CHECKPOINT_STORE,
         )
 
-        def record_event(event: dict) -> None:
-            events.append(event)
-            checkpoint_recorder.observe(event)
-
         try:
             trace = TraceRecorder(execution_context.trace_id)
             result = DAGScheduler().run(
                 plan,
                 execution_context=execution_context,
-                on_event=record_event,
+                on_event=publish_event,
                 trace_recorder=trace,
             )
             results = result.get("results", {})
@@ -387,7 +468,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             f1 = results.get("F1") or result.get("final_artifact") or {}
 
             if result.get("ok") and s1.get("quality"):
-                events.append(
+                publish_event(
                     {
                         "type": "quality_assessed",
                         "quality": s1["quality"],
@@ -396,7 +477,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                     }
                 )
             if result.get("ok") and d1.get("domain"):
-                events.append(
+                publish_event(
                     {
                         "type": "domain_brief_created",
                         "domain": d1.get("domain"),
@@ -406,7 +487,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                     }
                 )
             if result.get("ok") and f1.get("artifact_type") == "forecast_pack":
-                events.append(
+                publish_event(
                     {
                         "type": "forecast_pack_created",
                         "pack_id": f1.get("pack_id"),
@@ -417,7 +498,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 )
                 if save_forecast:
                     path = FORECAST_STORE.save(f1)
-                    events.append(
+                    publish_event(
                         {
                             "type": "forecast_pack_saved",
                             "pack_id": f1.get("pack_id"),
@@ -463,6 +544,8 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 payload["stage"] = "source_or_runtime"
                 payload["error"] = _source_failure(events, result.get("error"), provider_map)
             return payload
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            raise
         except Exception as exc:
             checkpoints = checkpoint_recorder.checkpoints()
             return {
@@ -509,6 +592,7 @@ def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
     print("Agent Research Workbench · R7 / UI V3")
     print("Open http://127.0.0.1:8000")
+    print("Live run: POST /api/stream -> NDJSON start/event/checkpoint/result")
     print("Research: Question -> Evidence -> S1 -> D1 -> F1 Forecast Pack")
     print("Checkpoint: durable research snapshots -> inspectable; orchestration restore not wired yet")
     print("Tracking: saved forecast pack -> fresh S1 -> pending/invalidation/resolution -> scenario revision")
