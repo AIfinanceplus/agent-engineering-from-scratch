@@ -2,9 +2,7 @@
 
 A step-by-step learning repository for building an Agent Runtime from first principles.
 
-The goal is to understand the system underneath agent frameworks before using LangGraph, Agents SDKs, or other abstractions.
-
-## Learning roadmap
+## Roadmap
 
 - V0 — Minimal Agent Loop
 - V0.1 — Replaceable Model Adapter
@@ -21,117 +19,133 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V9 — Planner + DAG Scheduler
+## Current stage: V10 — Evidence / Synthesis / Citation
 
-V8 made one Agent run durable. V9 moves one layer up and asks:
-
-> What if the goal contains multiple tasks with dependencies?
-
-V9 deliberately separates three responsibilities:
+V9 could execute a multi-task DAG. V10 upgrades Task outputs from bare values into research artifacts with provenance.
 
 ```text
-Planner
-= WHAT tasks should exist?
-= What depends on what?
-
-Scheduler
-= WHICH task is READY now?
-= Which tasks are BLOCKED?
-
-Agent Runtime
-= HOW does one selected task execute safely?
+Research Goal
+    ↓
+ResearchPlanner
+    ↓
+E1: collect Evidence ──┐
+                       ├──> S1: synthesize
+E2: collect Evidence ──┘
+    ↓                         ↓
+EvidenceStore          verified evidence IDs
+    ↓                         ↓
+source + claim + confidence + citations
+                              ↓
+                         Final Answer
 ```
 
-The existing Runtime is still used inside every scheduled task, so Tool validation, Policy, Retry, MAX_STEPS, StateStore, and other deterministic boundaries are not bypassed.
+### The key rule
 
-## Teaching DAG
-
-The deterministic Planner creates:
+Citation is not decoration added after writing the answer.
 
 ```text
-Task A: 10 + 20 = 30 ──┐
-                        ├──> Task C: A + B = 72
-Task B:  6 × 7 = 42 ──┘
+BAD
+Model writes conclusion
+    ↓
+append [1] [2]
+
+V10
+Evidence enters Runtime
+    ↓
+assign evidence_id
+    ↓
+store source / claim / confidence
+    ↓
+Synthesis references evidence_ids
+    ↓
+EvidenceStore verifies those IDs
+    ↓
+render citations
 ```
 
-Initial Scheduler state:
+## Synthetic teaching data
+
+All bundled V10 evidence is intentionally synthetic. It is used only to teach lineage and must not be interpreted as real macroeconomic data.
 
 ```text
-A = READY
-B = READY
-C = BLOCKED
+E1
+Teaching Energy Bulletin
+Synthetic Data Lab
+value = 0.4 percentage points
+confidence = 0.92
+
+E2
+Teaching Shelter Bulletin
+Synthetic Data Lab
+value = 0.3 percentage points
+confidence = 0.88
 ```
 
-V9 uses a sequential Scheduler on purpose. A and B may both be READY, but the teaching implementation executes one READY Task at a time:
+S1 depends on E1 and E2. The synthesis Tool receives the full evidence objects, not only their numeric values, and produces:
 
 ```text
-Tick 1
-READY   = [A, B]
-BLOCKED = [C]
-    ↓
-run A
-    ↓
-A = COMPLETED (30)
-
-Tick 2
-READY   = [B]
-BLOCKED = [C]
-    ↓
-run B
-    ↓
-B = COMPLETED (42)
-
-Tick 3
-READY   = [C]
-BLOCKED = []
-    ↓
-resolve C arguments from A/B results
-    ↓
-calculator(30, 42, add)
-    ↓
-72
+combined value = 0.7 percentage points
+confidence = 0.88
+citations = [E1] [E2]
 ```
 
-This keeps DAG semantics separate from concurrency. Parallel execution can be added later without changing what READY/BLOCKED means.
+The confidence is deliberately conservative: the teaching synthesizer uses the lower supporting confidence.
 
-## Planner validation
+## Evidence model
 
-`validate_plan(...)` fails closed on:
+`evidence.py` introduces:
+
+```python
+SourceRef
+EvidenceRecord
+EvidenceStore
+```
+
+An EvidenceRecord carries:
 
 ```text
-duplicate task IDs
-missing dependency IDs
-self-dependency
-cycles
+evidence_id
+claim
+value
+unit
+confidence
+source_id
+title
+publisher
+uri
 ```
 
-A Scheduler should not try to "figure out" a malformed DAG while executing it.
+The Scheduler registers evidence as soon as a Task returns it:
 
-## Compact visual debugger UI
+```python
+record = EvidenceRecord.from_dict(result)
+evidence_store.add(record)
+task.evidence_ids = [record.evidence_id]
+```
 
-V9 redesigns the browser around the information needed at this stage.
+When S1 returns a synthesis, the Scheduler verifies its claimed evidence IDs against the store:
 
-Desktop layout:
+```python
+citations = evidence_store.citations(evidence_ids)
+```
+
+An unknown ID fails instead of producing an unsupported citation.
+
+## Responsibilities remain separate
 
 ```text
-┌──────────── PLAN ────────────┐
-│ Task cards / dependency state │
-│ READY / RUNNING / BLOCKED     │
-└───────────────────────────────┘
-
-┌──────────── RUN ─────────────┐
-│ selected teaching events      │
-│ current Scheduler/Runtime step │
-└───────────────────────────────┘
-
-┌──────────── CODE ────────────┐
-│ matching code                 │
-│ WHY / NEXT explanation        │
-│ collapsible Runtime details   │
-└───────────────────────────────┘
+Planner          = WHAT research tasks exist
+Scheduler        = WHEN each task is READY
+ExecutionContext = WHO is executing
+Policy           = whether that identity may execute the capability
+Runtime          = HOW one task executes safely
+EvidenceStore    = WHAT evidence/provenance has actually been collected
+Synthesis        = WHAT can be concluded from that evidence
 ```
 
-The three panes share one viewport on larger screens and scroll independently. Raw Runtime events remain available under collapsible `Details`, but they no longer dominate the main screen.
+V10 does not replace the V1–V9 layers. Every evidence and synthesis Task still goes through Tool validation, Policy, AgentState, and the existing Runtime.
+
+## Compact visual debugger
 
 Run:
 
@@ -145,16 +159,27 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Recommended learning sequence:
+The UI keeps the compact three-pane layout:
 
-1. `Planner created DAG` — inspect `planner.py`.
-2. First `Scheduler tick` — confirm A/B READY and C BLOCKED.
-3. `Task A started` — observe Scheduler handoff to Runtime.
-4. Walk through A's Tool validation, Policy, Tool execution, and result.
-5. Observe the next Scheduler tick: B READY, C still BLOCKED.
-6. After B completes, observe C become READY.
-7. At `Task C started`, inspect resolved arguments `{a: 30, b: 42}`.
-8. Finish at final result `72`.
+```text
+PLAN            RUN                 CODE
+research tasks  evidence lineage    matching Python
+E1 / E2 / S1    selected events     WHY / NEXT
+status          current progress     citations
+```
+
+Raw evidence, plan state, and Runtime details are still available in collapsible sections instead of permanently consuming the screen.
+
+Recommended sequence:
+
+1. `ResearchPlanner created DAG` — E1/E2 READY, S1 blocked.
+2. E1 executes through Runtime and returns a structured EvidenceRecord.
+3. `E1 provenance registered` — inspect source, claim, confidence.
+4. E2 repeats the same process.
+5. Scheduler now releases S1.
+6. S1 receives the complete E1/E2 evidence objects.
+7. `Synthesis verified` — EvidenceStore validates `[E1]` and `[E2]`.
+8. Final result is returned together with evidence, citations, and confidence.
 
 ## Tests
 
@@ -162,14 +187,13 @@ Recommended learning sequence:
 python -m unittest -v
 ```
 
-V9 adds tests that verify:
+V10 verifies:
 
-- the Planner creates A/B → C dependencies;
-- cyclic DAGs are rejected;
-- Scheduler transitions are exactly `READY [A,B] / BLOCKED [C]`, then `READY [B]`, then `READY [C]`;
-- dependency results are resolved into C as `30` and `42`;
-- final result is `72`;
-- every Task still passes through the existing Runtime validation, Policy, Tool execution, and StateStore events;
-- all V0–V8 regression tests continue to run.
-
-V8 crash/resume endpoints remain in the local server for backward-compatible experiments, but the V9 UI intentionally makes Planner/Scheduler the primary view.
+- ResearchPlanner creates E1/E2 → S1 dependencies;
+- S1 cannot start until both evidence Tasks complete;
+- evidence round-trips without losing source or confidence;
+- EvidenceStore rejects unknown citation IDs;
+- final synthesis value is 0.7 with confidence 0.88;
+- citations are exactly `[E1]` and `[E2]` and correspond to stored evidence;
+- Plan State carries evidence/citation IDs;
+- all prior Planner, Scheduler, Runtime, Policy, Retry, Checkpoint, State, and validation tests continue to run.
