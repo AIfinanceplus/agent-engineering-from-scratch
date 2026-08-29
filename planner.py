@@ -1,13 +1,8 @@
-"""V9 Planner + DAG data model.
+"""Planner + DAG data model.
 
-Planner answers a different question from the Agent Runtime:
-
-- Planner: what tasks should exist, and what depends on what?
-- Scheduler: which task is READY now?
-- Runtime: how does one selected task execute safely?
-
-The teaching planner is deterministic so DAG behavior can be inspected without
-mixing it with model variability.
+V9 introduced dependency-aware planning. V10 keeps the arithmetic plan for
+regression tests and adds a research plan whose upstream Tasks collect evidence
+and whose downstream Task synthesizes only those collected records.
 """
 
 from copy import deepcopy
@@ -27,6 +22,8 @@ class PlanTask:
     status: str = "pending"
     result: object | None = None
     error: dict | None = None
+    evidence_ids: list[str] = field(default_factory=list)
+    citation_ids: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return deepcopy(asdict(self))
@@ -50,12 +47,10 @@ class ExecutionPlan:
 
 
 class DeterministicPlanner:
-    """Create one small DAG that makes dependencies visually obvious."""
+    """V9 arithmetic DAG retained as a regression / comparison scenario."""
 
     def plan(self, goal: str) -> ExecutionPlan:
-        if not isinstance(goal, str) or not goal.strip():
-            raise ValueError("goal must be a non-empty string")
-
+        _validate_goal(goal)
         plan = ExecutionPlan(
             goal=goal,
             tasks=[
@@ -86,6 +81,47 @@ class DeterministicPlanner:
         )
         validate_plan(plan)
         return plan
+
+
+class ResearchPlanner:
+    """V10 teaching research DAG: collect evidence, then synthesize it."""
+
+    def plan(self, goal: str) -> ExecutionPlan:
+        _validate_goal(goal)
+        plan = ExecutionPlan(
+            goal=goal,
+            tasks=[
+                PlanTask(
+                    task_id="E1",
+                    title="Collect synthetic energy evidence",
+                    tool_name="lookup_evidence",
+                    arguments={"topic": "energy"},
+                ),
+                PlanTask(
+                    task_id="E2",
+                    title="Collect synthetic shelter evidence",
+                    tool_name="lookup_evidence",
+                    arguments={"topic": "shelter"},
+                ),
+                PlanTask(
+                    task_id="S1",
+                    title="Synthesize only the collected evidence",
+                    tool_name="synthesize_evidence",
+                    arguments={
+                        "evidence_a": {"from_task": "E1"},
+                        "evidence_b": {"from_task": "E2"},
+                    },
+                    depends_on=["E1", "E2"],
+                ),
+            ],
+        )
+        validate_plan(plan)
+        return plan
+
+
+def _validate_goal(goal: str) -> None:
+    if not isinstance(goal, str) or not goal.strip():
+        raise ValueError("goal must be a non-empty string")
 
 
 def validate_plan(plan: ExecutionPlan) -> None:
