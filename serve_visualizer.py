@@ -1,8 +1,8 @@
-"""Serve the V10 research evidence + citation debugger.
+"""Serve the V11 tracing + eval debugger.
 
-Primary path: ResearchPlanner -> DAG Scheduler -> existing Runtime ->
-EvidenceStore -> verified synthesis/citations. Legacy V8 actions remain callable
-for backward-compatible experiments but are not part of the main UI.
+Primary path: ResearchPlanner -> Scheduler -> Runtime -> EvidenceStore ->
+Synthesis/Citations, with a TraceRecorder and explicit eval scoring layered
+around the run. Legacy V8 actions remain callable but are not primary UI.
 """
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -12,7 +12,9 @@ from pathlib import Path
 from agent import DEFAULT_MAX_STEPS, SimulatedCrash, run_agent
 from checkpoint import JsonCheckpointStore
 from context import ExecutionContext
+from evals import EvalCase, run_eval_suite, score_result
 from model_adapters import FAKE_SCENARIOS, FakeModel
+from observability import TraceRecorder
 from planner import ResearchPlanner
 from scheduler import DAGScheduler
 from tools import reset_teaching_tools
@@ -71,6 +73,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         if action == "research":
             self.run_research(goal, execution_context)
             return
+        if action == "evals":
+            self.run_evals(execution_context)
+            return
 
         self.run_legacy_v8(request_data, action, execution_context)
 
@@ -79,11 +84,19 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         reset_teaching_tools()
         try:
             plan = ResearchPlanner().plan(goal)
+            trace = TraceRecorder(execution_context.trace_id)
             result = DAGScheduler().run(
                 plan,
                 execution_context=execution_context,
                 on_event=events.append,
+                trace_recorder=trace,
             )
+            interactive_case = EvalCase(
+                case_id="interactive-research",
+                goal=goal,
+                min_confidence=0.8,
+            )
+            eval_report = score_result(interactive_case, result).to_dict()
             payload = {
                 "ok": result["ok"],
                 "action": "research",
@@ -95,6 +108,8 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 "final_artifact": result.get("final_artifact"),
                 "evidence": result.get("evidence", []),
                 "citations": result.get("citations", []),
+                "trace": result.get("trace"),
+                "eval_report": eval_report,
                 "events": events,
             }
             status = 200 if result["ok"] else 500
@@ -110,6 +125,21 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             }
             status = 500
         self.send_json(status, payload)
+
+    def run_evals(self, execution_context: ExecutionContext) -> None:
+        reset_teaching_tools()
+        try:
+            suite = run_eval_suite(execution_context=execution_context)
+            self.send_json(200, {"ok": True, "action": "evals", "eval_suite": suite})
+        except Exception as exc:
+            self.send_json(
+                500,
+                {
+                    "ok": False,
+                    "action": "evals",
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                },
+            )
 
     def run_legacy_v8(self, request_data, action, execution_context):
         if action not in {"run", "crash", "resume", "clear"}:
@@ -173,9 +203,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V10")
+    print("Agent Runtime Visual Debugger · V11")
     print("Open http://127.0.0.1:8000")
-    print("Primary view: Evidence -> Synthesis -> Citation")
+    print("Primary view: Research Trace + Evals")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
