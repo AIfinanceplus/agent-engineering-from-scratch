@@ -12,137 +12,119 @@ V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, Exe
 - R2 — API-only multi-source macro research
 - R3 — Research decomposition + safe query generation
 - R4 — Source API health + source contract testing
-- R5 — Source quality / freshness / contradiction
+- R5 — Evidence quality / freshness / contradiction
 - R6 — Investment & policy synthesis + domain evals
 
-## Current stage: R4 — Source API health + research intelligence
-
-R4 adds an explicit operational source boundary before research debugging:
+## Current stage: R6 — grounded domain synthesis
 
 ```text
-Real Public APIs
-      ↓
-SourceHealthChecker
-TLS / credentials / HTTP / JSON / Evidence contract / as-of
-      ↓
 Research Question
       ↓
 ResearchDecomposer
       ↓
-Subquestions / Source Intents
-      ↓
 QueryCompiler
       ↓
-Validated Query Specs
+Q1..Qn source tasks
       ↓
-Dynamic DAG
+EvidenceStore
       ↓
-Runtime → EvidenceStore → Synthesis → Citations → Trace → Evals
+S1 Research Synthesis
+quality / freshness / relations / limitations
+      ↓
+D1 Domain Synthesis
+Investment OR Policy lens
+      ↓
+Grounded citations + Trace + R6 Evals
 ```
 
-The key distinction is:
+The key R6 distinction is:
 
 ```text
-API READY != DATA FRESH
+S1 = what the Evidence supports
+D1 = how that grounded conclusion is framed for a decision domain
 ```
 
-API readiness checks transport and contract health. Freshness reports observation age separately because BLS monthly data, FRED market data, and EIA weekly data have different natural cadences.
+D1 cannot fetch new data, add Evidence IDs, or increase S1 confidence. Both S1 and D1 go through the existing Runtime/Tool/Policy/Scheduler path, and D1 citations are verified again against the same EvidenceStore.
+
+## Domain lenses
+
+### Investment
+
+The investment brief contains:
+
+- thesis;
+- macro market channels;
+- base/upside-inflation/downside-inflation scenarios;
+- counterevidence;
+- what would change the view;
+- monitoring signals;
+- limitations.
+
+Scenario weighting is qualitative. The workbench does not fabricate probabilities and does not treat the brief as an individualized trade recommendation.
+
+### Policy
+
+The policy brief contains:
+
+- policy problem;
+- evidence posture;
+- analytical options;
+- tradeoffs;
+- counterevidence;
+- what would change the view;
+- monitoring signals;
+- limitations.
+
+The brief frames evidence and tradeoffs rather than issuing a policy directive.
+
+## Evidence quality inherited from R5
+
+Every source Evidence record is assessed on four transparent dimensions:
+
+```text
+Authority
+Freshness
+Completeness
+Relevance
+```
+
+Cross-source relations distinguish:
+
+```text
+AGREEMENT
+MIXED_SIGNAL
+CONTRADICTION
+```
+
+`MIXED_SIGNAL` means different indicators point in different directions. `CONTRADICTION` requires opposing conclusions on the same comparable claim. Support scores remain deterministic teaching heuristics, not calibrated probabilities of truth.
 
 ## Active public sources
 
-### BLS
+```text
+BLS  https://api.bls.gov/publicAPI/v2/timeseries/data
+FRED https://api.stlouisfed.org/fred/series/observations
+EIA  https://api.eia.gov/v2/petroleum/pri/gnd/data/
+```
 
-BLS Public Data API v2 single-series endpoint:
+Runtime environment variables:
 
 ```text
-https://api.bls.gov/publicAPI/v2/timeseries/data/{series_id}
+BLS_API_KEY   optional registered BLS quota
+FRED_API_KEY  required when FRED is selected
+EIA_API_KEY   required when EIA is selected
 ```
 
-The production adapter uses native OS TLS trust and preserves GET → POST fallback through the official v2 endpoint.
+Credentials never enter Planner arguments, Evidence, citations, Trace, health reports, or UI diagnostics.
 
-Current CPI probes:
+## Source health
 
-```text
-CUSR0000SA0      headline CPI
-CUSR0000SA0L1E  core CPI
-```
-
-No API key is required for the current BLS single-series path.
-
-### FRED
-
-```text
-https://api.stlouisfed.org/fred/series/observations
-```
-
-Current research probe:
-
-```text
-T5YIE  5-Year Breakeven Inflation Rate
-```
-
-Required Runtime environment variable:
-
-```text
-FRED_API_KEY
-```
-
-### EIA
-
-Current APIv2 petroleum REST route:
-
-```text
-https://api.eia.gov/v2/petroleum/pri/gnd/data/
-```
-
-Current research probe:
-
-```text
-EMM_EPMR_PTE_NUS_DPG  U.S. Regular All Formulations Retail Gasoline Prices
-```
-
-The query uses weekly frequency, the `value` data field, the series facet, descending period sort, and a short recent window.
-
-Required Runtime environment variable:
-
-```text
-EIA_API_KEY
-```
-
-## Native TLS trust
-
-`native_http.py` uses `truststore` so Python HTTPS uses the operating system trust store. On macOS this aligns Python certificate trust with the system Security.framework while keeping certificate and hostname verification enabled.
-
-Install dependencies:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-Never disable TLS verification to make a public-data request pass.
-
-## Test the real data-source APIs
-
-Set credentials first when testing all three sources:
-
-```bash
-export FRED_API_KEY="..."
-export EIA_API_KEY="..."
-```
-
-Then use either the workbench button:
-
-```text
-测试数据源 API
-```
-
-or the CLI:
+Run the real API smoke test:
 
 ```bash
 python3 source_smoke.py
 ```
 
-Test one provider independently:
+or one provider:
 
 ```bash
 python3 source_smoke.py BLS
@@ -150,79 +132,37 @@ python3 source_smoke.py FRED
 python3 source_smoke.py EIA
 ```
 
-A source result reports one of:
+Source Health keeps operational readiness separate from observation freshness and classifies rate limits, TLS/auth/HTTP failures, malformed source contracts, and missing credentials.
+
+## R6 Evals
+
+The live R6 suite has three layers:
 
 ```text
-READY
-CREDENTIAL_MISSING
-TLS_ERROR
-AUTH_ERROR
-HTTP_ERROR
-TIMEOUT
-CONNECTION_ERROR
-CONTRACT_ERROR
-API_ERROR
+1. r6-blueprint-query-contract
+2. r6-research-quality-contract
+3. r6-investment-decision-contract
+   OR r6-policy-decision-contract
 ```
 
-A successful result also reports a safe base endpoint, series ID, normalized Evidence ID, `as_of`, age, freshness heuristic, latency, and BLS transport when applicable.
+Checks include:
 
-Credential values are never included in Planner arguments, Tool arguments, Evidence, citations, Trace, health reports, or UI diagnostics.
+- decomposition/query 1:1 alignment and safe query fields;
+- dynamic `Q1..Qn → S1 → D1` DAG completion;
+- one grounded Evidence record per source query;
+- final citation IDs exactly match collected Evidence IDs;
+- S1 quality coverage and non-probabilistic confidence semantics;
+- D1 cannot add/remove Evidence IDs or raise confidence;
+- D1 has counterevidence, falsifiers, and monitoring signals;
+- scenario weighting is qualitative rather than a fake probability;
+- unresolved same-claim contradiction blocks a research-ready decision status.
 
-## R3 research intelligence preserved inside R4
-
-The research path remains question-driven rather than using a fixed H1/C1/F1/G1 plan.
-
-Broad question:
-
-```text
-Assess current inflation pressure.
-```
-
-can compile to:
-
-```text
-Q1 headline CPI  → BLS
-Q2 core CPI      → BLS
-Q3 breakeven     → FRED
-Q4 gasoline      → EIA
-                  ↓
-                 S1
-```
-
-Narrow question:
-
-```text
-Compare headline and core CPI.
-```
-
-compiles only to:
-
-```text
-Q1 headline CPI → BLS
-Q2 core CPI     → BLS
-                 ↓
-                S1
-```
-
-FRED/EIA credentials are required only when QueryCompiler selects those providers.
-
-## CI
-
-CI is network-independent. It uses injected API-shaped responses to validate the production parsers and source-health contract without consuming public API quota or requiring repository secrets.
-
-R4 CI checks include:
-
-- Python and browser JavaScript syntax;
-- native TLS verification remains enabled;
-- credential-gated providers are not called when credentials are missing;
-- TLS failures are classified correctly;
-- malformed source output becomes `CONTRACT_ERROR`;
-- secret values cannot leak into health diagnostics;
-- R3 dynamic-query, Runtime, Evidence, Citation, Trace, and Eval regressions.
+CI remains network-independent by injecting API-shaped source responses while exercising the same production parsers/contracts.
 
 ## Run the workbench
 
 ```bash
+python3 -m pip install -r requirements.txt
 python3 serve_visualizer.py
 ```
 
@@ -232,9 +172,11 @@ Open:
 http://127.0.0.1:8000
 ```
 
+Use the Domain selector to switch between `Investment` and `Policy`. The source queries and Evidence should remain the same for the same research question; only D1 changes.
+
 Active UI scripts:
 
 ```text
-web/r3_app.js
+web/r6_app.js
 web/r4_health.js
 ```
