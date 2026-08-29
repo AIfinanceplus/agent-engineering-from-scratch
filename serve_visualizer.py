@@ -1,11 +1,15 @@
 """Serve the active R7 forecasting + scenario tracking workbench.
 
 R7 preserves source health, dynamic research decomposition, Evidence quality, and
-R6 domain synthesis. It adds a falsifiable forecast layer:
+R6 domain synthesis. It adds a falsifiable forecast layer plus UI-visible durable
+research checkpoints:
 Evidence -> S1 -> D1 -> F1 Forecast Pack -> later check/settlement.
+
+Research checkpoint snapshots survive process death, but orchestration-level
+restore/resume is intentionally not wired yet. The UI labels that distinction.
 """
 
-from datetime import date
+from datetime import date, datetime
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -14,6 +18,7 @@ from pathlib import Path
 from context import ExecutionContext
 from observability import TraceRecorder
 from r4_source_health import run_source_health
+from r7_checkpoint import JsonResearchCheckpointStore, ResearchCheckpointRecorder
 from r7_evals import make_r7_eval_suite
 from r7_forecast import JsonForecastStore, evaluate_forecast_pack
 from r7_planner import R7ResearchPlanner
@@ -24,6 +29,7 @@ from scheduler import DAGScheduler
 ROOT_DIR = Path(__file__).parent
 WEB_DIR = ROOT_DIR / "web"
 FORECAST_STORE = JsonForecastStore(ROOT_DIR / ".forecasts")
+CHECKPOINT_STORE = JsonResearchCheckpointStore(ROOT_DIR / ".research_checkpoints")
 register_r7_tools()
 
 CONTEXT_PRESETS = {
@@ -67,6 +73,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
         if action == "r7_packs":
             self._forecast_packs()
+            return
+        if action == "r7_checkpoints":
+            self._research_checkpoints(request_data)
             return
 
         context_preset = request_data.get("context_preset", "general")
@@ -163,6 +172,41 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         rows.sort(key=lambda item: (item.get("created_at") or "", item.get("pack_id") or ""), reverse=True)
         self.send_json(200, {"ok": True, "action": "r7_packs", "packs": rows})
 
+    def _research_checkpoints(self, request_data: dict) -> None:
+        run_id = request_data.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            self.send_json(
+                200,
+                {
+                    "ok": False,
+                    "action": "r7_checkpoints",
+                    "error": {"code": "run_id_required", "message": "run_id is required"},
+                },
+            )
+            return
+        try:
+            checkpoints = CHECKPOINT_STORE.list(run_id)
+        except Exception as exc:
+            self.send_json(
+                200,
+                {
+                    "ok": False,
+                    "action": "r7_checkpoints",
+                    "error": {"code": exc.__class__.__name__, "message": str(exc)},
+                },
+            )
+            return
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "action": "r7_checkpoints",
+                "run_id": run_id,
+                "checkpoints": checkpoints,
+                "latest_checkpoint": checkpoints[-1] if checkpoints else None,
+            },
+        )
+
     def _check_forecast(
         self,
         request_data: dict,
@@ -250,6 +294,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         save_forecast: bool,
     ) -> dict:
         reference_date = date.today().isoformat()
+        run_id = f"RUN-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S-%f')}"
         events = [
             {"type": "research_question_received", "question": question, "domain": domain}
         ]
@@ -265,11 +310,14 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return {
                 "ok": False,
                 "action": "r7_run",
+                "run_id": run_id,
                 "domain": domain,
                 "stage": "decomposition_or_query_compile",
                 "reference_date": reference_date,
                 "error": {"code": exc.__class__.__name__, "message": str(exc)},
                 "events": events,
+                "checkpoints": [],
+                "latest_checkpoint": None,
             }
 
         events.append(
@@ -300,6 +348,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return {
                 "ok": False,
                 "action": "r7_run",
+                "run_id": run_id,
                 "domain": domain,
                 "stage": "credentials",
                 "reference_date": reference_date,
@@ -310,14 +359,26 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                     "missing_env": missing,
                 },
                 "events": events,
+                "checkpoints": [],
+                "latest_checkpoint": None,
             }
+
+        checkpoint_recorder = ResearchCheckpointRecorder(
+            run_id=run_id,
+            execution_context=execution_context,
+            store=CHECKPOINT_STORE,
+        )
+
+        def record_event(event: dict) -> None:
+            events.append(event)
+            checkpoint_recorder.observe(event)
 
         try:
             trace = TraceRecorder(execution_context.trace_id)
             result = DAGScheduler().run(
                 plan,
                 execution_context=execution_context,
-                on_event=events.append,
+                on_event=record_event,
                 trace_recorder=trace,
             )
             results = result.get("results", {})
@@ -364,9 +425,11 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                         }
                     )
 
+            checkpoints = checkpoint_recorder.checkpoints()
             payload = {
                 "ok": result["ok"],
                 "action": "r7_run",
+                "run_id": run_id,
                 "domain": domain,
                 "question": question,
                 "reference_date": reference_date,
@@ -383,6 +446,8 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 "citations": result.get("citations", []),
                 "trace": result.get("trace"),
                 "events": events,
+                "checkpoints": checkpoints,
+                "latest_checkpoint": checkpoints[-1] if checkpoints else None,
             }
             if not result["ok"]:
                 provider_map = {
@@ -399,15 +464,19 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 payload["error"] = _source_failure(events, result.get("error"), provider_map)
             return payload
         except Exception as exc:
+            checkpoints = checkpoint_recorder.checkpoints()
             return {
                 "ok": False,
                 "action": "r7_run",
+                "run_id": run_id,
                 "domain": domain,
                 "stage": "unhandled",
                 "reference_date": reference_date,
                 "blueprint": blueprint,
                 "error": {"code": exc.__class__.__name__, "message": str(exc)},
                 "events": events,
+                "checkpoints": checkpoints,
+                "latest_checkpoint": checkpoints[-1] if checkpoints else None,
             }
 
     def send_json(self, status: int, payload: dict) -> None:
@@ -438,9 +507,10 @@ def _source_failure(events: list[dict], fallback, provider_map: dict[str, str]) 
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Research Workbench · R7")
+    print("Agent Research Workbench · R7 / UI V3")
     print("Open http://127.0.0.1:8000")
     print("Research: Question -> Evidence -> S1 -> D1 -> F1 Forecast Pack")
+    print("Checkpoint: durable research snapshots -> inspectable; orchestration restore not wired yet")
     print("Tracking: saved forecast pack -> fresh S1 -> pending/invalidation/resolution -> scenario revision")
     print("Forecast scores are historical directional hit rates, not forecast probabilities.")
     print("Press Ctrl+C to stop.")
