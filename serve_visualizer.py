@@ -1,8 +1,8 @@
-"""Serve the V11 tracing + eval debugger.
+"""Serve the R1 real-source macro research debugger.
 
-Primary path: ResearchPlanner -> Scheduler -> Runtime -> EvidenceStore ->
-Synthesis/Citations, with a TraceRecorder and explicit eval scoring layered
-around the run. Legacy V8 actions remain callable but are not primary UI.
+Primary path: CPIResearchPlanner -> Scheduler -> Runtime -> BLS Source Adapter ->
+EvidenceStore -> CPI analysis -> citations -> Trace. V11 evals and older teaching
+experiments remain available as regressions, but the main UI now focuses on CPI.
 """
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -15,7 +15,7 @@ from context import ExecutionContext
 from evals import EvalCase, run_eval_suite, score_result
 from model_adapters import FAKE_SCENARIOS, FakeModel
 from observability import TraceRecorder
-from planner import ResearchPlanner
+from planner import CPIResearchPlanner, ResearchPlanner
 from scheduler import DAGScheduler
 from tools import reset_teaching_tools
 
@@ -28,9 +28,9 @@ CONTEXT_PRESETS = {
     "general": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
-        agent_id="research-agent",
-        task_id="visual-research-root",
-        trace_id="visual-research-trace",
+        agent_id="macro-research-agent",
+        task_id="visual-macro-root",
+        trace_id="visual-macro-trace",
     ),
     "read_only": ExecutionContext(
         tenant_id="demo-tenant",
@@ -59,10 +59,10 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             self.send_error(400, "Request body must be valid JSON")
             return
 
-        action = request_data.get("action", "research")
+        action = request_data.get("action", "macro")
         goal = request_data.get(
             "goal",
-            "Use only the collected synthetic evidence to estimate the combined contribution and cite every supporting source.",
+            "Compare the latest headline and core CPI year-over-year rates using BLS evidence only.",
         )
         context_preset = request_data.get("context_preset", "general")
         if context_preset not in CONTEXT_PRESETS:
@@ -70,6 +70,13 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         execution_context = CONTEXT_PRESETS[context_preset]
+        if action == "macro":
+            self.run_macro(
+                goal,
+                execution_context,
+                data_mode=request_data.get("data_mode", "fixture"),
+            )
+            return
         if action == "research":
             self.run_research(goal, execution_context)
             return
@@ -78,6 +85,54 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         self.run_legacy_v8(request_data, action, execution_context)
+
+    def run_macro(
+        self,
+        goal: str,
+        execution_context: ExecutionContext,
+        *,
+        data_mode: str,
+    ) -> None:
+        events = []
+        reset_teaching_tools()
+        try:
+            plan = CPIResearchPlanner().plan(goal, data_mode=data_mode)
+            trace = TraceRecorder(execution_context.trace_id)
+            result = DAGScheduler().run(
+                plan,
+                execution_context=execution_context,
+                on_event=events.append,
+                trace_recorder=trace,
+            )
+            payload = {
+                "ok": result["ok"],
+                "action": "macro",
+                "goal": goal,
+                "data_mode": data_mode,
+                "execution_context": execution_context.to_dict(),
+                "plan": result["plan"],
+                "results": result.get("results", {}),
+                "final_result": result.get("final_result"),
+                "final_artifact": result.get("final_artifact"),
+                "evidence": result.get("evidence", []),
+                "citations": result.get("citations", []),
+                "trace": result.get("trace"),
+                "events": events,
+            }
+            status = 200 if result["ok"] else 500
+            if not result["ok"]:
+                payload["error"] = result.get("error")
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "action": "macro",
+                "goal": goal,
+                "data_mode": data_mode,
+                "error": f"{exc.__class__.__name__}: {exc}",
+                "events": events,
+            }
+            status = 500
+        self.send_json(status, payload)
 
     def run_research(self, goal: str, execution_context: ExecutionContext) -> None:
         events = []
@@ -203,9 +258,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V11")
+    print("Agent Research Workbench · R1")
     print("Open http://127.0.0.1:8000")
-    print("Primary view: Research Trace + Evals")
+    print("Primary view: BLS Source -> Evidence -> CPI Analysis -> Citations")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

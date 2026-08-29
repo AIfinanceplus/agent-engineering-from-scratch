@@ -1,8 +1,7 @@
 """Tool objects: capability facts stay with the Tool.
 
-V10 adds two teaching research capabilities. They return structured evidence
-and synthesis objects while the existing Runtime still owns validation, policy,
-retry, state, and execution.
+R1 adds real-source macro capabilities while keeping Tool execution behind the
+same Runtime validation, Policy, Retry, State, Trace, and Evidence boundaries.
 """
 
 from dataclasses import dataclass
@@ -10,6 +9,8 @@ from numbers import Real
 from typing import Callable
 
 from evidence import lookup_synthetic_evidence, synthesize_two_evidence
+from macro_analysis import compare_cpi_series
+from macro_sources import fetch_bls_series
 
 
 RETRYABLE_ERRORS = (TimeoutError, ConnectionError)
@@ -191,6 +192,27 @@ SYNTHESIS_PARAMETERS = {
     "additionalProperties": False,
 }
 
+BLS_FETCH_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "series_id": {"type": "string"},
+        "label": {"type": "string"},
+        "mode": {"type": "string", "enum": ["fixture", "live"]},
+    },
+    "required": ["series_id", "label", "mode"],
+    "additionalProperties": False,
+}
+
+CPI_COMPARE_PARAMETERS = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "object"},
+        "core": {"type": "object"},
+    },
+    "required": ["headline", "core"],
+    "additionalProperties": False,
+}
+
 
 CALCULATOR_TOOL = Tool(
     name="calculator",
@@ -246,6 +268,24 @@ SYNTHESIZE_EVIDENCE_TOOL = Tool(
     risk="low",
 )
 
+FETCH_BLS_SERIES_TOOL = Tool(
+    name="fetch_bls_series",
+    description="Fetch and normalize one official BLS time series or a deterministic replay fixture.",
+    parameters=BLS_FETCH_PARAMETERS,
+    function=fetch_bls_series,
+    max_retries=2,
+    risk="low",
+)
+
+COMPARE_CPI_SERIES_TOOL = Tool(
+    name="compare_cpi_series",
+    description="Compute latest headline and core CPI year-over-year rates from collected BLS evidence.",
+    parameters=CPI_COMPARE_PARAMETERS,
+    function=compare_cpi_series,
+    max_retries=0,
+    risk="low",
+)
+
 
 TOOL_REGISTRY: dict[str, Tool] = {
     tool.name: tool
@@ -256,6 +296,8 @@ TOOL_REGISTRY: dict[str, Tool] = {
         DELETE_RECORD_TOOL,
         EVIDENCE_LOOKUP_TOOL,
         SYNTHESIZE_EVIDENCE_TOOL,
+        FETCH_BLS_SERIES_TOOL,
+        COMPARE_CPI_SERIES_TOOL,
     )
 }
 

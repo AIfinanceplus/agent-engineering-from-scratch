@@ -1,8 +1,8 @@
 # Agent Engineering from Scratch
 
-A step-by-step learning repository for building an Agent Runtime from first principles.
+A step-by-step learning repository for building an Agent Runtime and then turning it into a grounded research Agent.
 
-## Roadmap
+## Phase 1 — Runtime from scratch
 
 - V0 — Minimal Agent Loop
 - V0.1 — Replaceable Model Adapter
@@ -19,135 +19,158 @@ A step-by-step learning repository for building an Agent Runtime from first prin
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V11 — Tracing + Evals
+## Phase 2 — Research Agent
 
-V10 made research outputs grounded in explicit evidence. V11 asks a different question:
+- R1 — Real Source Adapter: BLS CPI
+- R2 — Multi-source macro evidence
+- R3 — Research decomposition + query generation
+- R4 — Source quality / freshness / contradiction
+- R5 — Investment & policy synthesis + domain evals
 
-> How do we know the Agent is reliable, and how do we compare one version with another?
+## Current stage: R1 — Real BLS Source Adapter
 
-Two concepts stay separate:
+Phase 1 proved that the Agent Runtime can plan, execute Tools, preserve state, validate citations, trace runs, and evaluate quality. R1 changes the data boundary:
 
-```text
-Trace
-= explain one run
-= spans + duration + runtime counters
+> Stop using only bundled teaching evidence. Connect the same Runtime to a real public source without giving up reproducibility.
 
-Eval
-= judge a run against explicit expectations
-= repeat the same cases after code changes
-```
-
-## Trace model
-
-`observability.py` adds:
-
-```python
-TraceRecorder
-Span
-```
-
-The Scheduler creates one root span for the whole plan and one child span per Task:
+The first research question is deliberately narrow:
 
 ```text
-plan.run
-├── task.E1
-├── task.E2
-└── task.S1
+Compare the latest headline and core CPI year-over-year rates
+using BLS evidence only.
 ```
 
-The trace also records counters without changing business behavior:
+## R1 architecture
 
 ```text
-scheduler_ticks
-tasks_started
-tasks_completed
-tool_attempts
-evidence_registered
-citations_verified
-runtime_events
+Research Question
+       ↓
+CPIResearchPlanner
+       ↓
+┌─────────────────────┐       ┌─────────────────────┐
+│ H1                  │       │ C1                  │
+│ Headline CPI        │       │ Core CPI            │
+│ CUSR0000SA0         │       │ CUSR0000SA0L1E      │
+│ fetch_bls_series    │       │ fetch_bls_series    │
+└──────────┬──────────┘       └──────────┬──────────┘
+           │ Evidence                     │ Evidence
+           └──────────────┬───────────────┘
+                          ↓
+                    ┌───────────┐
+                    │ A1        │
+                    │ compare   │
+                    │ CPI YoY   │
+                    └─────┬─────┘
+                          ↓
+              Synthesis + Citations
+                          ↓
+                        Trace
 ```
 
-For the default research DAG, the expected shape is:
+The important boundary is:
 
 ```text
-4 spans
-3 Tool attempts
-2 Evidence records
-2 verified citations
-3 completed Tasks
+Source Task
+= fetch / normalize / attach provenance
+
+Analysis Task
+= consume already-collected Evidence
+= no hidden re-fetch
 ```
 
-Tracing is deliberately side-channel observability. It does not decide which Task is READY, whether Policy allows execution, or what a Tool returns.
+## Source Adapter
 
-## Eval model
+`macro_sources.py` introduces `BLSAdapter`.
 
-`evals.py` adds explicit `EvalCase` and `EvalReport` contracts.
-
-The first scoring dimensions are:
+It supports two modes with the same normalized output contract:
 
 ```text
-success
-task_completion_rate
-evidence_coverage
-citation_completeness
-citations_grounded
+fixture
+→ deterministic replay
+→ CI / learning / debugging
+→ never presented as current BLS data
+
+live
+→ HTTP GET to the BLS Public Data API
+→ real observations from the local Runtime
+```
+
+A normalized source result includes:
+
+```text
+kind = evidence
+evidence_id
+series_id
+source_mode
+latest value
+history[]
+claim
+publisher
+source URI
 confidence
 ```
 
-A result passes only if the expectations are satisfied. For example, a polished answer that cites `[E99]` while E99 was never collected fails `citations_grounded`.
+The Tool layer registers:
 
 ```python
-report = score_result(case, result)
-
-if not report.passed:
-    # fail the quality gate
+fetch_bls_series(...)
+compare_cpi_series(...)
 ```
 
-The default suite contains two deterministic research cases and is designed to be rerun after implementation changes:
+Both still pass through the existing Runtime:
+
+```text
+Tool proposal
+→ validation
+→ Policy
+→ Retry
+→ execution
+→ AgentState
+→ EvidenceStore
+→ Trace
+```
+
+For live BLS requests, `TimeoutError` and `ConnectionError` remain retryable Runtime execution failures. Analysis errors are not treated as transient network retries.
+
+## CPI analysis
+
+`macro_analysis.py` computes the latest year-over-year rate from the collected monthly history:
 
 ```python
-suite = run_eval_suite()
-# passed / total / pass_rate
+yoy = (latest / same_month_previous_year - 1) * 100
 ```
 
-## Full V11 architecture
+A1 receives the complete H1/C1 evidence objects through DAG dependency resolution:
+
+```python
+{
+    "headline": {"from_task": "H1"},
+    "core": {"from_task": "C1"},
+}
+```
+
+Only when H1 and C1 are complete does Scheduler resolve those references into actual Evidence objects.
+
+The synthesis carries both evidence IDs, and `EvidenceStore` verifies them before citations are returned.
+
+## Why fixture and live are separate
+
+CI should test our Agent, not the availability of an external website.
 
 ```text
-                           ExecutionContext
-                                  │
-                                  ↓
-Goal → Planner → DAG → Scheduler → Task Runtime
-                                  │
-                                  ├→ Validation / Policy / Tool / State
-                                  │
-                                  ├→ EvidenceStore → Synthesis → Citations
-                                  │
-                                  └→ TraceRecorder
-                                          │
-                                          ↓
-                                     Trace / Metrics
-                                          │
-                                          ↓
-                                       Evals
-                                          │
-                                          ↓
-                              PASS / FAIL + score breakdown
+CI
+→ fixture replay
+→ deterministic parser / planner / analysis / citation tests
+
+Local research
+→ Live BLS
+→ same Source Adapter contract
+→ real network response
 ```
 
-The old responsibilities still remain:
+`BLSAdapter` also accepts an injected transport, so tests verify the live BLS JSON response shape and URL construction without sending a network request.
 
-```text
-Planner          = WHAT tasks exist
-Scheduler        = WHEN tasks are READY
-ExecutionContext = WHO is executing
-Policy           = MAY this context execute the Tool
-Runtime          = HOW a Task executes safely
-EvidenceStore    = WHAT grounded evidence exists
-Trace            = WHAT happened in this run
-Eval             = DID the run satisfy our expectations
-```
-
-## Visual debugger
+## Research Workbench
 
 Run:
 
@@ -161,34 +184,27 @@ Open:
 http://127.0.0.1:8000
 ```
 
-The main UI remains compact:
+The R1 UI keeps the compact three-pane structure:
 
 ```text
-PLAN            RUN              CODE
-Task state      events/trace     matching implementation
-E1/E2/S1        current step     WHY / NEXT
+SOURCE PLAN        RUN / TRACE             CODE
+H1 headline        fetch                    matching Python
+C1 core            evidence registration   WHY / NEXT
+A1 analysis        analysis                 citations
 ```
 
-The top strip adds only two new observability KPIs:
+Use the Data selector:
 
 ```text
-Trace → span count + Tool attempts
-Eval  → PASS / FAIL
+Fixture Replay
+→ recommended first
+→ deterministic teaching flow
+
+Live BLS
+→ real BLS request from your local Python Runtime
 ```
 
-Detailed spans, metrics, eval failures, Runtime State, and raw events stay inside collapsible sections.
-
-Two actions are available:
-
-```text
-运行研究
-→ run one interactive research case
-→ produce Trace + interactive EvalReport
-
-运行 Evals
-→ run the fixed default eval suite
-→ report passed / total / pass_rate
-```
+V11 Eval Mode remains available from the same workbench as a regression-learning tool.
 
 ## Tests
 
@@ -196,14 +212,16 @@ Two actions are available:
 python -m unittest -v
 ```
 
-V11 verifies:
+R1 adds tests for:
 
-- span hierarchy and duration accounting;
-- one root span plus three Task spans for the research DAG;
-- expected scheduler/task/tool/evidence/citation metrics;
-- complete evidence and citations pass the eval;
-- an ungrounded or missing citation fails the eval;
-- the default eval suite passes 2/2;
-- V0–V10 Runtime, Checkpoint, Planner, Evidence, Citation, Policy, Retry, and validation regressions still run.
+- normalized fixture Evidence contract;
+- BLS live API JSON parsing with an injected transport;
+- official BLS series URL construction;
+- CPI YoY calculation from monthly history;
+- H1/C1 → A1 Planner dependencies;
+- full fixture research run through the existing Runtime;
+- two BLS Evidence records and two verified citations;
+- Trace Tool-attempt accounting;
+- all V0–V11 regression tests.
 
-All bundled research records remain synthetic teaching data. The goal is Agent Engineering, not the macroeconomic conclusion represented by the example numbers.
+The fixture values are intentionally teaching-only. Select `Live BLS` when you want the workbench to retrieve current observations from the external source.
