@@ -1,10 +1,11 @@
-"""Serve the R1 real-source macro research debugger.
+"""Serve the R2 multi-source macro research debugger.
 
-Primary path: CPIResearchPlanner -> Scheduler -> Runtime -> BLS Source Adapter ->
-EvidenceStore -> CPI analysis -> citations -> Trace. V11 evals and older teaching
-experiments remain available as regressions, but the main UI now focuses on CPI.
+Primary path: MultiSourceMacroPlanner -> Scheduler -> shared Runtime -> BLS/FRED/EIA
+Source Adapters -> EvidenceStore -> freshness-aware synthesis -> citations -> Trace.
+R1 and V11 teaching paths remain available as regressions.
 """
 
+from datetime import date
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -16,6 +17,8 @@ from evals import EvalCase, run_eval_suite, score_result
 from model_adapters import FAKE_SCENARIOS, FakeModel
 from observability import TraceRecorder
 from planner import CPIResearchPlanner, ResearchPlanner
+from r2_planner import MultiSourceMacroPlanner
+from r2_tooling import register_r2_tools
 from scheduler import DAGScheduler
 from tools import reset_teaching_tools
 
@@ -23,6 +26,7 @@ from tools import reset_teaching_tools
 ROOT_DIR = Path(__file__).parent
 WEB_DIR = ROOT_DIR / "web"
 CHECKPOINT_DIR = ROOT_DIR / ".checkpoints"
+register_r2_tools()
 
 CONTEXT_PRESETS = {
     "general": ExecutionContext(
@@ -59,10 +63,10 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             self.send_error(400, "Request body must be valid JSON")
             return
 
-        action = request_data.get("action", "macro")
+        action = request_data.get("action", "macro2")
         goal = request_data.get(
             "goal",
-            "Compare the latest headline and core CPI year-over-year rates using BLS evidence only.",
+            "Assess current inflation pressure using CPI, market expectations, and gasoline evidence.",
         )
         context_preset = request_data.get("context_preset", "general")
         if context_preset not in CONTEXT_PRESETS:
@@ -70,6 +74,18 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         execution_context = CONTEXT_PRESETS[context_preset]
+        if action == "macro2":
+            data_mode = request_data.get("data_mode", "fixture")
+            reference_date = request_data.get("reference_date") or (
+                "2026-03-20" if data_mode == "fixture" else date.today().isoformat()
+            )
+            self.run_multisource(
+                goal,
+                execution_context,
+                data_mode=data_mode,
+                reference_date=reference_date,
+            )
+            return
         if action == "macro":
             self.run_macro(
                 goal,
@@ -85,6 +101,61 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         self.run_legacy_v8(request_data, action, execution_context)
+
+    def run_multisource(
+        self,
+        goal: str,
+        execution_context: ExecutionContext,
+        *,
+        data_mode: str,
+        reference_date: str,
+    ) -> None:
+        events = []
+        reset_teaching_tools()
+        try:
+            plan = MultiSourceMacroPlanner().plan(
+                goal,
+                mode=data_mode,
+                reference_date=reference_date,
+            )
+            trace = TraceRecorder(execution_context.trace_id)
+            result = DAGScheduler().run(
+                plan,
+                execution_context=execution_context,
+                on_event=events.append,
+                trace_recorder=trace,
+            )
+            payload = {
+                "ok": result["ok"],
+                "action": "macro2",
+                "goal": goal,
+                "data_mode": data_mode,
+                "reference_date": reference_date,
+                "execution_context": execution_context.to_dict(),
+                "plan": result["plan"],
+                "results": result.get("results", {}),
+                "final_result": result.get("final_result"),
+                "final_artifact": result.get("final_artifact"),
+                "evidence": result.get("evidence", []),
+                "citations": result.get("citations", []),
+                "trace": result.get("trace"),
+                "events": events,
+            }
+            status = 200 if result["ok"] else 500
+            if not result["ok"]:
+                payload["error"] = result.get("error")
+        except Exception as exc:
+            payload = {
+                "ok": False,
+                "action": "macro2",
+                "goal": goal,
+                "data_mode": data_mode,
+                "reference_date": reference_date,
+                "error": f"{exc.__class__.__name__}: {exc}",
+                "events": events,
+            }
+            status = 500
+        self.send_json(status, payload)
 
     def run_macro(
         self,
@@ -258,9 +329,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Research Workbench · R1")
+    print("Agent Research Workbench · R2")
     print("Open http://127.0.0.1:8000")
-    print("Primary view: BLS Source -> Evidence -> CPI Analysis -> Citations")
+    print("Primary view: BLS + FRED + EIA -> Evidence -> Freshness -> Synthesis")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
