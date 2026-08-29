@@ -1,12 +1,8 @@
-"""Serve the active R2 API-only macro research workbench.
+"""Serve the active R3 research decomposition + query generation workbench.
 
-The browser has two actions only:
-- api_run: one live BLS + FRED + EIA research run.
-- api_evals: score the same live run against explicit R2 contracts.
-
-External source failures are application-level results returned as HTTP 200 with
-structured provider/task diagnostics. A bad upstream API should not look like a
-mysterious web-server crash.
+One research question flows through:
+Question -> Subquestions -> Source Intents -> validated Query Specs -> dynamic DAG
+-> Runtime -> Evidence -> Synthesis -> Citations -> Trace/Evals.
 """
 
 from datetime import date
@@ -17,39 +13,31 @@ from pathlib import Path
 
 from context import ExecutionContext
 from observability import TraceRecorder
-from r2_api_evals import make_api_eval_suite
-from r2_api_planner import APIMacroPlanner
-from r2_api_tooling import register_api_tools
+from r3_evals import make_r3_eval_suite
+from r3_planner import R3ResearchPlanner
+from r3_tooling import register_r3_tools
 from scheduler import DAGScheduler
 
 
 ROOT_DIR = Path(__file__).parent
 WEB_DIR = ROOT_DIR / "web"
-register_api_tools()
+register_r3_tools()
 
 CONTEXT_PRESETS = {
     "general": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="macro-research-agent",
-        task_id="api-macro-root",
-        trace_id="api-macro-trace",
+        task_id="r3-research-root",
+        trace_id="r3-research-trace",
     ),
     "read_only": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="read-only-agent",
-        task_id="api-read-only-root",
-        trace_id="api-read-only-trace",
+        task_id="r3-read-only-root",
+        trace_id="r3-read-only-trace",
     ),
-}
-
-TASK_PROVIDER = {
-    "H1": "BLS",
-    "C1": "BLS",
-    "F1": "FRED",
-    "G1": "EIA",
-    "A1": "ANALYSIS",
 }
 
 
@@ -70,31 +58,37 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "Request body must be valid JSON"})
             return
 
-        action = request_data.get("action", "api_run")
+        action = request_data.get("action", "r3_run")
         context_preset = request_data.get("context_preset", "general")
         if context_preset not in CONTEXT_PRESETS:
             self.send_json(400, {"ok": False, "error": "Unknown context preset"})
             return
 
-        goal = request_data.get(
+        question = request_data.get(
             "goal",
             "Assess current inflation pressure using headline CPI, core CPI, market inflation expectations, and gasoline prices.",
         )
         execution_context = CONTEXT_PRESETS[context_preset]
 
-        if action == "api_run":
-            result = self.execute_api(goal, execution_context)
-            self.send_json(200, result)
+        if action == "r3_run":
+            self.send_json(200, self.execute_r3(question, execution_context))
             return
 
-        if action == "api_evals":
-            result = self.execute_api(goal, execution_context)
-            suite = make_api_eval_suite(result)
+        if action == "r3_evals":
+            result = self.execute_r3(question, execution_context)
+            blueprint = result.get("blueprint") or {}
+            suite = make_r3_eval_suite(blueprint, result) if blueprint else {
+                "passed": 0,
+                "total": 1,
+                "pass_rate": 0.0,
+                "cases": [],
+                "error": "No blueprint was produced, so R3 evals could not run.",
+            }
             self.send_json(
                 200,
                 {
                     "ok": result.get("ok", False),
-                    "action": "api_evals",
+                    "action": "r3_evals",
                     "research_result": result,
                     "eval_suite": suite,
                 },
@@ -103,26 +97,64 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
         self.send_json(400, {"ok": False, "error": f"Unknown action: {action}"})
 
-    def execute_api(self, goal: str, execution_context: ExecutionContext) -> dict:
-        events = []
+    def execute_r3(self, question: str, execution_context: ExecutionContext) -> dict:
         reference_date = date.today().isoformat()
-        missing = [name for name in ("FRED_API_KEY", "EIA_API_KEY") if not os.environ.get(name)]
+        events = [{"type": "research_question_received", "question": question}]
+
+        try:
+            blueprint_obj, plan = R3ResearchPlanner().build(
+                question,
+                reference_date=reference_date,
+            )
+            blueprint = blueprint_obj.to_dict()
+        except Exception as exc:
+            return {
+                "ok": False,
+                "action": "r3_run",
+                "stage": "decomposition_or_query_compile",
+                "reference_date": reference_date,
+                "error": {"code": exc.__class__.__name__, "message": str(exc)},
+                "events": events,
+            }
+
+        events.append(
+            {
+                "type": "decomposition_created",
+                "subquestions": blueprint["subquestions"],
+                "intents": blueprint["intents"],
+            }
+        )
+        events.append(
+            {
+                "type": "queries_compiled",
+                "queries": blueprint["queries"],
+            }
+        )
+
+        required_env = sorted(
+            {
+                name
+                for query in blueprint["queries"]
+                for name in query.get("requires_env", [])
+            }
+        )
+        missing = [name for name in required_env if not os.environ.get(name)]
         if missing:
             return {
                 "ok": False,
-                "action": "api_run",
+                "action": "r3_run",
                 "stage": "credentials",
                 "reference_date": reference_date,
+                "blueprint": blueprint,
                 "error": {
                     "code": "missing_credentials",
-                    "message": "Required API credentials are missing.",
+                    "message": "Credentials are required only for the sources selected by Query Compiler.",
                     "missing_env": missing,
                 },
-                "events": [],
+                "events": events,
             }
 
         try:
-            plan = APIMacroPlanner().plan(goal, reference_date=reference_date)
             trace = TraceRecorder(execution_context.trace_id)
             result = DAGScheduler().run(
                 plan,
@@ -132,10 +164,11 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             )
             payload = {
                 "ok": result["ok"],
-                "action": "api_run",
-                "goal": goal,
+                "action": "r3_run",
+                "question": question,
                 "reference_date": reference_date,
                 "execution_context": execution_context.to_dict(),
+                "blueprint": blueprint,
                 "plan": result.get("plan"),
                 "results": result.get("results", {}),
                 "final_result": result.get("final_result"),
@@ -146,19 +179,26 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 "events": events,
             }
             if not result["ok"]:
+                provider_map = {
+                    query["query_id"]: query["provider"]
+                    for query in blueprint["queries"]
+                }
+                provider_map["S1"] = "ANALYSIS"
                 payload["stage"] = "source_or_runtime"
-                payload["error"] = _source_failure(events, result.get("error"))
+                payload["error"] = _source_failure(
+                    events,
+                    result.get("error"),
+                    provider_map,
+                )
             return payload
         except Exception as exc:
             return {
                 "ok": False,
-                "action": "api_run",
+                "action": "r3_run",
                 "stage": "unhandled",
                 "reference_date": reference_date,
-                "error": {
-                    "code": exc.__class__.__name__,
-                    "message": str(exc),
-                },
+                "blueprint": blueprint,
+                "error": {"code": exc.__class__.__name__, "message": str(exc)},
                 "events": events,
             }
 
@@ -174,32 +214,26 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         print(f"[visualizer] {format % args}")
 
 
-def _source_failure(events: list[dict], fallback) -> dict:
+def _source_failure(events: list[dict], fallback, provider_map: dict[str, str]) -> dict:
     failed = next((event for event in reversed(events) if event.get("type") == "task_failed"), None)
     if failed is None:
-        return {
-            "code": "runtime_failed",
-            "message": str(fallback or "API research run failed"),
-        }
+        return {"code": "runtime_failed", "message": str(fallback or "R3 research run failed")}
     task_id = failed.get("task_id")
     error = failed.get("error") or {}
     return {
         "code": error.get("code", "task_failed"),
         "message": error.get("message", str(error)),
         "task_id": task_id,
-        "provider": TASK_PROVIDER.get(task_id, "UNKNOWN"),
+        "provider": provider_map.get(task_id, "UNKNOWN"),
     }
 
 
 def main():
-    fred_ready = bool(os.environ.get("FRED_API_KEY"))
-    eia_ready = bool(os.environ.get("EIA_API_KEY"))
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Research Workbench · R2 API-only")
+    print("Agent Research Workbench · R3")
     print("Open http://127.0.0.1:8000")
-    print("Sources: BLS API + FRED API + EIA API")
-    print(f"Credentials: FRED={'READY' if fred_ready else 'MISSING'}, EIA={'READY' if eia_ready else 'MISSING'}")
-    print("Upstream API failures are returned as structured source diagnostics, not HTTP 500.")
+    print("Flow: Question -> Subquestions -> Source Intents -> Query Specs -> Dynamic DAG -> Evidence")
+    print("Query Compiler owns provider/series/tool mapping; the decomposer never owns credentials or URLs.")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
