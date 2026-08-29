@@ -21,119 +21,115 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V7 — AgentState + StateStore
+## Current stage: V8 — Checkpoint / Durable Execution
 
-V6 answered **who is executing?** V7 answers two new Runtime questions:
+V7 made AgentState explicit and visible, but its `InMemoryStateStore` disappeared when the Python process died. V8 makes selected Runtime state durable on disk.
 
-> Where has the Agent reached?
->
-> What results has it already accumulated?
-
-Previously these facts lived in temporary Python variables such as `tool_steps`, `observation`, and the current Tool Call. V7 makes them explicit:
-
-```python
-AgentState(
-    task_id=...,
-    status="running",
-    phase="model_thinking",
-    step=1,
-    max_steps=4,
-    current_tool="calculator",
-    current_arguments={...},
-    observations=[...],
-    last_observation=...,
-    final_answer=None,
-    stop_reason=None,
-)
-```
-
-The Runtime saves meaningful transitions to a `StateStore`:
-
-```text
-received_input
-    ↓
-model_thinking
-    ↓
-tool_selected
-    ↓
-validating_tool
-    ↓
-checking_policy
-    ↓
-executing_tool
-    ↓
-observation_ready
-    ↓
-model_thinking
-    ↓
-...
-    ↓
-completed / stopped
-```
-
-### State vs Trace
-
-They serve different purposes:
-
-```text
-Trace
-= what just happened, event by event
-
-AgentState
-= what is true right now
-```
-
-The visual debugger synchronizes them. Clicking any Trace event shows the most recent StateStore snapshot that existed at that exact point in execution, while keeping the matching code and Chinese explanation visible.
-
-### Two-step teaching scenario
-
-Run `两步任务 · 观察 State 累积`:
+The teaching experiment is deliberately concrete:
 
 ```text
 Step 1
 calculator(10, 20, add)
     ↓
-Observation = 30
+30
     ↓
-State.observations = [30]
+AgentState.phase = observation_ready
     ↓
-Model decides next Tool
+JsonCheckpointStore.save(...)
+    ↓
+💥 simulated process crash
 
-Step 2
-calculator(6, 7, multiply)
+NEW Runtime + NEW Model object
     ↓
-Observation = 42
+JsonCheckpointStore.load(task_id)
     ↓
-State.observations = [30, 42]
+recover Observation = 30
+    ↓
+DO NOT execute 10 + 20 again
+    ↓
+send saved Observation back to Model
+    ↓
+Step 2: calculator(6, 7, multiply)
+    ↓
+42
     ↓
 Final Answer
 ```
 
-This makes the difference between a temporary Tool result and accumulated Agent State visible.
+### Why `observation_ready` is the V8 recovery boundary
 
-### StateStore contract
-
-V7 introduces:
-
-```python
-StateStore.save(state, reason=...)
-StateStore.load(task_id)
-StateStore.history(task_id)
-```
-
-The implementation is intentionally `InMemoryStateStore`. It snapshots state and supports `save/load/history`, but it **does not survive a process restart**.
-
-That boundary is deliberate:
+V8 resumes only from a checkpoint where the Tool result has already been recorded:
 
 ```text
-V7 StateStore
-= represent and store Runtime state during the process
-
-V8 Checkpoint / Durable Execution
-= persist recoverable state across failure/restart
+Tool execution
+    ↓
+Observation produced
+    ↓
+state.record_observation(...)
+    ↓
+checkpoint saved to disk
+    ↓
+SAFE DEMO CRASH POINT
 ```
 
-## Run the visual debugger
+The checkpoint also persists the continuation identifiers needed to continue model reasoning:
+
+```python
+AgentState(
+    ...,
+    last_observation=30,
+    pending_response_id="...",
+    pending_call_id="...",
+    seen_calls=[...],
+)
+```
+
+A fresh Runtime can therefore continue from the saved Observation instead of re-running the completed Tool.
+
+### Durable StateStore
+
+V8 adds `JsonCheckpointStore`:
+
+```python
+store = JsonCheckpointStore(".checkpoints")
+store.save(state, reason="observation_recorded")
+state = store.load(task_id)
+history = store.history(task_id)
+```
+
+Writes use a temporary file plus `os.replace` so the local checkpoint document is atomically replaced.
+
+The `.checkpoints/` directory is ignored by Git and exists only as local Runtime data.
+
+### Checkpoint is NOT exactly-once execution
+
+This distinction is essential.
+
+A checkpoint can tell the Runtime what state was durably recorded. It cannot magically prove whether an external side effect happened if the process died in this window:
+
+```text
+send_email() actually succeeds
+    ↓
+💥 crash BEFORE post-effect checkpoint
+```
+
+After restart, the checkpoint may still say the action was not completed, even though the external email was sent.
+
+Production systems therefore combine durable execution with mechanisms such as:
+
+```text
+idempotency keys
+transactional outbox
+provider request IDs
+side-effect receipts
+workflow-engine activity semantics
+```
+
+V8 intentionally does not claim exactly-once behavior.
+
+## Visual debugger
+
+Run:
 
 ```bash
 python serve_visualizer.py
@@ -145,21 +141,43 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Recommended first run:
+Recommended sequence:
 
-1. Choose `两步任务 · 观察 State 累积`.
-2. Click `运行真实 V7`.
-3. Use `下一步` instead of autoplay at first.
-4. Watch `Phase`, `Step`, `Current Tool`, and `已经拿到的结果` change.
-5. Compare every `State Saved` event with the code panel beside it.
+1. Select `两步任务 · Crash / Resume`.
+2. Click `① 运行到 Crash`.
+3. Walk the Trace until `Checkpoint Saved · observation_ready` and `💥 Simulated Crash`.
+4. Confirm the checkpoint dashboard shows one saved Observation: `30`.
+5. Click `② 从 Checkpoint 恢复`.
+6. The Trace inserts `NEW PROCESS / RUNTIME`.
+7. Confirm `Checkpoint Loaded` and `Resume Boundary` appear.
+8. Confirm the Resume segment contains only the second Tool attempt: `6 × 7`.
+9. Final State contains observations `[30, 42]`.
 
-## Run deterministic tests
+The page keeps four views synchronized:
+
+```text
+Trace        → what just happened
+AgentState   → where the Agent is and what it already knows
+Checkpoint   → what survives process death
+Code         → which Runtime line caused the transition
+Commentary   → why this transition is safe / what happens next
+```
+
+## Tests
 
 ```bash
 python -m unittest -v
 ```
 
-Tests verify StateStore snapshot semantics, `save/load/history`, two-step result accumulation, state phase transitions, persistence of stop reasons and previous observations, ExecutionContext/Policy behavior, retry, MAX_STEPS, duplicate protection, and validation.
+V8 tests verify:
+
+- JSON checkpoint state survives a brand-new Store instance;
+- crash occurs only after Observation 30 is durable;
+- a fresh Runtime + fresh FakeModel can resume;
+- resumed execution does not re-run the completed `10 + 20` Tool;
+- final durable State contains both `30` and `42`;
+- resume without a checkpoint fails closed;
+- all prior Runtime, Policy, Context, Retry, MAX_STEPS, duplicate, and validation behavior remains covered.
 
 ## Run with a real OpenAI model
 
