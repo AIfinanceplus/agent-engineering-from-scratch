@@ -1,8 +1,8 @@
-"""Serve the active R3 research decomposition + query generation workbench.
+"""Serve the active R4 source-health + R3 research intelligence workbench.
 
-One research question flows through:
-Question -> Subquestions -> Source Intents -> validated Query Specs -> dynamic DAG
--> Runtime -> Evidence -> Synthesis -> Citations -> Trace/Evals.
+R4 adds an operational source boundary before research debugging:
+Source Health -> Question -> Subquestions -> Source Intents -> Query Specs ->
+dynamic DAG -> Runtime -> Evidence -> Synthesis -> Citations -> Trace/Evals.
 """
 
 from datetime import date
@@ -16,6 +16,7 @@ from observability import TraceRecorder
 from r3_evals import make_r3_eval_suite
 from r3_planner import R3ResearchPlanner
 from r3_tooling import register_r3_tools
+from r4_source_health import run_source_health
 from scheduler import DAGScheduler
 
 
@@ -28,15 +29,15 @@ CONTEXT_PRESETS = {
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="macro-research-agent",
-        task_id="r3-research-root",
-        trace_id="r3-research-trace",
+        task_id="r4-research-root",
+        trace_id="r4-research-trace",
     ),
     "read_only": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="read-only-agent",
-        task_id="r3-read-only-root",
-        trace_id="r3-read-only-trace",
+        task_id="r4-read-only-root",
+        trace_id="r4-read-only-trace",
     ),
 }
 
@@ -59,6 +60,31 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         action = request_data.get("action", "r3_run")
+
+        if action == "source_health":
+            try:
+                providers = request_data.get("providers")
+                report = run_source_health(providers)
+                self.send_json(
+                    200,
+                    {
+                        "ok": report["ready"],
+                        "action": "source_health",
+                        "source_health": report,
+                    },
+                )
+            except Exception as exc:
+                self.send_json(
+                    200,
+                    {
+                        "ok": False,
+                        "action": "source_health",
+                        "source_health": None,
+                        "error": {"code": exc.__class__.__name__, "message": str(exc)},
+                    },
+                )
+            return
+
         context_preset = request_data.get("context_preset", "general")
         if context_preset not in CONTEXT_PRESETS:
             self.send_json(400, {"ok": False, "error": "Unknown context preset"})
@@ -230,10 +256,11 @@ def _source_failure(events: list[dict], fallback, provider_map: dict[str, str]) 
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Research Workbench · R3")
+    print("Agent Research Workbench · R4")
     print("Open http://127.0.0.1:8000")
-    print("Flow: Question -> Subquestions -> Source Intents -> Query Specs -> Dynamic DAG -> Evidence")
-    print("Query Compiler owns provider/series/tool mapping; the decomposer never owns credentials or URLs.")
+    print("Source Health: real BLS + FRED + EIA smoke tests through native OS TLS trust")
+    print("Research: Question -> Subquestions -> Source Intents -> Query Specs -> Dynamic DAG -> Evidence")
+    print("Source diagnostics never expose FRED_API_KEY or EIA_API_KEY values.")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
