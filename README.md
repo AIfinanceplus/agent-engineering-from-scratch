@@ -21,99 +21,116 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V6 — ExecutionContext
+## Current stage: V7 — AgentState + StateStore
 
-V5 proved that Capability is not Permission. V6 answers the next question:
+V6 answered **who is executing?** V7 answers two new Runtime questions:
 
-> Permission for whom?
+> Where has the Agent reached?
+>
+> What results has it already accumulated?
 
-Policy now receives both the Tool request and a Runtime-owned execution identity.
-
-```text
-User goal
-   ↓
-Runtime injects ExecutionContext
-   ↓
-Model proposes Tool Call
-   ↓
-Runtime Guards
-   ↓
-Tool Registry + Tool.validate
-   ↓
-PolicyEngine.evaluate(tool, arguments, execution_context)
-   ↓
-ALLOW / REQUIRE_APPROVAL / DENY
-   ↓
-Only ALLOW reaches tool.function(...)
-```
-
-### Model Context vs ExecutionContext
-
-They are different concepts.
-
-```text
-Model Context
-= what information the model sees
-
-ExecutionContext
-= who/what the system says is executing
-```
-
-V6 uses an immutable dataclass:
+Previously these facts lived in temporary Python variables such as `tool_steps`, `observation`, and the current Tool Call. V7 makes them explicit:
 
 ```python
-ExecutionContext(
-    tenant_id="demo-tenant",
-    user_id="user-123",
-    agent_id="general-agent",
-    task_id="task-001",
-    trace_id="trace-001",
+AgentState(
+    task_id=...,
+    status="running",
+    phase="model_thinking",
+    step=1,
+    max_steps=4,
+    current_tool="calculator",
+    current_arguments={...},
+    observations=[...],
+    last_observation=...,
+    final_answer=None,
+    stop_reason=None,
 )
 ```
 
-These fields are injected by Runtime infrastructure. They are not taken from a model-generated Tool Call.
-
-### Context-aware policy
-
-The teaching Policy keeps V5 risk rules and adds one identity rule:
+The Runtime saves meaningful transitions to a `StateStore`:
 
 ```text
-general-agent + send_message(medium)
+received_input
     ↓
-REQUIRE_APPROVAL
-
-read-only-agent + send_message(medium)
+model_thinking
     ↓
-DENY
+tool_selected
+    ↓
+validating_tool
+    ↓
+checking_policy
+    ↓
+executing_tool
+    ↓
+observation_ready
+    ↓
+model_thinking
+    ↓
+...
+    ↓
+completed / stopped
 ```
 
-The Tool and arguments are identical. Only ExecutionContext changes.
+### State vs Trace
 
-Low-risk compute is still allowed for the read-only agent:
+They serve different purposes:
 
 ```text
-read-only-agent + calculator(low)
-    ↓
-ALLOW
+Trace
+= what just happened, event by event
+
+AgentState
+= what is true right now
 ```
 
-This demonstrates the key idea:
+The visual debugger synchronizes them. Clicking any Trace event shows the most recent StateStore snapshot that existed at that exact point in execution, while keeping the matching code and Chinese explanation visible.
 
-> Authorization is a function of capability + request + trusted execution identity.
+### Two-step teaching scenario
 
-### Why Runtime owns the identity
-
-If Model output could supply its own `agent_id`, `tenant_id`, or `user_id`, it could simply claim a more privileged identity. V6 therefore keeps identity on a separate Runtime path:
+Run `两步任务 · 观察 State 累积`:
 
 ```text
-Model output
-  └─ tool_name + arguments
+Step 1
+calculator(10, 20, add)
+    ↓
+Observation = 30
+    ↓
+State.observations = [30]
+    ↓
+Model decides next Tool
 
-Runtime infrastructure
-  └─ ExecutionContext
+Step 2
+calculator(6, 7, multiply)
+    ↓
+Observation = 42
+    ↓
+State.observations = [30, 42]
+    ↓
+Final Answer
+```
 
-Policy Engine
-  └─ combines both
+This makes the difference between a temporary Tool result and accumulated Agent State visible.
+
+### StateStore contract
+
+V7 introduces:
+
+```python
+StateStore.save(state, reason=...)
+StateStore.load(task_id)
+StateStore.history(task_id)
+```
+
+The implementation is intentionally `InMemoryStateStore`. It snapshots state and supports `save/load/history`, but it **does not survive a process restart**.
+
+That boundary is deliberate:
+
+```text
+V7 StateStore
+= represent and store Runtime state during the process
+
+V8 Checkpoint / Durable Execution
+= persist recoverable state across failure/restart
 ```
 
 ## Run the visual debugger
@@ -128,14 +145,13 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Recommended comparison:
+Recommended first run:
 
-1. Choose `MEDIUM risk · send_message`.
-2. Run as `general-agent` → `REQUIRE_APPROVAL`.
-3. Run the same Tool Call as `read-only-agent` → `DENY`.
-4. Compare the `ExecutionContext Injected` and `Policy Decision` trace events.
-
-The browser selects only a server-side context preset; it does not send arbitrary tenant/user/agent IDs into the Runtime.
+1. Choose `两步任务 · 观察 State 累积`.
+2. Click `运行真实 V7`.
+3. Use `下一步` instead of autoplay at first.
+4. Watch `Phase`, `Step`, `Current Tool`, and `已经拿到的结果` change.
+5. Compare every `State Saved` event with the code panel beside it.
 
 ## Run deterministic tests
 
@@ -143,7 +159,7 @@ The browser selects only a server-side context preset; it does not send arbitrar
 python -m unittest -v
 ```
 
-Tests verify typed immutable ExecutionContext, Runtime context injection, context-aware Policy differences, blocked execution for unauthorized identities, previous Policy behavior, Tool-owned retry, MAX_STEPS, duplicate protection, and Model/Tool validation.
+Tests verify StateStore snapshot semantics, `save/load/history`, two-step result accumulation, state phase transitions, persistence of stop reasons and previous observations, ExecutionContext/Policy behavior, retry, MAX_STEPS, duplicate protection, and validation.
 
 ## Run with a real OpenAI model
 

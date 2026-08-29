@@ -1,8 +1,9 @@
-"""V6: Agent Runtime with trusted ExecutionContext.
+"""V7: Agent Runtime with observable AgentState + StateStore.
 
-V5 separated capability from permission. V6 adds runtime-owned identity so
-Policy can decide not only WHAT Tool is requested, but WHO is acting, for whom,
-in which tenant/task/trace.
+V6 added trusted ExecutionContext. V7 makes Runtime progress explicit: where the
+Agent is, which Tool it is working on, and which Observations it already has.
+Every major transition is snapshotted to StateStore and emitted to the visual
+debugger. V7 storage is in-memory; durable recovery is intentionally V8.
 """
 
 import json
@@ -10,6 +11,7 @@ import json
 from context import ExecutionContext, default_execution_context
 from model_validation import validate_model_response
 from policy import DEFAULT_POLICY, PolicyDecision
+from state import AgentState, InMemoryStateStore, StateStore
 from tools import TOOL_REGISTRY, Tool, calculator, resolve_tool
 
 
@@ -21,6 +23,24 @@ tool_registry = TOOL_REGISTRY
 def _emit(on_event, event_type: str, **payload) -> None:
     if on_event is not None:
         on_event({"type": event_type, **payload})
+
+
+def _save_state(
+    state_store: StateStore,
+    state: AgentState,
+    on_event,
+    *,
+    reason: str,
+) -> None:
+    """Snapshot one meaningful Runtime transition and expose it to observers."""
+    state_store.save(state, reason=reason)
+    _emit(
+        on_event,
+        "state_saved",
+        reason=reason,
+        store=state_store.__class__.__name__,
+        state=state.to_dict(),
+    )
 
 
 def _tool_call_key(tool_name: str, arguments: dict) -> str:
@@ -49,7 +69,6 @@ def _execute_tool_with_retry(
     on_event=None,
     max_retries_override: int | None = None,
 ):
-    """Execute one already-approved Tool using Tool-owned retry policy."""
     max_retries = tool.max_retries if max_retries_override is None else max_retries_override
     total_attempts = max_retries + 1
 
@@ -123,15 +142,28 @@ def _execute_tool_with_retry(
     raise AssertionError("retry loop exited unexpectedly")
 
 
-def _stop_agent(on_event, error: dict, *, reason: str, step: int, max_steps: int) -> str:
+def _stop_agent(
+    on_event,
+    error: dict,
+    *,
+    reason: str,
+    state: AgentState,
+    state_store: StateStore,
+) -> str:
     content = f"Agent stopped [{error['code']}]: {error['message']}"
+    state.status = "stopped"
+    state.phase = "stopped"
+    state.stop_reason = reason
+    state.final_answer = content
+    _save_state(state_store, state, on_event, reason="runtime_stopped")
+
     _emit(
         on_event,
         "runtime_stop",
         reason=reason,
         error=error,
-        step=step,
-        max_steps=max_steps,
+        step=state.step,
+        max_steps=state.max_steps,
     )
     _emit(on_event, "final", content=content, stopped=True)
     return content
@@ -162,12 +194,13 @@ def run_agent(
     max_retries: int | None = None,
     policy=None,
     execution_context: ExecutionContext | None = None,
+    state_store: StateStore | None = None,
 ) -> str:
-    """Run the Agent Loop with trusted execution identity.
+    """Run the Agent Loop while making progress and accumulated results explicit.
 
-    ExecutionContext belongs to Runtime infrastructure, not Model output. The
-    model proposes Tool name + arguments; Runtime supplies tenant/user/agent/
-    task/trace identity to Policy separately.
+    ExecutionContext answers "who is executing?".
+    AgentState answers "where are we and what have we learned so far?".
+    StateStore owns snapshots of AgentState.
     """
     if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < 1:
         raise ValueError("max_steps must be a positive integer")
@@ -188,9 +221,13 @@ def run_agent(
     if not isinstance(runtime_context, ExecutionContext):
         raise TypeError("execution_context must be an ExecutionContext")
 
+    runtime_store = InMemoryStateStore() if state_store is None else state_store
+    if not isinstance(runtime_store, StateStore):
+        raise TypeError("state_store must implement StateStore")
+
     policy_engine = DEFAULT_POLICY if policy is None else policy
-    tool_steps = 0
     seen_calls: set[str] = set()
+    state = AgentState(task_id=runtime_context.task_id, max_steps=max_steps)
 
     _emit(
         on_event,
@@ -198,7 +235,12 @@ def run_agent(
         context=runtime_context.to_dict(),
         source="Runtime injected",
     )
+    state.phase = "received_input"
+    _save_state(runtime_store, state, on_event, reason="runtime_started")
+
     _emit(on_event, "user_input", message=user_message)
+    state.phase = "model_thinking"
+    _save_state(runtime_store, state, on_event, reason="model_requested")
     _emit(on_event, "model_request", phase="start", message=user_message)
 
     response = model.start(user_message)
@@ -218,15 +260,21 @@ def run_agent(
                 on_event,
                 response_validation["error"],
                 reason="invalid_model_response",
-                step=tool_steps,
-                max_steps=max_steps,
+                state=state,
+                state_store=runtime_store,
             )
 
         if response["type"] == "final":
+            state.status = "completed"
+            state.phase = "completed"
+            state.current_tool = None
+            state.current_arguments = None
+            state.final_answer = response["content"]
+            _save_state(runtime_store, state, on_event, reason="final_answer")
             _emit(on_event, "final", content=response["content"], stopped=False)
             return response["content"]
 
-        if tool_steps >= max_steps:
+        if state.step >= max_steps:
             error = {
                 "code": "max_steps_exceeded",
                 "message": (
@@ -238,18 +286,22 @@ def run_agent(
                 on_event,
                 error,
                 reason="max_steps",
-                step=tool_steps,
-                max_steps=max_steps,
+                state=state,
+                state_store=runtime_store,
             )
 
-        tool_steps += 1
+        state.step += 1
         tool_name = response["tool_name"]
         arguments = response["arguments"]
+        state.phase = "tool_selected"
+        state.current_tool = tool_name
+        state.current_arguments = dict(arguments)
+        _save_state(runtime_store, state, on_event, reason="tool_selected")
 
         _emit(
             on_event,
             "runtime_step",
-            step=tool_steps,
+            step=state.step,
             max_steps=max_steps,
             tool_name=tool_name,
         )
@@ -284,6 +336,8 @@ def run_agent(
             )
         else:
             seen_calls.add(call_key)
+            state.phase = "validating_tool"
+            _save_state(runtime_store, state, on_event, reason="tool_validation_started")
             tool = resolve_tool(tool_name)
 
             _emit(
@@ -325,6 +379,8 @@ def run_agent(
                     error=validation["error"],
                 )
             else:
+                state.phase = "checking_policy"
+                _save_state(runtime_store, state, on_event, reason="policy_check_started")
                 policy_result = policy_engine.evaluate(
                     tool,
                     arguments,
@@ -353,6 +409,8 @@ def run_agent(
                         error=observation["error"],
                     )
                 else:
+                    state.phase = "executing_tool"
+                    _save_state(runtime_store, state, on_event, reason="tool_execution_started")
                     effective_retries = tool.max_retries if max_retries is None else max_retries
                     _emit(
                         on_event,
@@ -373,6 +431,9 @@ def run_agent(
                         on_event=on_event,
                     )
 
+        state.phase = "observation_ready"
+        state.record_observation(tool_name, observation)
+        _save_state(runtime_store, state, on_event, reason="observation_recorded")
         _emit(
             on_event,
             "tool_observation",
@@ -380,6 +441,10 @@ def run_agent(
             observation=observation,
         )
 
+        state.phase = "model_thinking"
+        state.current_tool = None
+        state.current_arguments = None
+        _save_state(runtime_store, state, on_event, reason="model_continuation")
         _emit(
             on_event,
             "model_request",

@@ -1,8 +1,8 @@
 """Model adapters for the learning Runtime.
 
-V4 removed duplicated Tool schemas from this layer. V5 adds deterministic
-scenarios that request low-, medium-, and high-risk Tools so Policy Engine
-behavior can be observed without a live API.
+FakeModel keeps deterministic teaching scenarios so Runtime behavior can be
+observed without a live API. V7 adds a two-step scenario specifically for
+watching AgentState accumulate progress and observations over time.
 """
 
 import json
@@ -12,6 +12,10 @@ from tools import model_tool_schemas
 
 FAKE_SCENARIOS = {
     "success": {
+        "tool_name": "calculator",
+        "arguments": {"a": 10, "b": 20, "operation": "add"},
+    },
+    "multi_step": {
         "tool_name": "calculator",
         "arguments": {"a": 10, "b": 20, "operation": "add"},
     },
@@ -46,7 +50,6 @@ FAKE_SCENARIOS = {
         "tool_name": "calculator",
         "arguments": {"a": 4, "b": 5, "operation": "add"},
     },
-    # V5 policy scenarios.
     "policy_allow": {
         "tool_name": "calculator",
         "arguments": {"a": 8, "b": 9, "operation": "add"},
@@ -73,6 +76,7 @@ class FakeModel:
             raise ValueError(f"Unknown fake scenario: {scenario}")
         self.scenario = scenario
         self.turn = 0
+        self.multi_step_results = []
 
     def _tool_call(self, proposal: dict) -> dict:
         self.turn += 1
@@ -98,6 +102,32 @@ class FakeModel:
         tool_name,
         result,
     ) -> dict:
+        if self.scenario == "multi_step":
+            if isinstance(result, dict) and "error" in result:
+                error = result["error"]
+                return {
+                    "type": "final",
+                    "content": f"Tool call failed [{error['code']}]: {error['message']}",
+                }
+
+            self.multi_step_results.append(result)
+            if len(self.multi_step_results) == 1:
+                return self._tool_call(
+                    {
+                        "tool_name": "calculator",
+                        "arguments": {"a": 6, "b": 7, "operation": "multiply"},
+                    }
+                )
+
+            return {
+                "type": "final",
+                "content": (
+                    "Completed two calculations: "
+                    f"10 + 20 = {self.multi_step_results[0]}, "
+                    f"6 × 7 = {self.multi_step_results[1]}."
+                ),
+            }
+
         if self.scenario == "infinite_loop":
             next_proposal = {
                 "tool_name": "calculator",

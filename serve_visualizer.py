@@ -1,4 +1,4 @@
-"""Serve the V6 ExecutionContext visual debugger with Python's standard library."""
+"""Serve the V7 AgentState / StateStore visual debugger."""
 
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -7,13 +7,13 @@ from pathlib import Path
 from agent import DEFAULT_MAX_STEPS, run_agent
 from context import ExecutionContext
 from model_adapters import FAKE_SCENARIOS, FakeModel
+from state import InMemoryStateStore
 from tools import TOOL_REGISTRY, reset_teaching_tools
 
 
 WEB_DIR = Path(__file__).parent / "web"
 
-# Browser chooses only a preset key. Concrete identity fields are created on the
-# Runtime/server side instead of being accepted as arbitrary model/user fields.
+# Browser chooses only a preset key. Identity itself is Runtime-owned.
 CONTEXT_PRESETS = {
     "general": ExecutionContext(
         tenant_id="demo-tenant",
@@ -50,8 +50,11 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             self.send_error(400, "Request body must be valid JSON")
             return
 
-        user_message = request_data.get("message", "Please calculate 8 + 9.")
-        scenario = request_data.get("scenario", "policy_allow")
+        user_message = request_data.get(
+            "message",
+            "Calculate 10 + 20, then calculate 6 × 7.",
+        )
+        scenario = request_data.get("scenario", "multi_step")
         context_preset = request_data.get("context_preset", "general")
         max_steps = request_data.get("max_steps", DEFAULT_MAX_STEPS)
 
@@ -75,6 +78,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         events = []
         reset_teaching_tools()
         execution_context = CONTEXT_PRESETS[context_preset]
+        state_store = InMemoryStateStore()
 
         try:
             final_answer = run_agent(
@@ -83,7 +87,9 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 on_event=events.append,
                 max_steps=max_steps,
                 execution_context=execution_context,
+                state_store=state_store,
             )
+            latest_state = state_store.load(execution_context.task_id)
             payload = {
                 "ok": True,
                 "scenario": scenario,
@@ -92,16 +98,21 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 "max_steps": max_steps,
                 "tool_registry": [tool.trace_metadata() for tool in TOOL_REGISTRY.values()],
                 "final_answer": final_answer,
+                "latest_state": latest_state.to_dict() if latest_state is not None else None,
+                "state_history": state_store.history(execution_context.task_id),
                 "events": events,
             }
             status = 200
         except Exception as exc:
+            latest_state = state_store.load(execution_context.task_id)
             payload = {
                 "ok": False,
                 "scenario": scenario,
                 "context_preset": context_preset,
                 "max_steps": max_steps,
                 "error": f"{exc.__class__.__name__}: {exc}",
+                "latest_state": latest_state.to_dict() if latest_state is not None else None,
+                "state_history": state_store.history(execution_context.task_id),
                 "events": events,
             }
             status = 500
@@ -122,7 +133,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Runtime Visual Debugger · V6")
+    print("Agent Runtime Visual Debugger · V7")
     print("Open http://127.0.0.1:8000")
     print("Press Ctrl+C to stop.")
 

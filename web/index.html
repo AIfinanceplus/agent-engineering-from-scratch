@@ -3,38 +3,40 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Runtime Visual Debugger · V6</title>
+  <title>Agent Runtime Visual Debugger · V7</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V6</p>
-        <h1>ExecutionContext：Policy 必须知道“谁在执行”</h1>
+        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V7</p>
+        <h1>AgentState：做到哪里了？已经拿到什么结果？</h1>
         <p class="hero-copy">
-          V5 只看 Tool risk。V6 再加入 Runtime-owned identity：tenant、user、agent、task、trace。
-          同一个 Tool、同一组参数，因为执行身份不同，也可以得到不同 Policy Decision。
+          V7 把 Runtime 中原本散落的进度变量变成显式 AgentState，并在每个关键阶段保存到 StateStore。
+          页面同时展示执行 Trace、当前 State、累计 Observation、对应代码和为什么下一步这样走。
         </p>
       </div>
       <div class="principle-card">
-        <span>V6 核心原则</span>
-        <strong>Model Context ≠ ExecutionContext</strong>
-        <strong>Identity comes from Runtime</strong>
+        <span>V7 核心原则</span>
+        <strong>State = Runtime 的事实</strong>
+        <strong>Trace 解释变化，State 显示现在</strong>
       </div>
     </header>
 
     <section class="controls panel">
       <label for="prompt">用户输入</label>
-      <input id="prompt" value="Send status update." />
+      <input id="prompt" value="Calculate 10 + 20, then calculate 6 × 7." />
 
       <label for="scenario">测试场景</label>
       <select id="scenario">
+        <option value="multi_step">两步任务 · 观察 State 累积</option>
         <option value="policy_approval">MEDIUM risk · send_message</option>
         <option value="policy_allow">LOW risk · calculator</option>
         <option value="policy_deny">HIGH risk · delete_record</option>
         <option value="retry_success">Flaky Calculator · Tool 自带 Retry</option>
         <option value="duplicate_loop">重复 Tool Call → 拦截</option>
+        <option value="infinite_loop">参数变化 Loop → MAX_STEPS</option>
       </select>
 
       <label for="context-preset">Runtime 身份</label>
@@ -46,7 +48,7 @@
       <label for="max-steps">MAX_STEPS</label>
       <input id="max-steps" class="number-input" type="number" min="1" max="20" value="4" />
 
-      <button id="run-btn" class="primary">运行真实 V6</button>
+      <button id="run-btn" class="primary">运行真实 V7</button>
       <button id="prev-btn">上一步</button>
       <button id="next-btn">下一步</button>
       <button id="auto-btn">自动播放</button>
@@ -57,7 +59,7 @@
       <div class="section-heading">
         <div>
           <p class="eyebrow">ARCHITECTURE</p>
-          <h2>Model Proposal + Runtime Identity → Policy Decision</h2>
+          <h2>Runtime 每走一步，都把“现在”写进 StateStore</h2>
         </div>
         <div id="step-counter" class="step-counter">尚未运行</div>
       </div>
@@ -65,30 +67,66 @@
       <div class="flow" id="flow">
         <div class="node" data-node="user"><span>1</span><strong>User</strong><small>提出目标</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="context"><span>2</span><strong>ExecutionContext</strong><small>Runtime-owned identity</small></div>
+        <div class="node" data-node="context"><span>2</span><strong>ExecutionContext</strong><small>谁在执行</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="model"><span>3</span><strong>Model</strong><small>提出 Tool Call</small></div>
+        <div class="node" data-node="state"><span>3</span><strong>AgentState / Store</strong><small>做到哪 + 已有结果</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="guards"><span>4</span><strong>Runtime Guards</strong><small>contract / steps / duplicate</small></div>
+        <div class="node" data-node="model"><span>4</span><strong>Model</strong><small>提出下一动作</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="registry"><span>5</span><strong>Tool Registry</strong><small>name → Tool</small></div>
+        <div class="node" data-node="guards"><span>5</span><strong>Runtime Guards</strong><small>contract / steps / duplicate</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="toolobject"><span>6</span><strong>Tool Object</strong><small>validate + risk + retry</small></div>
+        <div class="node" data-node="registry"><span>6</span><strong>Tool Registry</strong><small>name → Tool</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="policy"><span>7</span><strong>Policy Engine</strong><small>Tool + Context</small></div>
+        <div class="node" data-node="toolobject"><span>7</span><strong>Tool Object</strong><small>validate + risk + retry</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="tool"><span>8</span><strong>Python Function</strong><small>只有 ALLOW 才执行</small></div>
+        <div class="node" data-node="policy"><span>8</span><strong>Policy Engine</strong><small>Tool + Context</small></div>
+        <div class="arrow">→</div>
+        <div class="node" data-node="tool"><span>9</span><strong>Python Function</strong><small>真实执行</small></div>
         <div class="arrow loop-arrow">↩</div>
-        <div class="node" data-node="observation"><span>9</span><strong>Observation</strong><small>结果或权限错误</small></div>
+        <div class="node" data-node="observation"><span>10</span><strong>Observation</strong><small>结果写回 State</small></div>
         <div class="arrow">→</div>
-        <div class="node" data-node="final"><span>10</span><strong>Final / Stop</strong><small>结束</small></div>
+        <div class="node" data-node="final"><span>11</span><strong>Final / Stop</strong><small>结束</small></div>
+      </div>
+    </section>
+
+    <section class="state-dashboard panel">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">AGENT STATE</p>
+          <h2>当前进度：Agent 现在在哪里？</h2>
+        </div>
+        <span id="state-store-label" class="file-pill">InMemoryStateStore</span>
+      </div>
+
+      <div class="state-stats">
+        <div class="state-stat"><span>Status</span><strong id="state-status">—</strong></div>
+        <div class="state-stat"><span>Phase</span><strong id="state-phase">尚未运行</strong></div>
+        <div class="state-stat"><span>Step</span><strong id="state-step">0 / 0</strong></div>
+        <div class="state-stat"><span>Current Tool</span><strong id="state-tool">—</strong></div>
+      </div>
+
+      <div class="progress-track" aria-label="Agent step progress">
+        <div id="state-progress-bar" class="progress-bar"></div>
+      </div>
+
+      <div class="state-columns">
+        <div>
+          <p class="state-label">这一刻 Runtime 正在做什么</p>
+          <div id="state-logic" class="state-logic">等待运行…</div>
+        </div>
+        <div>
+          <p class="state-label">已经拿到的结果 / Observation</p>
+          <ol id="state-results" class="state-results">
+            <li class="empty-result">还没有结果。</li>
+          </ol>
+        </div>
       </div>
     </section>
 
     <section class="workspace">
       <aside class="timeline panel">
         <div class="section-heading compact"><div><p class="eyebrow">TRACE</p><h2>执行事件</h2></div></div>
-        <ol id="timeline-list"><li class="empty">点击“运行真实 V6”开始。</li></ol>
+        <ol id="timeline-list"><li class="empty">点击“运行真实 V7”开始。</li></ol>
       </aside>
 
       <section class="code panel">
@@ -100,9 +138,9 @@
       </section>
 
       <aside class="explain panel">
-        <div class="section-heading compact"><div><p class="eyebrow">COMMENTARY</p><h2 id="explain-title">为什么这样设计？</h2></div></div>
+        <div class="section-heading compact"><div><p class="eyebrow">COMMENTARY</p><h2 id="explain-title">代码进度与逻辑</h2></div></div>
         <div id="explain-body" class="explain-body">
-          <p>推荐固定 MEDIUM-risk send_message，先用 general-agent，再切换 read-only-agent，比对 Policy Decision。</p>
+          <p>推荐先跑“两步任务”。按“下一步”观察 State 如何从 model_thinking 走到 tool_selected，再把 30 和 42 逐个写进 observations。</p>
         </div>
       </aside>
     </section>
@@ -112,7 +150,7 @@
       <pre><code id="event-json">{}</code></pre>
     </section>
 
-    <footer><span>V6 目标：身份属于 Runtime，不属于 Model；Policy 必须同时看 Capability 与 ExecutionContext。</span></footer>
+    <footer><span>V7 目标：Trace 告诉你“刚发生什么”，AgentState 告诉你“现在是什么状态”；V8 再让这些状态能跨进程恢复。</span></footer>
   </main>
   <script src="app.js"></script>
 </body>
