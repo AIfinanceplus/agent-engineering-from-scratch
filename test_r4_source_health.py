@@ -2,6 +2,8 @@ import unittest
 from datetime import date
 from unittest.mock import patch
 
+import api_sources_native
+from api_sources import SourceAPIError
 from r4_source_health import SourceHealthChecker
 from source_smoke import build_parser, normalize_providers
 
@@ -23,6 +25,20 @@ def evidence(provider, series_id, as_of):
             "uri": "https://example.invalid/source",
         },
         "transport": "GET" if provider == "BLS" else None,
+    }
+
+
+def bls_payload(series_id="CUSR0000SA0"):
+    return {
+        "status": "REQUEST_SUCCEEDED",
+        "Results": {
+            "series": [{
+                "seriesID": series_id,
+                "data": [
+                    {"year": "2026", "period": "M07", "periodName": "July", "value": "323.1", "footnotes": []}
+                ],
+            }]
+        },
     }
 
 
@@ -83,11 +99,48 @@ class SourceHealthTests(unittest.TestCase):
         serialized = str(report)
         self.assertNotIn("fred-secret", serialized)
         self.assertNotIn("eia-secret", serialized)
+        bls = report["results"][0]
+        self.assertEqual(bls["optional_credential_names"], ["BLS_API_KEY"])
+        self.assertFalse(bls["optional_credentials_present"])
         for item in report["results"]:
             self.assertEqual(item["status"], "READY")
             self.assertTrue(item["endpoint"].startswith("https://"))
             self.assertNotIn("api_key", item["endpoint"].lower())
             self.assertIn(item["freshness"], {"FRESH", "AGING", "STALE", "UNKNOWN"})
+
+    def test_bls_daily_threshold_is_rate_limited_with_registered_key_hint(self):
+        def quota_exhausted(series_id, label):
+            raise SourceAPIError(
+                "BLS",
+                "request failed: ['Request could not be serviced, as the daily threshold for total number of requests allocated to the user with registration key has been reached.']",
+            )
+
+        checker = SourceHealthChecker(fetchers={"BLS": quota_exhausted}, env={}, today=date(2026, 8, 29))
+        result = checker.check("BLS").to_dict()
+        self.assertEqual(result["status"], "RATE_LIMITED")
+        self.assertFalse(result["ready"])
+        self.assertIn("BLS_API_KEY", result["recovery_hint"])
+        self.assertEqual(result["optional_credential_names"], ["BLS_API_KEY"])
+        self.assertFalse(result["optional_credentials_present"])
+
+    def test_registered_bls_uses_post_payload_and_never_leaks_key(self):
+        secret = "registered-bls-secret"
+        captured = []
+
+        def fake_post(url, payload):
+            captured.append((url, dict(payload)))
+            return bls_payload()
+
+        with patch.dict("os.environ", {"BLS_API_KEY": secret}, clear=False), patch.object(
+            api_sources_native, "http_post_json", side_effect=fake_post
+        ):
+            result = api_sources_native.fetch_bls_api_series("CUSR0000SA0", "Headline CPI")
+
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0][1]["registrationkey"], secret)
+        self.assertEqual(result["transport"], "POST_REGISTERED")
+        self.assertNotIn(secret, str(result))
+        self.assertNotIn("registrationkey", str(result).lower())
 
     def test_contract_error_is_distinct_from_transport_error(self):
         def bad_bls(series_id, label):
@@ -133,6 +186,22 @@ class SourceHealthTests(unittest.TestCase):
                 today=date(2026, 8, 29),
             )
             result = checker.check("FRED").to_dict()
+        self.assertNotIn(secret, str(result))
+        self.assertIn("redacted", result["error_message"])
+
+    def test_bls_runtime_secret_is_redacted_from_exception_diagnostics(self):
+        secret = "super-secret-bls-key"
+
+        def leaking_fetcher(series_id, label):
+            raise RuntimeError(f"upstream rejected key {secret}")
+
+        with patch.dict("os.environ", {"BLS_API_KEY": secret}, clear=False):
+            checker = SourceHealthChecker(
+                fetchers={"BLS": leaking_fetcher},
+                env={"BLS_API_KEY": secret},
+                today=date(2026, 8, 29),
+            )
+            result = checker.check("BLS").to_dict()
         self.assertNotIn(secret, str(result))
         self.assertIn("redacted", result["error_message"])
 
