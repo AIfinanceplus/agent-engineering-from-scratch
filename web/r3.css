@@ -1,0 +1,11 @@
+.blueprint-card{border:1px solid var(--line,#d9dde6);border-radius:10px;padding:10px;margin:8px 0;background:var(--panel,#fff)}
+.blueprint-card.active{outline:2px solid rgba(70,110,180,.22)}
+.blueprint-head{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px}
+.blueprint-head code{font-size:11px}
+.blueprint-card p{margin:5px 0;font-size:12px;line-height:1.35}
+.blueprint-card small{display:block;opacity:.72;line-height:1.35}
+.query-meta{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
+.query-meta span{font-size:10px;padding:3px 6px;border-radius:999px;background:rgba(120,130,150,.12)}
+.stage-divider{font-size:10px;font-weight:700;letter-spacing:.08em;opacity:.65;margin:12px 0 5px}
+.timeline .decomposition-event{border-left-width:4px}
+.timeline .query-event{border-left-width:4px}
