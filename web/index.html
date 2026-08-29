@@ -3,159 +3,122 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Runtime Visual Debugger · V8</title>
+  <title>Agent Engineering · V9 Planner</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main class="shell">
-    <header class="hero">
-      <div>
-        <p class="eyebrow">AGENT ENGINEERING FROM SCRATCH · V8</p>
-        <h1>Checkpoint：程序死掉以后，从哪里继续？</h1>
-        <p class="hero-copy">
-          V7 让 AgentState 可见；V8 把安全状态写到磁盘。最重要的实验是：第一步得到 30 并 checkpoint，随后模拟进程崩溃；再启动一个新的 Runtime，从磁盘加载 30，跳过已经完成的 Tool，继续得到 42。
-        </p>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="version">V9</span>
+        <div>
+          <strong>Planner + DAG Scheduler</strong>
+          <small>Plan WHAT · Schedule WHEN · Runtime executes HOW</small>
+        </div>
       </div>
-      <div class="principle-card">
-        <span>V8 核心原则</span>
-        <strong>Checkpoint ≠ Exactly Once</strong>
-        <strong>Resume from a known safe boundary</strong>
-      </div>
+      <div class="principle">Planner ≠ Scheduler ≠ Runtime</div>
     </header>
 
-    <section class="controls panel">
-      <label for="prompt">用户输入</label>
-      <input id="prompt" value="Calculate 10 + 20, then calculate 6 × 7." />
-
-      <label for="scenario">测试场景</label>
-      <select id="scenario">
-        <option value="multi_step">两步任务 · Crash / Resume</option>
-        <option value="policy_approval">MEDIUM risk · send_message</option>
-        <option value="policy_allow">LOW risk · calculator</option>
-        <option value="retry_success">Flaky Calculator · Retry</option>
-      </select>
-
-      <label for="context-preset">Runtime 身份</label>
-      <select id="context-preset">
-        <option value="general">general-agent</option>
-        <option value="read_only">read-only-agent</option>
-      </select>
-
-      <label for="max-steps">MAX_STEPS</label>
-      <input id="max-steps" class="number-input" type="number" min="1" max="20" value="4" />
-
-      <button id="run-btn">完整运行</button>
-      <button id="crash-btn" class="primary">① 运行到 Crash</button>
-      <button id="resume-btn" class="primary">② 从 Checkpoint 恢复</button>
-      <button id="clear-btn">清除 Checkpoint</button>
-      <button id="prev-btn">上一步</button>
-      <button id="next-btn">下一步</button>
-      <button id="auto-btn">自动播放</button>
-      <button id="reset-btn">重置视图</button>
-    </section>
-
-    <section class="architecture panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">ARCHITECTURE</p>
-          <h2>State 先变成 Durable Checkpoint，新的 Runtime 才能恢复</h2>
-        </div>
-        <div id="step-counter" class="step-counter">尚未运行</div>
-      </div>
-
-      <div class="flow" id="flow">
-        <div class="node" data-node="context"><span>1</span><strong>ExecutionContext</strong><small>谁在执行</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="state"><span>2</span><strong>AgentState</strong><small>做到哪 + 已有结果</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="checkpoint"><span>3</span><strong>Checkpoint Store</strong><small>JSON on disk</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="model"><span>4</span><strong>Model</strong><small>下一动作</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="runtime"><span>5</span><strong>Runtime</strong><small>guards / registry / policy</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="tool"><span>6</span><strong>Tool</strong><small>真实执行</small></div>
-        <div class="arrow">→</div>
-        <div class="node" data-node="observation"><span>7</span><strong>Observation</strong><small>写入 State</small></div>
-        <div class="arrow loop-arrow">↩</div>
-        <div class="node" data-node="final"><span>8</span><strong>Final</strong><small>完成</small></div>
+    <section class="controlbar">
+      <label class="goal-field">
+        <span>Goal</span>
+        <input id="goal" value="Calculate two independent values, then combine their results." />
+      </label>
+      <label class="compact-field">
+        <span>Identity</span>
+        <select id="context-preset">
+          <option value="general">general-agent</option>
+          <option value="read_only">read-only-agent</option>
+        </select>
+      </label>
+      <button id="run-btn" class="primary">运行计划</button>
+      <div class="step-controls">
+        <button id="prev-btn" aria-label="上一步">←</button>
+        <button id="next-btn" aria-label="下一步">→</button>
+        <button id="auto-btn">自动</button>
+        <button id="reset-btn">重置</button>
       </div>
     </section>
 
-    <section class="checkpoint-dashboard panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">DURABLE CHECKPOINT</p>
-          <h2>磁盘里现在保存了什么？</h2>
-        </div>
-        <span id="checkpoint-status" class="file-pill">尚无 checkpoint</span>
-      </div>
-      <div class="state-stats">
-        <div class="state-stat"><span>Store</span><strong>JsonCheckpointStore</strong></div>
-        <div class="state-stat"><span>Safe Resume Phase</span><strong id="checkpoint-phase">—</strong></div>
-        <div class="state-stat"><span>Saved Observations</span><strong id="checkpoint-results">0</strong></div>
-        <div class="state-stat"><span>Disk File</span><strong id="checkpoint-file">—</strong></div>
-      </div>
-      <div id="checkpoint-note" class="checkpoint-note">
-        先点击“① 运行到 Crash”。Runtime 会在第一个 Observation=30 已经写入磁盘之后模拟崩溃。
-      </div>
+    <section class="summary-strip">
+      <div><span>Plan</span><strong id="plan-status">未运行</strong></div>
+      <div><span>Progress</span><strong id="plan-progress">0 / 3</strong></div>
+      <div><span>Ready</span><strong id="ready-count">—</strong></div>
+      <div><span>Blocked</span><strong id="blocked-count">—</strong></div>
+      <div class="result-summary"><span>Final Result</span><strong id="final-result">—</strong></div>
     </section>
 
-    <section class="state-dashboard panel">
-      <div class="section-heading">
-        <div>
-          <p class="eyebrow">AGENT STATE</p>
-          <h2>当前进度：Agent 现在在哪里？</h2>
+    <section class="studio">
+      <aside class="pane plan-pane">
+        <div class="pane-header">
+          <div>
+            <span class="kicker">PLAN</span>
+            <h2>任务依赖</h2>
+          </div>
+          <span id="plan-badge" class="badge neutral">planned</span>
         </div>
-        <span id="state-store-label" class="file-pill">JsonCheckpointStore</span>
-      </div>
-      <div class="state-stats">
-        <div class="state-stat"><span>Status</span><strong id="state-status">—</strong></div>
-        <div class="state-stat"><span>Phase</span><strong id="state-phase">尚未运行</strong></div>
-        <div class="state-stat"><span>Step Budget</span><strong id="state-step">0 / 0</strong></div>
-        <div class="state-stat"><span>Current Tool</span><strong id="state-tool">—</strong></div>
-      </div>
-      <div class="progress-track"><div id="state-progress-bar" class="progress-bar"></div></div>
-      <div class="state-columns">
-        <div>
-          <p class="state-label">这一刻 Runtime 正在做什么</p>
-          <div id="state-logic" class="state-logic">等待运行…</div>
+        <div class="dag-hint">
+          <span>A</span><span>+</span><span>B</span><span>→</span><span>C</span>
         </div>
-        <div>
-          <p class="state-label">已经拿到的结果 / Observation</p>
-          <ol id="state-results" class="state-results"><li class="empty-result">还没有结果。</li></ol>
+        <div id="plan-list" class="plan-list">
+          <div class="empty-state">运行后这里会显示 DAG Task。</div>
         </div>
-      </div>
-    </section>
-
-    <section class="workspace">
-      <aside class="timeline panel">
-        <div class="section-heading compact"><div><p class="eyebrow">TRACE</p><h2>执行事件</h2></div></div>
-        <ol id="timeline-list"><li class="empty">点击“① 运行到 Crash”开始。</li></ol>
+        <div class="legend">
+          <span><i class="dot ready"></i>READY</span>
+          <span><i class="dot running"></i>RUNNING</span>
+          <span><i class="dot blocked"></i>BLOCKED</span>
+          <span><i class="dot completed"></i>DONE</span>
+        </div>
       </aside>
 
-      <section class="code panel">
-        <div class="section-heading compact">
-          <div><p class="eyebrow">CODE</p><h2 id="code-title">对应代码</h2></div>
-          <span id="code-file" class="file-pill">agent.py</span>
+      <section class="pane run-pane">
+        <div class="pane-header">
+          <div>
+            <span class="kicker">RUN</span>
+            <h2>当前执行进度</h2>
+          </div>
+          <span id="event-counter" class="subtle">尚未运行</span>
         </div>
-        <pre><code id="code-panel">等待执行事件…</code></pre>
+        <div id="current-action" class="current-action">
+          <strong>等待运行</strong>
+          <span>Scheduler 会先判断哪些 Task READY。</span>
+        </div>
+        <ol id="timeline" class="timeline">
+          <li class="empty-state">点击“运行计划”开始。</li>
+        </ol>
       </section>
 
-      <aside class="explain panel">
-        <div class="section-heading compact"><div><p class="eyebrow">COMMENTARY</p><h2 id="explain-title">代码进度与逻辑</h2></div></div>
-        <div id="explain-body" class="explain-body">
-          <p>推荐顺序：先 Crash，再逐步看 Trace；确认 checkpoint 中已有 30 后，点击 Resume。恢复 Trace 中不应再次出现 10+20 的 Tool Attempt。</p>
+      <aside class="pane code-pane">
+        <div class="pane-header">
+          <div>
+            <span class="kicker">CODE</span>
+            <h2 id="code-title">对应代码</h2>
+          </div>
+          <span id="code-file" class="file-pill">planner.py</span>
         </div>
+        <pre class="code-window"><code id="code-panel">等待执行事件…</code></pre>
+
+        <div class="explanation">
+          <span class="kicker">WHY / NEXT</span>
+          <div id="explain-body">
+            <p>每次选中一个进度事件，这里解释这段代码为什么存在，以及下一步由哪个组件负责。</p>
+          </div>
+        </div>
+
+        <details class="details-box">
+          <summary>Runtime / State 细节</summary>
+          <pre><code id="runtime-detail">{}</code></pre>
+        </details>
+        <details class="details-box">
+          <summary>完整原始事件</summary>
+          <pre><code id="raw-event">{}</code></pre>
+        </details>
       </aside>
     </section>
 
-    <section class="event panel">
-      <div class="section-heading compact"><div><p class="eyebrow">RUNTIME DATA</p><h2>当前事件数据</h2></div></div>
-      <pre><code id="event-json">{}</code></pre>
-    </section>
-
-    <footer><span>V8 目标：Checkpoint 让 State 跨进程存在；但 side effect 的 exactly-once 仍需要 idempotency / transaction 等更强机制。</span></footer>
+    <footer>
+      主屏只显示决策链；完整 Runtime Trace 仍保留在 Details。V9 Scheduler 先顺序执行 READY Task，DAG 语义与未来并行执行解耦。
+    </footer>
   </main>
   <script src="app.js"></script>
 </body>
