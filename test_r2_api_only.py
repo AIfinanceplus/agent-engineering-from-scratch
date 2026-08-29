@@ -1,7 +1,8 @@
 import unittest
+from urllib.error import URLError
 from urllib.parse import unquote
 
-from api_sources import BLSPublicAPI, EIAPublicAPI, FREDPublicAPI
+from api_sources import BLSPublicAPI, EIAPublicAPI, FREDPublicAPI, _urlopen_json
 from r2_api_evals import APIEvalCase, score_api_result
 from r2_api_planner import APIMacroPlanner
 
@@ -12,22 +13,68 @@ BLS_ROWS = [
 ]
 
 
+def bls_payload(series_id="CUSR0000SA0"):
+    return {
+        "status": "REQUEST_SUCCEEDED",
+        "Results": {"series": [{"seriesID": series_id, "data": BLS_ROWS}]},
+    }
+
+
 class APIOnlySourceTests(unittest.TestCase):
-    def test_bls_is_api_only_and_normalizes_history(self):
+    def test_bls_uses_v2_api_and_normalizes_history(self):
         captured = []
+
         def transport(url):
             captured.append(url)
-            return {"status": "REQUEST_SUCCEEDED", "Results": {"series": [{"seriesID": "CUSR0000SA0", "data": BLS_ROWS}]}}
+            return bls_payload()
 
         result = BLSPublicAPI(transport=transport).fetch("CUSR0000SA0", "Headline CPI")
         self.assertEqual(result["source_mode"], "api")
         self.assertEqual(result["provider"], "BLS")
         self.assertEqual(result["as_of"], "2026-06")
+        self.assertTrue(captured[0].startswith("https://api.bls.gov/publicAPI/v2/timeseries/data/"))
         self.assertTrue(captured[0].endswith("/CUSR0000SA0"))
+        self.assertEqual(result["transport"], "GET")
         self.assertNotIn("fixture", str(result).lower())
+
+    def test_bls_default_path_falls_back_from_get_to_post(self):
+        calls = []
+
+        def get_transport(url):
+            calls.append(("GET", url))
+            raise ConnectionError("simulated GET connection reset")
+
+        def post_transport(url, payload):
+            calls.append(("POST", url, payload))
+            return bls_payload()
+
+        api = BLSPublicAPI()
+        api._transport = get_transport
+        api._post_transport = post_transport
+        api._custom_transport = False
+        result = api.fetch("CUSR0000SA0", "Headline CPI")
+
+        self.assertEqual(result["transport"], "POST")
+        self.assertEqual(calls[0][0], "GET")
+        self.assertEqual(calls[1][0], "POST")
+        self.assertTrue(calls[1][1].endswith("/v2/timeseries/data/"))
+        self.assertEqual(calls[1][2], {"seriesid": ["CUSR0000SA0"]})
+
+    def test_bls_reports_both_transport_failures(self):
+        api = BLSPublicAPI()
+        api._transport = lambda url: (_ for _ in ()).throw(ConnectionError("GET reset"))
+        api._post_transport = lambda url, payload: (_ for _ in ()).throw(ConnectionError("POST reset"))
+        api._custom_transport = False
+
+        with self.assertRaises(ConnectionError) as caught:
+            api.fetch("CUSR0000SA0", "Headline CPI")
+        message = str(caught.exception)
+        self.assertIn("GET=ConnectionError: GET reset", message)
+        self.assertIn("POST=ConnectionError: POST reset", message)
 
     def test_fred_requests_recent_json_window_without_leaking_key_to_evidence(self):
         captured = []
+
         def transport(url):
             captured.append(url)
             return {"observations": [
@@ -46,6 +93,7 @@ class APIOnlySourceTests(unittest.TestCase):
 
     def test_eia_uses_current_petroleum_rest_route(self):
         captured = []
+
         def transport(url):
             captured.append(url)
             return {"response": {"data": [
