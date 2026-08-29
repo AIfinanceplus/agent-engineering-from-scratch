@@ -168,7 +168,14 @@ def _checkpoint_view(
         status: [task.get("task_id") for task in tasks if task.get("status") == status]
         for status in ("completed", "ready", "running", "blocked", "failed", "pending")
     }
-    next_candidates = by_status["ready"] or by_status["running"]
+    completed = set(by_status["completed"])
+    dependency_ready = [
+        task.get("task_id")
+        for task in tasks
+        if task.get("status") not in {"completed", "failed"}
+        and set(task.get("depends_on") or []).issubset(completed)
+    ]
+    next_candidates = by_status["ready"] or by_status["running"] or dependency_ready
     return {
         "checkpoint_id": checkpoint_id,
         "run_id": run_id,
@@ -185,6 +192,7 @@ def _checkpoint_view(
             "blocked_tasks": by_status["blocked"],
             "failed_tasks": by_status["failed"],
             "pending_tasks": by_status["pending"],
+            "dependency_ready_tasks": dependency_ready,
         },
         "state": {
             "current_task": (by_status["running"] or next_candidates or [None])[0],
