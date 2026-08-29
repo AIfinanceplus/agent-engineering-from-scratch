@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Research Workbench · R6</title>
+  <title>Agent Research Workbench · R7</title>
   <link rel="stylesheet" href="styles.css" />
   <link rel="stylesheet" href="eval.css" />
   <link rel="stylesheet" href="r2.css" />
@@ -13,13 +13,13 @@
   <main class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <span class="version">R6</span>
+        <span class="version">R7</span>
         <div>
-          <strong>Investment & Policy Research Synthesis</strong>
-          <small>Source Health · Dynamic Queries · Evidence Quality · S1 Research · D1 Domain Brief · Domain Evals</small>
+          <strong>Forecasting + Scenario Tracking</strong>
+          <small>Source Health · Evidence Quality · S1 Research · D1 Domain Brief · F1 Forecast Contracts · Resolution</small>
         </div>
       </div>
-      <div class="principle">Evidence → S1 Research → D1 Decision Lens</div>
+      <div class="principle">Evidence → S1 → D1 → F1 → Track → Resolve → Revise</div>
     </header>
 
     <section class="controlbar">
@@ -41,9 +41,14 @@
           <option value="read_only">read-only-agent</option>
         </select>
       </label>
+      <label class="compact-field">
+        <span>Saved Forecast</span>
+        <select id="forecast-pack"><option value="">none</option></select>
+      </label>
       <button id="health-btn">测试数据源 API</button>
-      <button id="run-btn" class="primary">运行 R6 研究</button>
-      <button id="eval-btn">运行 R6 Evals</button>
+      <button id="run-btn" class="primary">运行 R7 研究</button>
+      <button id="check-forecast-btn">检查 Forecast</button>
+      <button id="eval-btn">运行 R7 Evals</button>
       <div class="step-controls">
         <button id="prev-btn">←</button>
         <button id="next-btn">→</button>
@@ -57,18 +62,18 @@
       <div><span>Progress</span><strong id="plan-progress">0</strong></div>
       <div><span>Evidence / Pass</span><strong id="evidence-count">0</strong></div>
       <div><span>Trace</span><strong id="trace-kpi">—</strong></div>
-      <div><span>Domain / Eval</span><strong id="eval-kpi">R6</strong></div>
-      <div class="result-summary"><span>Final</span><strong id="final-result">—</strong></div>
+      <div><span>Domain / Eval</span><strong id="eval-kpi">R7</strong></div>
+      <div class="result-summary"><span>Scenario / Final</span><strong id="final-result">—</strong></div>
     </section>
 
     <section class="studio">
       <aside class="pane plan-pane">
         <div class="pane-header">
-          <div><span id="left-kicker" class="kicker">R6 PLAN</span><h2 id="left-title">Queries → S1 → D1</h2></div>
+          <div><span id="left-kicker" class="kicker">R7 PLAN</span><h2 id="left-title">Queries → S1 → D1 → F1</h2></div>
           <span id="plan-badge" class="badge neutral">planned</span>
         </div>
-        <div id="dag-hint" class="dag-hint"><span>Q1..Qn</span><span>→</span><span>S1</span><span>→</span><span>D1</span></div>
-        <div id="plan-list" class="plan-list"><div class="empty-state">先测试数据源，或运行 R6 观察两层 synthesis。</div></div>
+        <div id="dag-hint" class="dag-hint"><span>Q1..Qn</span><span>→</span><span>S1</span><span>→</span><span>D1</span><span>→</span><span>F1</span></div>
+        <div id="plan-list" class="plan-list"><div class="empty-state">运行 R7 后观察 Evidence 如何变成可结算 Forecast Contract。</div></div>
         <div id="legend" class="legend">
           <span><i class="dot ready"></i>READY</span>
           <span><i class="dot running"></i>RUNNING</span>
@@ -79,45 +84,50 @@
 
       <section class="pane run-pane">
         <div class="pane-header">
-          <div><span id="run-kicker" class="kicker">R6 PROCESS</span><h2 id="run-title">Evidence → Research → Decision Frame</h2></div>
+          <div><span id="run-kicker" class="kicker">R7 PROCESS</span><h2 id="run-title">Research → Forecast → Track → Resolve</h2></div>
           <span id="event-counter" class="subtle">尚未运行</span>
         </div>
         <div id="mode-strip" class="mode-strip run-mode">
-          <strong id="mode-label">R6 DOMAIN SYNTHESIS</strong>
-          <span id="mode-help">S1 determines what the Evidence supports; D1 determines how to frame it for a domain</span>
+          <strong id="mode-label">R7 FORECAST CONTRACT</strong>
+          <span id="mode-help">A forecast must have a baseline, direction/threshold, horizon, due date, Evidence lineage, and settlement rule</span>
         </div>
         <div id="current-action" class="current-action">
           <strong>等待运行</strong>
-          <span>Investment / Policy 只改变 D1 lens，不改变前面的 Evidence collection。</span>
+          <span>F1 可以预测，也可以 ABSTAIN；没有可结算 contract 就不算 forecast。</span>
         </div>
-        <ol id="timeline" class="timeline"><li class="empty-state">运行研究后观察 Q → Evidence → S1 → D1。</li></ol>
+        <ol id="timeline" class="timeline"><li class="empty-state">运行研究后观察 Q → S1 → D1 → F1。</li></ol>
       </section>
 
       <aside class="pane code-pane">
         <div class="pane-header">
           <div><span class="kicker">CODE</span><h2 id="code-title">对应代码</h2></div>
-          <span id="code-file" class="file-pill">r6_domain.py</span>
+          <span id="code-file" class="file-pill">r7_forecast.py</span>
         </div>
         <pre class="code-window"><code id="code-panel">等待执行事件…</code></pre>
 
         <div class="explanation">
           <span class="kicker">WHY / NEXT</span>
-          <div id="explain-body"><p>D1 只能消费 S1 已经 grounded 的结论，不能新抓数据、增加 Evidence ID 或提高 confidence。</p></div>
+          <div id="explain-body"><p>R7 把观点转成未来可以 HIT / MISS / ABSTAIN / REVISE 的预测合同；historical hit rate 不是预测概率。</p></div>
         </div>
 
         <section id="support-box" class="citation-box">
           <div class="citation-head"><span id="support-kicker" class="kicker">CITATIONS / HEALTH</span><strong id="citation-title">尚未运行</strong></div>
-          <div id="citation-list" class="citation-list"><div class="empty-state">Research 模式显示 D1 仍然继承并验证的 citations。</div></div>
+          <div id="citation-list" class="citation-list"><div class="empty-state">F1 仍继承并验证原始 Evidence citations。</div></div>
         </section>
 
         <section id="quality-detail" class="citation-box">
           <div class="citation-head"><span class="kicker">S1 · EVIDENCE QUALITY</span><strong>等待研究</strong></div>
-          <div class="empty-state">显示 R5 authority / freshness / completeness / relevance 与 relations。</div>
+          <div class="empty-state">Authority / freshness / completeness / relevance / relations。</div>
         </section>
 
         <section id="domain-detail" class="citation-box">
           <div class="citation-head"><span class="kicker">D1 · DOMAIN BRIEF</span><strong>等待研究</strong></div>
-          <div class="empty-state">Investment: thesis/scenarios/counterevidence；Policy: options/tradeoffs/counterevidence。</div>
+          <div class="empty-state">Investment / Policy decision frame。</div>
+        </section>
+
+        <section id="forecast-detail" class="citation-box">
+          <div class="citation-head"><span class="kicker">F1 · FORECAST TRACKER</span><strong>等待研究</strong></div>
+          <div class="empty-state">显示 OPEN / ABSTAINED / RESOLVED、due date、scenario、HIT/MISS 和 revision。</div>
         </section>
 
         <details class="details-box">
@@ -125,7 +135,7 @@
           <pre><code id="trace-detail">{}</code></pre>
         </details>
         <details class="details-box">
-          <summary>R6 Eval report / suite</summary>
+          <summary>R7 Eval report / suite</summary>
           <pre><code id="eval-detail">{}</code></pre>
         </details>
         <details class="details-box">
@@ -139,9 +149,9 @@
       </aside>
     </section>
 
-    <footer>R6 separates grounded research from domain framing. D1 inherits upstream Evidence IDs and confidence, performs no new source fetch, and uses qualitative scenarios rather than fabricated probabilities.</footer>
+    <footer>R7 forecast packs are saved under .forecasts/. A forecast is not a probability: it is a falsifiable contract that can later be checked against fresh grounded Evidence and revised.</footer>
   </main>
-  <script src="r6_app.js"></script>
+  <script src="r7_app.js"></script>
   <script src="r4_health.js"></script>
 </body>
 </html>
