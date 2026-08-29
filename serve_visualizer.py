@@ -2,7 +2,8 @@
 
 Primary path: MultiSourceMacroPlanner -> Scheduler -> shared Runtime -> BLS/FRED/EIA
 Source Adapters -> EvidenceStore -> freshness-aware synthesis -> citations -> Trace.
-R1 and V11 teaching paths remain available as regressions.
+Live mode performs a credential preflight before any Tool execution. The visible
+Eval mode runs R2 cases, while older teaching paths remain callable as regressions.
 """
 
 from datetime import date
@@ -13,10 +14,12 @@ from pathlib import Path
 from agent import DEFAULT_MAX_STEPS, SimulatedCrash, run_agent
 from checkpoint import JsonCheckpointStore
 from context import ExecutionContext
-from evals import EvalCase, run_eval_suite, score_result
+from evals import EvalCase, score_result
+from live_preflight import live_source_preflight
 from model_adapters import FAKE_SCENARIOS, FakeModel
 from observability import TraceRecorder
 from planner import CPIResearchPlanner, ResearchPlanner
+from r2_evals import run_r2_eval_suite
 from r2_planner import MultiSourceMacroPlanner
 from r2_tooling import register_r2_tools
 from scheduler import DAGScheduler
@@ -74,6 +77,17 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
             return
 
         execution_context = CONTEXT_PRESETS[context_preset]
+        if action == "preflight":
+            preflight = live_source_preflight()
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "action": "preflight",
+                    "preflight": preflight,
+                },
+            )
+            return
         if action == "macro2":
             data_mode = request_data.get("data_mode", "fixture")
             reference_date = request_data.get("reference_date") or (
@@ -112,6 +126,27 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
     ) -> None:
         events = []
         reset_teaching_tools()
+
+        if data_mode == "live":
+            preflight = live_source_preflight()
+            if not preflight["ready"]:
+                self.send_json(
+                    428,
+                    {
+                        "ok": False,
+                        "action": "macro2",
+                        "blocked": True,
+                        "stage": "live_preflight",
+                        "goal": goal,
+                        "data_mode": data_mode,
+                        "reference_date": reference_date,
+                        "error": "Live source preflight failed. Configure the missing Runtime credentials and restart the workbench.",
+                        "preflight": preflight,
+                        "events": [],
+                    },
+                )
+                return
+
         try:
             plan = MultiSourceMacroPlanner().plan(
                 goal,
@@ -255,8 +290,15 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
     def run_evals(self, execution_context: ExecutionContext) -> None:
         reset_teaching_tools()
         try:
-            suite = run_eval_suite(execution_context=execution_context)
-            self.send_json(200, {"ok": True, "action": "evals", "eval_suite": suite})
+            suite = run_r2_eval_suite(execution_context=execution_context)
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "action": "evals",
+                    "eval_suite": suite,
+                },
+            )
         except Exception as exc:
             self.send_json(
                 500,
@@ -328,10 +370,20 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
 
 def main():
+    preflight = live_source_preflight()
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
     print("Agent Research Workbench · R2")
     print("Open http://127.0.0.1:8000")
     print("Primary view: BLS + FRED + EIA -> Evidence -> Freshness -> Synthesis")
+    print(
+        "Live preflight: "
+        + ", ".join(
+            f"{item['provider']}={'READY' if item['ready'] else 'MISSING'}"
+            for item in preflight["sources"]
+        )
+    )
+    if preflight["missing_env"]:
+        print("Live mode requires: " + ", ".join(preflight["missing_env"]))
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
