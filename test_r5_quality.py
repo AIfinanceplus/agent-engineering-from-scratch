@@ -1,6 +1,7 @@
 import unittest
 
 from r3_synthesis import synthesize_research_bundle
+from r5_evals import _quality_case
 from r5_quality import assess_evidence_quality
 
 
@@ -87,6 +88,19 @@ class R5QualityTests(unittest.TestCase):
         self.assertEqual(result["confidence"], result["quality"]["support_score"])
         self.assertIn("heuristic, not probability", result["answer"])
         self.assertIn("not causal attribution", result["answer"])
+
+    def test_mixed_only_run_does_not_require_nonzero_contradiction_penalty(self):
+        items = [
+            evidence("FRED:T5YIE", "2026-08-28", [2.3, 2.4]),
+            evidence("EIA:EMM_EPMR_PTE_NUS_DPG", "2026-08-24", [3.3, 3.2]),
+        ]
+        artifact = synthesize_research_bundle("Assess inflation pressure.", items, "2026-08-29")
+        self.assertEqual(artifact["quality"]["relation_summary"]["contradiction"], 0)
+        case = _quality_case({"final_artifact": artifact, "evidence": items})
+        guard = next(
+            check for check in case["report"]["checks"] if check["check_id"] == "contradiction_guardrail"
+        )
+        self.assertTrue(guard["passed"], guard)
 
 
 if __name__ == "__main__":
