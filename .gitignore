@@ -5,3 +5,4 @@ __pycache__/
 venv/
 .checkpoints/
 .forecasts/
+.research_checkpoints/
