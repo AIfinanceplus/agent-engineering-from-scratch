@@ -83,6 +83,7 @@ button {
   font-weight: 700;
 }
 button:hover { border-color: #a8b6c9; }
+button:disabled { opacity: .55; cursor: wait; }
 button.primary { background: var(--accent); color: white; border-color: var(--accent); }
 
 .architecture { padding: 20px; margin-bottom: 18px; }
@@ -92,7 +93,7 @@ button.primary { background: var(--accent); color: white; border-color: var(--ac
 .step-counter { color: var(--muted); font-weight: 700; }
 .flow {
   display: grid;
-  grid-template-columns: repeat(21, max-content);
+  grid-template-columns: repeat(15, max-content);
   gap: 10px;
   align-items: center;
   overflow-x: auto;
@@ -120,9 +121,21 @@ button.primary { background: var(--accent); color: white; border-color: var(--ac
 .arrow { color: #94a3b8; font-size: 22px; font-weight: 800; }
 .loop-arrow { color: var(--accent); }
 
-.state-dashboard {
+.state-dashboard,
+.checkpoint-dashboard {
   padding: 20px;
   margin-bottom: 18px;
+}
+.checkpoint-dashboard {
+  border-style: dashed;
+}
+.checkpoint-note {
+  border-left: 3px solid var(--accent);
+  background: #f8fbff;
+  padding: 13px 14px;
+  border-radius: 0 10px 10px 0;
+  line-height: 1.65;
+  color: #334155;
 }
 .state-stats {
   display: grid;

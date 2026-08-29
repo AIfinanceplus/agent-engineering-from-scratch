@@ -1,12 +1,8 @@
-"""V7 AgentState and StateStore.
+"""V8 AgentState and StateStore foundations.
 
-AgentState answers two practical questions:
-
-1. Where is the Agent in its current run?
-2. What useful results has it already accumulated?
-
-V7 deliberately uses an in-memory store. Durable persistence and crash recovery
-belong to V8 Checkpoint / Durable Execution.
+AgentState is the Runtime-owned record of progress. V8 adds the minimum
+continuation metadata required to resume from a safe checkpoint after an
+Observation has already been recorded.
 """
 
 from copy import deepcopy
@@ -28,8 +24,21 @@ class AgentState:
     final_answer: str | None = None
     stop_reason: str | None = None
 
+    # V8 durable-continuation metadata. These values belong to Runtime state,
+    # not to the model prompt. They let a new process continue after a saved
+    # Observation without re-running the completed Tool.
+    pending_response_id: str | None = None
+    pending_call_id: str | None = None
+    seen_calls: list[str] = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return deepcopy(asdict(self))
+
+    @classmethod
+    def from_dict(cls, payload: dict) -> "AgentState":
+        if not isinstance(payload, dict):
+            raise TypeError("AgentState payload must be a dictionary")
+        return cls(**deepcopy(payload))
 
     def record_observation(self, tool_name: str, observation: Any) -> None:
         snapshot = deepcopy(observation)
