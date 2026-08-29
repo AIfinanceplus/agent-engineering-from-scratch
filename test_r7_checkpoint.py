@@ -36,16 +36,19 @@ class ResearchCheckpointTests(unittest.TestCase):
                 store=store,
             )
 
-            recorder.observe({"type": "plan_created", "plan": plan(q="ready")})
+            first = recorder.observe({"type": "plan_created", "plan": plan(q="ready")})
+            self.assertEqual(first["checkpoint_id"], "CP-001")
+            self.assertEqual(first["boundary"], "after_plan_created")
             recorder.observe(
                 {
                     "type": "evidence_registered",
                     "evidence": {"evidence_id": "BLS:CUSR0000SA0"},
                 }
             )
-            recorder.observe(
+            second = recorder.observe(
                 {"type": "task_completed", "task_id": "Q1", "plan": plan(q="completed")}
             )
+            self.assertEqual(second["checkpoint_id"], "CP-002")
             recorder.observe(
                 {
                     "type": "task_completed",
@@ -99,8 +102,10 @@ class ResearchCheckpointTests(unittest.TestCase):
                 store=JsonResearchCheckpointStore(tmp),
             )
             event = {"type": "plan_created", "plan": plan(q="ready")}
-            recorder.observe(event)
-            recorder.observe(event)
+            first = recorder.observe(event)
+            duplicate = recorder.observe(event)
+            self.assertEqual(first["checkpoint_id"], "CP-001")
+            self.assertIsNone(duplicate)
             self.assertEqual(len(recorder.checkpoints()), 1)
 
 
