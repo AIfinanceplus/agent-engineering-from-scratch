@@ -1,9 +1,12 @@
-"""V7: Agent Runtime with observable AgentState + StateStore.
+"""V8: Agent Runtime with durable checkpoint recovery.
 
-V6 added trusted ExecutionContext. V7 makes Runtime progress explicit: where the
-Agent is, which Tool it is working on, and which Observations it already has.
-Every major transition is snapshotted to StateStore and emitted to the visual
-debugger. V7 storage is in-memory; durable recovery is intentionally V8.
+V7 made progress visible. V8 persists that progress and demonstrates a safe
+resume boundary: crash only after an Observation has been recorded. A fresh
+Runtime can reload AgentState and continue by sending the saved Observation
+back to the Model instead of re-running the completed Tool.
+
+Checkpointing is not exactly-once execution. A crash after an external side
+effect but before its post-effect checkpoint can still create ambiguity.
 """
 
 import json
@@ -20,6 +23,10 @@ DEFAULT_MAX_STEPS = 5
 tool_registry = TOOL_REGISTRY
 
 
+class SimulatedCrash(RuntimeError):
+    """Teaching-only exception used to imitate sudden process death."""
+
+
 def _emit(on_event, event_type: str, **payload) -> None:
     if on_event is not None:
         on_event({"type": event_type, **payload})
@@ -32,7 +39,6 @@ def _save_state(
     *,
     reason: str,
 ) -> None:
-    """Snapshot one meaningful Runtime transition and expose it to observers."""
     state_store.save(state, reason=reason)
     _emit(
         on_event,
@@ -186,6 +192,68 @@ def _policy_observation(decision: PolicyDecision, reason: str) -> dict:
     }
 
 
+def _resume_from_observation_checkpoint(
+    *,
+    model,
+    state: AgentState,
+    state_store: StateStore,
+    on_event,
+):
+    """Continue after a Tool Observation was durably saved.
+
+    The completed Tool is not executed again. Runtime reloads the Observation
+    and model-continuation identifiers that were persisted with AgentState.
+    """
+    if state.phase != "observation_ready":
+        raise RuntimeError(
+            "V8 can resume only from an observation_ready checkpoint; "
+            f"found phase={state.phase!r}."
+        )
+    if not state.current_tool or not state.pending_response_id or not state.pending_call_id:
+        raise RuntimeError("Checkpoint is missing model continuation metadata")
+
+    completed_tool = state.current_tool
+    saved_observation = state.last_observation
+
+    _emit(
+        on_event,
+        "checkpoint_loaded",
+        store=state_store.__class__.__name__,
+        resume_from="observation_ready",
+        state=state.to_dict(),
+    )
+    _emit(
+        on_event,
+        "resume_boundary",
+        message="Observation already checkpointed; skip completed Tool execution.",
+        tool_name=completed_tool,
+        observation=saved_observation,
+    )
+
+    state.phase = "model_thinking"
+    state.current_tool = None
+    state.current_arguments = None
+    _save_state(state_store, state, on_event, reason="resume_model_continuation")
+
+    _emit(
+        on_event,
+        "model_request",
+        phase="resume",
+        previous_response_id=state.pending_response_id,
+        call_id=state.pending_call_id,
+        tool_name=completed_tool,
+        result=saved_observation,
+    )
+    response = model.continue_with_tool_result(
+        previous_response_id=state.pending_response_id,
+        call_id=state.pending_call_id,
+        tool_name=completed_tool,
+        result=saved_observation,
+    )
+    _emit(on_event, "model_response", response=response)
+    return response
+
+
 def run_agent(
     user_message: str,
     model=None,
@@ -195,12 +263,16 @@ def run_agent(
     policy=None,
     execution_context: ExecutionContext | None = None,
     state_store: StateStore | None = None,
+    resume: bool = False,
+    crash_after_observations: int | None = None,
 ) -> str:
-    """Run the Agent Loop while making progress and accumulated results explicit.
+    """Run or resume the Agent Loop.
 
-    ExecutionContext answers "who is executing?".
-    AgentState answers "where are we and what have we learned so far?".
-    StateStore owns snapshots of AgentState.
+    V8 recovery contract:
+    - normal run: create a new AgentState and checkpoint transitions;
+    - simulated crash: raise only after an Observation has been saved;
+    - resume: load that observation_ready state and continue Model reasoning;
+    - already completed Tool execution is not repeated.
     """
     if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < 1:
         raise ValueError("max_steps must be a positive integer")
@@ -210,6 +282,12 @@ def run_agent(
         or max_retries < 0
     ):
         raise ValueError("max_retries must be None or a non-negative integer")
+    if crash_after_observations is not None and (
+        not isinstance(crash_after_observations, int)
+        or isinstance(crash_after_observations, bool)
+        or crash_after_observations < 1
+    ):
+        raise ValueError("crash_after_observations must be None or a positive integer")
 
     if model is None:
         from model_adapters import FakeModel
@@ -226,25 +304,52 @@ def run_agent(
         raise TypeError("state_store must implement StateStore")
 
     policy_engine = DEFAULT_POLICY if policy is None else policy
-    seen_calls: set[str] = set()
-    state = AgentState(task_id=runtime_context.task_id, max_steps=max_steps)
 
     _emit(
         on_event,
         "execution_context",
         context=runtime_context.to_dict(),
-        source="Runtime injected",
+        source="Runtime re-injected" if resume else "Runtime injected",
     )
-    state.phase = "received_input"
-    _save_state(runtime_store, state, on_event, reason="runtime_started")
 
-    _emit(on_event, "user_input", message=user_message)
-    state.phase = "model_thinking"
-    _save_state(runtime_store, state, on_event, reason="model_requested")
-    _emit(on_event, "model_request", phase="start", message=user_message)
+    if resume:
+        state = runtime_store.load(runtime_context.task_id)
+        if state is None:
+            raise RuntimeError(f"No checkpoint found for task_id={runtime_context.task_id}")
+        if state.status == "completed":
+            _emit(
+                on_event,
+                "checkpoint_loaded",
+                store=runtime_store.__class__.__name__,
+                resume_from="completed",
+                state=state.to_dict(),
+            )
+            _emit(on_event, "final", content=state.final_answer, stopped=False, resumed=True)
+            return state.final_answer or ""
+        if state.status != "running":
+            raise RuntimeError(f"Checkpoint is not resumable: status={state.status}")
 
-    response = model.start(user_message)
-    _emit(on_event, "model_response", response=response)
+        max_steps = state.max_steps
+        seen_calls = set(state.seen_calls)
+        response = _resume_from_observation_checkpoint(
+            model=model,
+            state=state,
+            state_store=runtime_store,
+            on_event=on_event,
+        )
+    else:
+        seen_calls: set[str] = set()
+        state = AgentState(task_id=runtime_context.task_id, max_steps=max_steps)
+
+        state.phase = "received_input"
+        _save_state(runtime_store, state, on_event, reason="runtime_started")
+        _emit(on_event, "user_input", message=user_message)
+
+        state.phase = "model_thinking"
+        _save_state(runtime_store, state, on_event, reason="model_requested")
+        _emit(on_event, "model_request", phase="start", message=user_message)
+        response = model.start(user_message)
+        _emit(on_event, "model_response", response=response)
 
     while True:
         response_validation = validate_model_response(response)
@@ -296,6 +401,8 @@ def run_agent(
         state.phase = "tool_selected"
         state.current_tool = tool_name
         state.current_arguments = dict(arguments)
+        state.pending_response_id = response.get("response_id")
+        state.pending_call_id = response.get("call_id")
         _save_state(runtime_store, state, on_event, reason="tool_selected")
 
         _emit(
@@ -336,6 +443,7 @@ def run_agent(
             )
         else:
             seen_calls.add(call_key)
+            state.seen_calls = sorted(seen_calls)
             state.phase = "validating_tool"
             _save_state(runtime_store, state, on_event, reason="tool_validation_started")
             tool = resolve_tool(tool_name)
@@ -441,6 +549,24 @@ def run_agent(
             observation=observation,
         )
 
+        if (
+            crash_after_observations is not None
+            and len(state.observations) >= crash_after_observations
+        ):
+            _emit(
+                on_event,
+                "simulated_crash",
+                message="Process died after durable Observation checkpoint.",
+                safe_resume_phase=state.phase,
+                state=state.to_dict(),
+            )
+            raise SimulatedCrash(
+                f"Simulated crash after {len(state.observations)} checkpointed observation(s)"
+            )
+
+        completed_tool = tool_name
+        saved_response_id = state.pending_response_id
+        saved_call_id = state.pending_call_id
         state.phase = "model_thinking"
         state.current_tool = None
         state.current_arguments = None
@@ -449,16 +575,16 @@ def run_agent(
             on_event,
             "model_request",
             phase="continue",
-            previous_response_id=response.get("response_id"),
-            call_id=response.get("call_id"),
-            tool_name=tool_name,
+            previous_response_id=saved_response_id,
+            call_id=saved_call_id,
+            tool_name=completed_tool,
             result=observation,
         )
 
         response = model.continue_with_tool_result(
-            previous_response_id=response.get("response_id"),
-            call_id=response.get("call_id"),
-            tool_name=tool_name,
+            previous_response_id=saved_response_id,
+            call_id=saved_call_id,
+            tool_name=completed_tool,
             result=observation,
         )
         _emit(on_event, "model_response", response=response)
