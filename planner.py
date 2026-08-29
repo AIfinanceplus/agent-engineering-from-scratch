@@ -1,12 +1,14 @@
 """Planner + DAG data model.
 
-V9 introduced dependency-aware planning. V10 keeps the arithmetic plan for
-regression tests and adds a research plan whose upstream Tasks collect evidence
-and whose downstream Task synthesizes only those collected records.
+V9 introduced dependency-aware planning. V10 added evidence-first research.
+R1 starts the real macro phase with a CPI plan whose source Tasks fetch official
+BLS series and whose analysis Task can only consume collected evidence.
 """
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+
+from macro_sources import BLS_SERIES
 
 
 TERMINAL_STATUSES = {"completed", "failed"}
@@ -84,7 +86,7 @@ class DeterministicPlanner:
 
 
 class ResearchPlanner:
-    """V10 teaching research DAG: collect evidence, then synthesize it."""
+    """V10 synthetic teaching research DAG retained for eval regressions."""
 
     def plan(self, goal: str) -> ExecutionPlan:
         _validate_goal(goal)
@@ -112,6 +114,55 @@ class ResearchPlanner:
                         "evidence_b": {"from_task": "E2"},
                     },
                     depends_on=["E1", "E2"],
+                ),
+            ],
+        )
+        validate_plan(plan)
+        return plan
+
+
+class CPIResearchPlanner:
+    """R1 real-source DAG: fetch headline/core CPI, then compare YoY rates."""
+
+    def plan(self, goal: str, *, data_mode: str = "fixture") -> ExecutionPlan:
+        _validate_goal(goal)
+        if data_mode not in {"fixture", "live"}:
+            raise ValueError("data_mode must be 'fixture' or 'live'")
+
+        headline = BLS_SERIES["headline_cpi"]
+        core = BLS_SERIES["core_cpi"]
+        plan = ExecutionPlan(
+            goal=goal,
+            tasks=[
+                PlanTask(
+                    task_id="H1",
+                    title="Fetch BLS headline CPI history",
+                    tool_name="fetch_bls_series",
+                    arguments={
+                        "series_id": headline["series_id"],
+                        "label": headline["label"],
+                        "mode": data_mode,
+                    },
+                ),
+                PlanTask(
+                    task_id="C1",
+                    title="Fetch BLS core CPI history",
+                    tool_name="fetch_bls_series",
+                    arguments={
+                        "series_id": core["series_id"],
+                        "label": core["label"],
+                        "mode": data_mode,
+                    },
+                ),
+                PlanTask(
+                    task_id="A1",
+                    title="Compare latest headline and core CPI YoY",
+                    tool_name="compare_cpi_series",
+                    arguments={
+                        "headline": {"from_task": "H1"},
+                        "core": {"from_task": "C1"},
+                    },
+                    depends_on=["H1", "C1"],
                 ),
             ],
         )
