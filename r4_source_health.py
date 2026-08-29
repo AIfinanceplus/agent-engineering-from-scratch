@@ -2,13 +2,11 @@
 
 A health check is operational, not analytical. It verifies that the same
 production adapters used by research can reach the public APIs, authenticate,
-parse JSON, and satisfy the normalized Evidence contract. It also reports the
-latest observation date separately from API readiness so a slower monthly series
-is not confused with a broken endpoint.
+parse JSON, and satisfy the normalized Evidence contract. Data freshness is
+reported separately from API readiness.
 
-Secrets remain Runtime-owned. Reports contain only credential names and whether
-they are present; they never contain credential values or request URLs with
-secret query parameters.
+Secrets remain Runtime-owned. Reports contain credential names/presence only;
+they never contain credential values or request URLs with secret parameters.
 """
 
 from __future__ import annotations
@@ -20,17 +18,8 @@ from datetime import date, datetime
 from time import perf_counter
 from typing import Callable
 
-from api_sources import (
-    API_SERIES,
-    BLS_BASE_URL,
-    EIA_GASOLINE_URL,
-    FRED_OBSERVATIONS_URL,
-)
-from api_sources_native import (
-    fetch_bls_api_series,
-    fetch_eia_api_series,
-    fetch_fred_api_series,
-)
+from api_sources import API_SERIES, BLS_BASE_URL, EIA_GASOLINE_URL, FRED_OBSERVATIONS_URL
+from api_sources_native import fetch_bls_api_series, fetch_eia_api_series, fetch_fred_api_series
 
 
 PROVIDER_ORDER = ("BLS", "FRED", "EIA")
@@ -38,6 +27,11 @@ REQUIRED_ENV = {
     "BLS": (),
     "FRED": ("FRED_API_KEY",),
     "EIA": ("EIA_API_KEY",),
+}
+OPTIONAL_ENV = {
+    "BLS": ("BLS_API_KEY",),
+    "FRED": (),
+    "EIA": (),
 }
 SAFE_ENDPOINTS = {
     "BLS": BLS_BASE_URL,
@@ -50,11 +44,7 @@ PROBES = {
     "EIA": "regular_gasoline",
 }
 # Operational heuristics for the workbench, not official publication SLAs.
-FRESH_DAYS = {
-    "BLS": 75,
-    "FRED": 14,
-    "EIA": 21,
-}
+FRESH_DAYS = {"BLS": 75, "FRED": 14, "EIA": 21}
 
 
 @dataclass(frozen=True)
@@ -66,6 +56,8 @@ class SourceHealthResult:
     credential_names: tuple[str, ...]
     credentials_present: bool
     series_id: str
+    optional_credential_names: tuple[str, ...] = ()
+    optional_credentials_present: bool = False
     evidence_id: str | None = None
     as_of: str | None = None
     age_days: int | None = None
@@ -74,23 +66,19 @@ class SourceHealthResult:
     transport: str | None = None
     error_type: str | None = None
     error_message: str | None = None
+    recovery_hint: str | None = None
     checks: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
         payload = asdict(self)
         payload["credential_names"] = list(self.credential_names)
+        payload["optional_credential_names"] = list(self.optional_credential_names)
         payload["checks"] = list(self.checks)
         return payload
 
 
 class SourceHealthChecker:
-    def __init__(
-        self,
-        *,
-        fetchers: dict[str, Callable] | None = None,
-        env=None,
-        today: date | None = None,
-    ):
+    def __init__(self, *, fetchers: dict[str, Callable] | None = None, env=None, today: date | None = None):
         self._fetchers = fetchers or {
             "BLS": fetch_bls_api_series,
             "FRED": fetch_fred_api_series,
@@ -106,12 +94,7 @@ class SourceHealthChecker:
             raise ValueError(f"Unknown source providers: {unknown}")
         results = [self.check(provider).to_dict() for provider in requested]
         ready_count = sum(1 for item in results if item["ready"])
-        if ready_count == len(results):
-            overall = "READY"
-        elif ready_count == 0:
-            overall = "UNAVAILABLE"
-        else:
-            overall = "PARTIAL"
+        overall = "READY" if ready_count == len(results) else "UNAVAILABLE" if ready_count == 0 else "PARTIAL"
         return {
             "overall": overall,
             "ready": ready_count == len(results),
@@ -125,23 +108,28 @@ class SourceHealthChecker:
     def check(self, provider: str) -> SourceHealthResult:
         if provider not in PROVIDER_ORDER:
             raise ValueError(f"Unknown source provider: {provider}")
-        capability = PROBES[provider]
-        series = API_SERIES[capability]
+        series = API_SERIES[PROBES[provider]]
         credential_names = REQUIRED_ENV[provider]
+        optional_names = OPTIONAL_ENV[provider]
         credentials_present = all(bool(self._env.get(name)) for name in credential_names)
-        base_checks = [
-            {
-                "check": "credential",
-                "passed": credentials_present,
-                "detail": (
-                    "no credential required"
-                    if not credential_names
-                    else f"required env present: {', '.join(credential_names)}"
-                    if credentials_present
-                    else f"missing env: {', '.join(name for name in credential_names if not self._env.get(name))}"
-                ),
-            }
-        ]
+        optional_present = bool(optional_names) and all(bool(self._env.get(name)) for name in optional_names)
+
+        if credential_names:
+            credential_detail = (
+                f"required env present: {', '.join(credential_names)}"
+                if credentials_present
+                else f"missing env: {', '.join(name for name in credential_names if not self._env.get(name))}"
+            )
+        elif provider == "BLS":
+            credential_detail = (
+                "no required credential; optional BLS_API_KEY present (registered v2 quota)"
+                if optional_present
+                else "no required credential; optional BLS_API_KEY missing (anonymous quota)"
+            )
+        else:
+            credential_detail = "no credential required"
+
+        base_checks = [{"check": "credential", "passed": credentials_present, "detail": credential_detail}]
         if not credentials_present:
             return SourceHealthResult(
                 provider=provider,
@@ -150,6 +138,8 @@ class SourceHealthChecker:
                 endpoint=SAFE_ENDPOINTS[provider],
                 credential_names=credential_names,
                 credentials_present=False,
+                optional_credential_names=optional_names,
+                optional_credentials_present=optional_present,
                 series_id=series["series_id"],
                 checks=tuple(base_checks),
                 error_type="CredentialMissing",
@@ -162,9 +152,8 @@ class SourceHealthChecker:
         except Exception as exc:  # health layer must classify adapter/network failures
             latency_ms = round((perf_counter() - started) * 1000, 1)
             status = _classify_error(exc)
-            checks = base_checks + [
-                {"check": "api_request", "passed": False, "detail": _safe_error(exc)}
-            ]
+            safe_error = _safe_error(exc)
+            checks = base_checks + [{"check": "api_request", "passed": False, "detail": safe_error}]
             return SourceHealthResult(
                 provider=provider,
                 status=status,
@@ -172,10 +161,13 @@ class SourceHealthChecker:
                 endpoint=SAFE_ENDPOINTS[provider],
                 credential_names=credential_names,
                 credentials_present=True,
+                optional_credential_names=optional_names,
+                optional_credentials_present=optional_present,
                 series_id=series["series_id"],
                 latency_ms=latency_ms,
                 error_type=exc.__class__.__name__,
-                error_message=_safe_error(exc),
+                error_message=safe_error,
+                recovery_hint=_recovery_hint(provider, status, optional_present),
                 checks=tuple(checks),
             )
 
@@ -184,11 +176,7 @@ class SourceHealthChecker:
         if contract_errors:
             checks = base_checks + [
                 {"check": "api_request", "passed": True, "detail": "received JSON response"},
-                {
-                    "check": "evidence_contract",
-                    "passed": False,
-                    "detail": "; ".join(contract_errors),
-                },
+                {"check": "evidence_contract", "passed": False, "detail": "; ".join(contract_errors)},
             ]
             return SourceHealthResult(
                 provider=provider,
@@ -197,6 +185,8 @@ class SourceHealthChecker:
                 endpoint=SAFE_ENDPOINTS[provider],
                 credential_names=credential_names,
                 credentials_present=True,
+                optional_credential_names=optional_names,
+                optional_credentials_present=optional_present,
                 series_id=series["series_id"],
                 evidence_id=evidence.get("evidence_id") if isinstance(evidence, dict) else None,
                 latency_ms=latency_ms,
@@ -211,11 +201,7 @@ class SourceHealthChecker:
         checks = base_checks + [
             {"check": "api_request", "passed": True, "detail": "request completed"},
             {"check": "evidence_contract", "passed": True, "detail": "normalized Evidence contract valid"},
-            {
-                "check": "freshness",
-                "passed": freshness != "STALE",
-                "detail": f"as_of={as_of}; age_days={age_days}; status={freshness}",
-            },
+            {"check": "freshness", "passed": freshness != "STALE", "detail": f"as_of={as_of}; age_days={age_days}; status={freshness}"},
         ]
         return SourceHealthResult(
             provider=provider,
@@ -224,6 +210,8 @@ class SourceHealthChecker:
             endpoint=SAFE_ENDPOINTS[provider],
             credential_names=credential_names,
             credentials_present=True,
+            optional_credential_names=optional_names,
+            optional_credentials_present=optional_present,
             series_id=series["series_id"],
             evidence_id=evidence["evidence_id"],
             as_of=as_of,
@@ -270,6 +258,8 @@ def _validate_evidence(provider: str, series_id: str, evidence) -> list[str]:
 
 def _classify_error(exc: BaseException) -> str:
     text = f"{exc.__class__.__name__}: {exc}".upper()
+    if any(marker in text for marker in ("DAILY THRESHOLD", "RATE LIMIT", "QUERY LIMIT", "TOO MANY REQUESTS", "QUOTA")):
+        return "RATE_LIMITED"
     if "CERTIFICATE_VERIFY_FAILED" in text or "SSL" in text or "TLS" in text:
         return "TLS_ERROR"
     if "API_KEY" in text or "CREDENTIAL" in text or "UNAUTHORIZED" in text or "FORBIDDEN" in text:
@@ -283,12 +273,17 @@ def _classify_error(exc: BaseException) -> str:
     return "API_ERROR"
 
 
+def _recovery_hint(provider: str, status: str, optional_present: bool) -> str | None:
+    if provider == "BLS" and status == "RATE_LIMITED":
+        if optional_present:
+            return "Registered BLS quota appears exhausted; wait for the daily reset or verify/renew the BLS registration key."
+        return "Anonymous BLS daily quota is exhausted. Set BLS_API_KEY to use the registered v2 quota."
+    return None
+
+
 def _safe_error(exc: BaseException) -> str:
     text = str(exc).strip()
-    # The production adapters never include credential values in their own
-    # messages. Keep this extra guard so a future exception cannot accidentally
-    # echo a known Runtime secret into health diagnostics.
-    for env_name in ("FRED_API_KEY", "EIA_API_KEY"):
+    for env_name in ("BLS_API_KEY", "FRED_API_KEY", "EIA_API_KEY"):
         secret = os.environ.get(env_name)
         if secret:
             text = text.replace(secret, f"<{env_name}:redacted>")
