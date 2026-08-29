@@ -55,6 +55,16 @@
     return item.ready ? 'completed' : 'failed';
   }
 
+  function r4CredentialLabel(item) {
+    if (item.credential_names && item.credential_names.length) {
+      return `${item.credential_names.join(', ')}: ${item.credentials_present ? 'PRESENT' : 'MISSING'}`;
+    }
+    if (item.optional_credential_names && item.optional_credential_names.length) {
+      return `${item.optional_credential_names.join(', ')}: ${item.optional_credentials_present ? 'PRESENT · registered quota' : 'OPTIONAL · anonymous quota'}`;
+    }
+    return 'No API key required';
+  }
+
   function r4RenderPlan(report) {
     r4LeftKicker.textContent = 'SOURCE API HEALTH';
     r4LeftTitle.textContent = 'BLS / FRED / EIA';
@@ -66,16 +76,13 @@
       const card = document.createElement('article');
       card.className = `task-card ${r4StatusClass(item)}`;
       const freshness = item.freshness || 'UNKNOWN';
-      const credential = item.credential_names && item.credential_names.length
-        ? `${item.credential_names.join(', ')}: ${item.credentials_present ? 'PRESENT' : 'MISSING'}`
-        : 'No API key required';
       card.innerHTML = `
         <div class="task-head">
           <span class="task-id">${r4Escape(item.provider)}</span>
           <span class="status-chip ${r4StatusClass(item)}">${r4Escape(item.status)}</span>
         </div>
         <strong>${r4Escape(item.series_id)}</strong>
-        <small>${r4Escape(credential)}</small>
+        <small>${r4Escape(r4CredentialLabel(item))}</small>
         <div class="source-row">
           <span>${r4Escape(freshness)}</span>
           <strong>${r4Escape(item.as_of || '—')}</strong>
@@ -93,12 +100,14 @@
       const transport = item.transport ? ` · ${item.transport}` : '';
       const latency = item.latency_ms == null ? '—' : `${item.latency_ms} ms`;
       const error = item.error_message ? `<small>${r4Escape(item.error_message)}</small>` : '';
+      const recovery = item.recovery_hint ? `<small><strong>Recovery:</strong> ${r4Escape(item.recovery_hint)}</small>` : '';
       li.innerHTML = `
         <div class="timeline-index">${index + 1}</div>
         <div>
           <strong>${r4Escape(item.provider)} · ${r4Escape(item.status)}</strong>
           <span>${r4Escape(item.endpoint)}${r4Escape(transport)} · ${r4Escape(latency)}</span>
           ${error}
+          ${recovery}
         </div>`;
       r4Timeline.appendChild(li);
     });
@@ -115,11 +124,14 @@
       const checks = (item.checks || [])
         .map((check) => `${check.check}: ${check.passed ? 'PASS' : 'FAIL'} — ${check.detail}`)
         .join('\n');
+      const recovery = item.recovery_hint ? `<span>Recovery: ${r4Escape(item.recovery_hint)}</span>` : '';
       row.innerHTML = `
         <strong>${r4Escape(item.provider)} · ${r4Escape(item.status)}</strong>
         <span>Series: ${r4Escape(item.series_id)}</span>
+        <span>Credential: ${r4Escape(r4CredentialLabel(item))}</span>
         <span>As-of: ${r4Escape(item.as_of || '—')} · Freshness: ${r4Escape(item.freshness)}</span>
         <span>Endpoint: ${r4Escape(item.endpoint)}</span>
+        ${recovery}
         <pre><code>${r4Escape(checks)}</code></pre>`;
       r4CitationList.appendChild(row);
     });
@@ -146,21 +158,22 @@
     r4EventCounter.textContent = report.checked_at || 'checked';
     r4CurrentAction.innerHTML = report.ready
       ? '<strong>全部数据源 API 可用</strong><span>API readiness 与 freshness 已分别检查。</span>'
-      : `<strong>数据源未全部 READY</strong><span>${r4Escape(report.overall)}；查看右侧具体 provider。</span>`;
+      : `<strong>数据源未全部 READY</strong><span>${r4Escape(report.overall)}；查看右侧具体 provider 和 recovery hint。</span>`;
 
     r4CodeTitle.textContent = 'SourceHealthChecker：真实 source contract';
     r4CodeFile.textContent = 'r4_source_health.py';
     r4CodePanel.textContent = [
       'for provider in BLS / FRED / EIA:',
-      '    verify credential presence',
+      '    verify required / optional credentials',
       '    call production adapter',
-      '    verify TLS / HTTP / JSON',
+      '    classify rate limit / TLS / HTTP / auth',
       '    validate normalized Evidence contract',
       '    report as_of + freshness separately',
       '',
+      'BLS_API_KEY is optional: anonymous quota without it, registered quota with it.',
       'Never expose API key values.',
     ].join('\n');
-    r4ExplainBody.innerHTML = '<p><strong>API READY ≠ data is fresh.</strong> R4 separates operational availability from observation age so monthly BLS is not judged by the same cadence as daily FRED or weekly EIA.</p>';
+    r4ExplainBody.innerHTML = '<p><strong>API READY ≠ data is fresh ≠ quota is available.</strong> R4 separates transport/auth/contract health, provider rate limits, and observation freshness. BLS can run anonymously, while optional BLS_API_KEY switches production requests to registered v2 quota.</p>';
     r4TraceDetail.textContent = r4Pretty({
       note: 'Source Health runs outside the Agent task trace because it diagnoses the infrastructure boundary itself.',
       checked_at: report.checked_at,
