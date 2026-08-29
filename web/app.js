@@ -1,387 +1,433 @@
 const runButton = document.querySelector('#run-btn');
-const crashButton = document.querySelector('#crash-btn');
-const resumeButton = document.querySelector('#resume-btn');
-const clearButton = document.querySelector('#clear-btn');
 const prevButton = document.querySelector('#prev-btn');
 const nextButton = document.querySelector('#next-btn');
 const autoButton = document.querySelector('#auto-btn');
 const resetButton = document.querySelector('#reset-btn');
-const promptInput = document.querySelector('#prompt');
-const scenarioSelect = document.querySelector('#scenario');
-const contextPresetSelect = document.querySelector('#context-preset');
-const maxStepsInput = document.querySelector('#max-steps');
-const timelineList = document.querySelector('#timeline-list');
-const codePanel = document.querySelector('#code-panel');
+const goalInput = document.querySelector('#goal');
+const contextPreset = document.querySelector('#context-preset');
+
+const planStatus = document.querySelector('#plan-status');
+const planProgress = document.querySelector('#plan-progress');
+const readyCount = document.querySelector('#ready-count');
+const blockedCount = document.querySelector('#blocked-count');
+const finalResult = document.querySelector('#final-result');
+const planBadge = document.querySelector('#plan-badge');
+const planList = document.querySelector('#plan-list');
+
+const eventCounter = document.querySelector('#event-counter');
+const currentAction = document.querySelector('#current-action');
+const timeline = document.querySelector('#timeline');
 const codeTitle = document.querySelector('#code-title');
 const codeFile = document.querySelector('#code-file');
-const explainTitle = document.querySelector('#explain-title');
+const codePanel = document.querySelector('#code-panel');
 const explainBody = document.querySelector('#explain-body');
-const eventJson = document.querySelector('#event-json');
-const stepCounter = document.querySelector('#step-counter');
-const stateStatus = document.querySelector('#state-status');
-const statePhase = document.querySelector('#state-phase');
-const stateStep = document.querySelector('#state-step');
-const stateTool = document.querySelector('#state-tool');
-const stateProgressBar = document.querySelector('#state-progress-bar');
-const stateLogic = document.querySelector('#state-logic');
-const stateResults = document.querySelector('#state-results');
-const stateStoreLabel = document.querySelector('#state-store-label');
-const checkpointStatus = document.querySelector('#checkpoint-status');
-const checkpointPhase = document.querySelector('#checkpoint-phase');
-const checkpointResults = document.querySelector('#checkpoint-results');
-const checkpointFile = document.querySelector('#checkpoint-file');
-const checkpointNote = document.querySelector('#checkpoint-note');
+const runtimeDetail = document.querySelector('#runtime-detail');
+const rawEvent = document.querySelector('#raw-event');
 
-let events = [];
+let rawEvents = [];
+let displayEvents = [];
 let currentIndex = -1;
 let autoTimer = null;
+let lastResponse = null;
 
 function pretty(value) {
   return JSON.stringify(value, null, 2);
 }
 
-function basename(path) {
-  if (!path) return '—';
-  const parts = String(path).split('/');
-  return parts[parts.length - 1] || path;
+function clone(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-const phaseLogic = {
-  starting: 'Runtime 正在初始化。',
-  received_input: '用户目标已经进入 Runtime，准备请求 Model。',
-  model_thinking: 'Runtime 正在等待 Model 决定下一动作。',
-  tool_selected: 'Model 已选择 Tool；Runtime 记录了 Tool、参数与 continuation ID。',
-  validating_tool: 'Runtime 正在验证 Tool 与参数。',
-  checking_policy: 'Policy Engine 正结合 Capability 与 ExecutionContext 判断权限。',
-  executing_tool: 'Policy 已允许，Runtime 正处于真实 Tool 执行边界。',
-  observation_ready: 'Tool 结果已经记录。V8 把这里作为安全恢复边界。',
-  completed: 'Agent 已完成，Final Answer 也已写入 checkpoint。',
-  stopped: 'Runtime guard 主动停止，已有结果仍保留。',
-};
-
-function stateFromEvent(event) {
-  if (!event) return null;
-  if (event.type === 'state_saved' || event.type === 'checkpoint_loaded' || event.type === 'simulated_crash') {
-    return event.state || null;
+function isMeaningful(event) {
+  if (['plan_created', 'scheduler_tick', 'task_started', 'task_completed', 'task_failed', 'plan_completed', 'plan_failed'].includes(event.type)) {
+    return true;
   }
-  return null;
+  if (event.type !== 'task_runtime_event') return false;
+  const innerType = event.event && event.event.type;
+  return ['model_response', 'tool_validation', 'policy_decision', 'tool_attempt', 'tool_result', 'final'].includes(innerType);
 }
 
-function latestStateAt(index) {
-  for (let i = index; i >= 0; i -= 1) {
-    const state = stateFromEvent(events[i]);
-    if (state) return state;
-  }
-  return null;
+function buildDisplayEvents(events) {
+  let currentPlan = null;
+  const visible = [];
+
+  events.forEach((event) => {
+    if (event.plan) currentPlan = clone(event.plan);
+    if (!isMeaningful(event)) return;
+    visible.push({
+      event,
+      plan: clone(currentPlan),
+    });
+  });
+
+  return visible;
 }
 
-function renderState(state) {
-  if (!state) {
-    stateStatus.textContent = '—';
-    statePhase.textContent = '尚未运行';
-    stateStep.textContent = '0 / 0';
-    stateTool.textContent = '—';
-    stateProgressBar.style.width = '0%';
-    stateLogic.textContent = '等待运行…';
-    stateResults.innerHTML = '<li class="empty-result">还没有结果。</li>';
+function taskStatusClass(status) {
+  if (['ready', 'running', 'blocked', 'completed', 'failed'].includes(status)) return status;
+  return 'pending';
+}
+
+function renderPlan(plan) {
+  if (!plan) {
+    planStatus.textContent = '未运行';
+    planProgress.textContent = '0 / 3';
+    readyCount.textContent = '—';
+    blockedCount.textContent = '—';
+    finalResult.textContent = '—';
+    planBadge.textContent = 'planned';
+    planBadge.className = 'badge neutral';
+    planList.innerHTML = '<div class="empty-state">运行后这里会显示 DAG Task。</div>';
     return;
   }
 
-  stateStatus.textContent = state.status || '—';
-  statePhase.textContent = state.phase || '—';
-  stateStep.textContent = `${state.step || 0} / ${state.max_steps || 0}`;
-  stateTool.textContent = state.current_tool || '—';
-  stateLogic.textContent = phaseLogic[state.phase] || `当前 phase: ${state.phase}`;
+  const tasks = plan.tasks || [];
+  const completed = tasks.filter((task) => task.status === 'completed').length;
+  const ready = tasks.filter((task) => task.status === 'ready').length;
+  const blocked = tasks.filter((task) => task.status === 'blocked').length;
 
-  const maxSteps = state.max_steps || 0;
-  const used = maxSteps > 0 ? Math.min(100, Math.round(((state.step || 0) / maxSteps) * 100)) : 0;
-  stateProgressBar.style.width = `${used}%`;
+  planStatus.textContent = plan.status;
+  planProgress.textContent = `${completed} / ${tasks.length}`;
+  readyCount.textContent = String(ready);
+  blockedCount.textContent = String(blocked);
+  planBadge.textContent = plan.status;
+  planBadge.className = `badge ${plan.status === 'completed' ? 'completed' : 'neutral'}`;
 
-  const observations = state.observations || [];
-  if (observations.length === 0) {
-    stateResults.innerHTML = '<li class="empty-result">还没有结果。</li>';
-    return;
+  if (plan.status === 'completed' && lastResponse) {
+    finalResult.textContent = String(lastResponse.final_result);
+  } else {
+    finalResult.textContent = '—';
   }
 
-  stateResults.innerHTML = '';
-  observations.forEach((item) => {
-    const li = document.createElement('li');
-    const heading = document.createElement('strong');
-    heading.textContent = `Step ${item.step} · ${item.tool_name}`;
-    const value = document.createElement('code');
-    value.textContent = typeof item.observation === 'object' ? pretty(item.observation) : String(item.observation);
-    li.appendChild(heading);
-    li.appendChild(value);
-    stateResults.appendChild(li);
+  planList.innerHTML = '';
+  tasks.forEach((task) => {
+    const card = document.createElement('article');
+    card.className = `task-card ${taskStatusClass(task.status)}`;
+
+    const head = document.createElement('div');
+    head.className = 'task-head';
+
+    const id = document.createElement('span');
+    id.className = 'task-id';
+    id.textContent = task.task_id;
+
+    const status = document.createElement('span');
+    status.className = `status-chip ${taskStatusClass(task.status)}`;
+    status.textContent = task.status.toUpperCase();
+
+    head.appendChild(id);
+    head.appendChild(status);
+
+    const title = document.createElement('strong');
+    title.textContent = task.title;
+
+    const dependency = document.createElement('small');
+    dependency.textContent = task.depends_on && task.depends_on.length
+      ? `depends on: ${task.depends_on.join(' + ')}`
+      : 'no dependencies';
+
+    card.appendChild(head);
+    card.appendChild(title);
+    card.appendChild(dependency);
+
+    if (task.result !== null && task.result !== undefined) {
+      const result = document.createElement('div');
+      result.className = 'task-result';
+      result.textContent = `result: ${typeof task.result === 'object' ? pretty(task.result) : task.result}`;
+      card.appendChild(result);
+    }
+
+    planList.appendChild(card);
   });
 }
 
-function renderCheckpoint(data) {
-  const exists = Boolean(data && data.checkpoint_exists);
-  const state = data ? data.latest_state : null;
-  checkpointStatus.textContent = exists ? 'checkpoint 已存在' : '尚无 checkpoint';
-  checkpointPhase.textContent = state && state.phase ? state.phase : '—';
-  checkpointResults.textContent = state && state.observations ? String(state.observations.length) : '0';
-  checkpointFile.textContent = data ? basename(data.checkpoint_path) : '—';
-
-  if (!data) {
-    checkpointNote.textContent = '先点击“① 运行到 Crash”。Runtime 会在第一个 Observation=30 已经写入磁盘之后模拟崩溃。';
-  } else if (data.crashed) {
-    checkpointNote.textContent = '模拟进程已经崩溃，但 checkpoint 仍在磁盘：phase=observation_ready，第一步结果 30 已保存。现在点击“② 从 Checkpoint 恢复”。';
-  } else if (data.action === 'resume' && state && state.status === 'completed') {
-    checkpointNote.textContent = '新的 Runtime 已从磁盘恢复并完成任务。恢复阶段没有重新执行 10+20；只继续执行第二步 6×7。';
-  } else if (data.action === 'clear') {
-    checkpointNote.textContent = 'Checkpoint 已清除。';
-  } else if (exists) {
-    checkpointNote.textContent = `最新 durable state: status=${state ? state.status : 'unknown'}, phase=${state ? state.phase : 'unknown'}.`;
+function schedulerMeta(event) {
+  if (event.type === 'plan_created') {
+    return {
+      label: 'Planner created DAG',
+      title: 'Planner：把 Goal 拆成 Task + Dependency',
+      file: 'planner.py',
+      code: `plan = DeterministicPlanner().plan(goal)\nvalidate_plan(plan)\n\n# A: no dependency\n# B: no dependency\n# C: depends_on=["A", "B"]`,
+      explain: '<p>Planner 只回答“要有哪些任务、依赖是什么”。它不决定此刻执行谁，也不直接调用 Tool。</p><p><strong>下一步：</strong>Scheduler 根据依赖计算 READY / BLOCKED。</p>',
+    };
   }
+
+  if (event.type === 'scheduler_tick') {
+    return {
+      label: `Scheduler tick · READY ${event.ready.join(', ') || '—'}`,
+      title: 'Scheduler：根据依赖刷新 READY / BLOCKED',
+      file: 'scheduler.py',
+      code: `dependencies_done = all(\n    task_map[dep].status == "completed"\n    for dep in task.depends_on\n)\n\ntask.status = "ready" if dependencies_done else "blocked"\n\n# READY  = ${JSON.stringify(event.ready)}\n# BLOCKED = ${JSON.stringify(event.blocked)}`,
+      explain: `<p>Scheduler 不重新规划任务，只读取 DAG 当前状态。</p><p>此刻 READY：<strong>${event.ready.join(', ') || '无'}</strong>；BLOCKED：<strong>${event.blocked.join(', ') || '无'}</strong>。</p><p><strong>下一步：</strong>从 READY 集合选择一个任务交给 Runtime。</p>`,
+    };
+  }
+
+  if (event.type === 'task_started') {
+    return {
+      label: `Task ${event.task_id} started`,
+      title: `Scheduler 选择 Task ${event.task_id}`, 
+      file: 'scheduler.py',
+      code: `task.status = "running"\nresolved_arguments = _resolve_arguments(\n    task.arguments,\n    results,\n)\n\n# resolved arguments\n${pretty(event.arguments)}`,
+      explain: `<p>Task ${event.task_id} 已经 READY，所以 Scheduler 把它切成 RUNNING。</p><p>如果参数引用上游结果，例如 C 的 <code>{from_task: "A"}</code>，这里才解析成真实的 30。</p><p><strong>下一步：</strong>交给既有 Agent Runtime 安全执行。</p>`,
+    };
+  }
+
+  if (event.type === 'task_completed') {
+    return {
+      label: `Task ${event.task_id} completed → ${event.result}`,
+      title: `Task ${event.task_id} 完成，结果写回 DAG`,
+      file: 'scheduler.py',
+      code: `task.result = result\ntask.status = "completed"\nresults[task.task_id] = result`,
+      explain: `<p>Scheduler 只把 Runtime 已确认的结果写回 Task。</p><p><strong>结果：</strong>${event.result}</p><p><strong>下一步：</strong>重新计算整个 DAG 的 READY / BLOCKED 状态。</p>`,
+    };
+  }
+
+  if (event.type === 'task_failed') {
+    return {
+      label: `Task ${event.task_id} failed`,
+      title: `Task ${event.task_id} 失败`,
+      file: 'scheduler.py',
+      code: pretty(event.error),
+      explain: '<p>Task Runtime 失败后，Scheduler 不应伪造结果或继续依赖它的下游任务。</p>',
+    };
+  }
+
+  if (event.type === 'plan_completed') {
+    return {
+      label: `Plan completed → ${event.final_result}`,
+      title: 'DAG 全部完成',
+      file: 'scheduler.py',
+      code: `plan.status = "completed"\nfinal_result = results[plan.tasks[-1].task_id]\n\n# results\n${pretty(event.results)}`,
+      explain: `<p>A、B、C 都已 COMPLETED，因此 Plan 完成。</p><p><strong>最终结果：${event.final_result}</strong></p>`,
+    };
+  }
+
+  if (event.type === 'plan_failed') {
+    return {
+      label: 'Plan failed',
+      title: 'Scheduler 无法继续',
+      file: 'scheduler.py',
+      code: pretty(event.error),
+      explain: '<p>存在未完成任务，但没有任何 READY Task，Scheduler fail closed。</p>',
+    };
+  }
+
+  return null;
 }
 
-function eventMeta(event) {
-  if (event.type === 'process_restart') {
+function runtimeMeta(wrapper) {
+  const event = wrapper.event || {};
+  const taskId = wrapper.task_id;
+
+  if (event.type === 'model_response') {
     return {
-      node: 'checkpoint', label: 'NEW PROCESS / RUNTIME', title: '旧进程已死：启动新的 Runtime', file: 'serve_visualizer.py',
-      code: 'new_store = JsonCheckpointStore(...)\nnew_model = FakeModel("multi_step")\nrun_agent(..., resume=True)',
-      explanation: '<p>这里故意用新的 Store 对象和新的 Model 对象模拟新进程。唯一跨进程保留下来的 Runtime 进度来自磁盘 checkpoint。</p>',
+      label: `${taskId} · Model proposal`,
+      title: `Task ${taskId}：Runtime 收到 Model Tool proposal`,
+      file: 'agent.py / scheduler.py',
+      code: pretty(event.response),
+      explain: '<p>Scheduler 已经选定任务，但真正的 Tool Call 仍以 Model proposal 形式进入 Runtime，因此后续 validation、Policy、MAX_STEPS 都不会被跳过。</p>',
     };
   }
 
-  if (event.type === 'execution_context') {
+  if (event.type === 'tool_validation') {
     return {
-      node: 'context', label: 'ExecutionContext Injected', title: 'Runtime 注入可信身份', file: 'context.py / agent.py',
-      code: `runtime_context = ExecutionContext(...)\n\n${pretty(event.context)}\n# ${event.source}`,
-      explanation: '<p>恢复时身份重新由 Runtime 注入，而不是从 Model 输出里恢复。</p>',
+      label: `${taskId} · Tool validation`,
+      title: `Task ${taskId}：Tool 参数验证`,
+      file: 'tools.py',
+      code: `validation = tool.validate(arguments)\n\n${pretty(event.validation)}`,
+      explain: '<p>DAG Task READY 不代表 Tool 参数一定安全。Scheduler 管依赖，Runtime 仍独立验证执行输入。</p>',
     };
   }
 
-  if (event.type === 'state_saved') {
-    const state = event.state || {};
+  if (event.type === 'policy_decision') {
     return {
-      node: event.store === 'JsonCheckpointStore' ? 'checkpoint' : 'state',
-      label: `Checkpoint Saved · ${state.phase || 'unknown'}`,
-      title: `保存 durable state：${state.phase || 'unknown'}`,
-      file: 'checkpoint.py / agent.py',
-      code: `state.phase = ${JSON.stringify(state.phase)}\nstate_store.save(state, reason=${JSON.stringify(event.reason)})\n\n${pretty(state)}`,
-      explanation: `<p>这次 save 不只存在内存；JsonCheckpointStore 把 snapshot 写到磁盘。</p><p class="note">reason = ${event.reason}</p>`,
-    };
-  }
-
-  if (event.type === 'checkpoint_loaded') {
-    return {
-      node: 'checkpoint', label: 'Checkpoint Loaded', title: '新 Runtime 从磁盘恢复 AgentState', file: 'checkpoint.py / agent.py',
-      code: `state = state_store.load(runtime_context.task_id)\n\n${pretty(event.state)}`,
-      explanation: '<p>旧 Python 进程已经不存在。新的 Runtime 通过 task_id 找回 step、observations、call_id、response_id 和 duplicate history。</p>',
-    };
-  }
-
-  if (event.type === 'resume_boundary') {
-    return {
-      node: 'checkpoint', label: 'Resume Boundary', title: '跳过已经完成的 Tool', file: 'agent.py',
-      code: `# saved Observation already exists\ncompleted_tool = ${JSON.stringify(event.tool_name)}\nsaved_observation = ${pretty(event.observation)}\n# DO NOT execute completed Tool again`,
-      explanation: '<p><strong>这是 V8 核心：</strong>checkpoint 证明第一步结果已经记录，所以恢复后直接把保存的 Observation 交回 Model，不重算第一步。</p>',
-    };
-  }
-
-  if (event.type === 'simulated_crash') {
-    return {
-      node: 'checkpoint', label: '💥 Simulated Crash', title: '进程在安全 checkpoint 之后死亡', file: 'agent.py',
-      code: `state.phase = "observation_ready"\n_save_state(...)\nraise SimulatedCrash(...)`,
-      explanation: '<p>Crash 发生在 Observation 已经 durable save 之后，因此恢复时知道第一步完成了。</p><p class="note">如果真实 side effect 已发生但 checkpoint 还没写，Checkpoint 本身不能保证 exactly-once。</p>',
-    };
-  }
-
-  if (event.type === 'user_input') {
-    return {
-      node: 'state', label: 'User Input', title: '开始新的 Agent run', file: 'agent.py',
-      code: '_emit(on_event, "user_input", message=user_message)',
-      explanation: '<p>新 run 从空 State 开始；resume 则不会重新走这里。</p>',
-    };
-  }
-
-  if (event.type === 'model_request' || event.type === 'model_response') {
-    return {
-      node: 'model', label: event.type === 'model_request' ? `Model Request · ${event.phase || ''}` : 'Model Response',
-      title: event.type === 'model_request' && event.phase === 'resume' ? '用保存的 Observation 恢复 Model continuation' : 'Model 决定下一动作',
-      file: event.type === 'model_request' ? 'agent.py' : 'model_adapters.py',
-      code: event.type === 'model_request' ? pretty(event) : pretty(event.response),
-      explanation: event.type === 'model_request' && event.phase === 'resume'
-        ? '<p>Runtime 使用 checkpoint 中的 previous_response_id、call_id 和 30 继续，而不是重新执行第一步。</p>'
-        : '<p>Model 负责决定 WHAT；durable progress 仍由 Runtime State/Checkpoint 管理。</p>',
-    };
-  }
-
-  if (['model_validation', 'runtime_step', 'duplicate_check', 'tool_lookup', 'tool_validation', 'policy_decision', 'tool_execute', 'tool_rejected', 'runtime_stop'].includes(event.type)) {
-    return {
-      node: 'runtime', label: event.type, title: 'Runtime deterministic control', file: event.type === 'policy_decision' ? 'policy.py' : 'agent.py',
-      code: pretty(event),
-      explanation: '<p>恢复之后仍然重新经过 validation、Policy、MAX_STEPS 与 duplicate guard；Checkpoint 不绕过安全边界。</p>',
+      label: `${taskId} · Policy ${String(event.policy && event.policy.decision).toUpperCase()}`,
+      title: `Task ${taskId}：Policy 决定能否执行`,
+      file: 'policy.py',
+      code: `policy_result = policy_engine.evaluate(\n    tool, arguments, runtime_context\n)\n\n${pretty(event.policy)}`,
+      explain: '<p>Planner/Scheduler 也没有执行权限。即使一个 Task 已经 READY，Policy 仍然可以 DENY。</p>',
     };
   }
 
   if (event.type === 'tool_attempt') {
     return {
-      node: 'tool', label: `Tool Attempt ${event.attempt}/${event.total_attempts}`, title: '真实 Python Tool 执行', file: 'agent.py',
+      label: `${taskId} · Tool execute`,
+      title: `Task ${taskId}：Python Tool 真正执行`,
+      file: 'agent.py',
       code: `result = tool.function(**arguments)\n\n# arguments\n${pretty(event.arguments)}`,
-      explanation: '<p>在 Resume Trace 里，你应该只看到 6×7 的 Tool Attempt；不会再看到 10+20。</p>',
+      explain: '<p>这是实际计算/side-effect 边界。Planner 负责 WHAT tasks，Scheduler 负责 WHEN，只有 Runtime 到这里才真正执行 HOW。</p>',
     };
   }
 
-  if (event.type === 'tool_retry') {
+  if (event.type === 'tool_result') {
     return {
-      node: 'tool', label: `Retry → ${event.next_attempt}`, title: 'Tool Retry', file: 'agent.py', code: pretty(event),
-      explanation: '<p>Retry 与 crash recovery 不同：Retry 是同一进程内重新尝试 Tool；Resume 是新 Runtime 从 durable state 继续。</p>',
-    };
-  }
-
-  if (event.type === 'tool_result' || event.type === 'tool_error' || event.type === 'tool_observation') {
-    return {
-      node: 'observation', label: event.type, title: 'Observation 形成并进入 State', file: 'agent.py', code: pretty(event),
-      explanation: '<p>Observation 是我们选择的 durable recovery anchor：先记录结果，再允许后续 Model continuation。</p>',
+      label: `${taskId} · Tool result = ${event.result}`,
+      title: `Task ${taskId}：Tool 产生 Observation`,
+      file: 'agent.py',
+      code: `_emit(on_event, "tool_result", result=${pretty(event.result)})`,
+      explain: `<p>Runtime 得到结果 <strong>${event.result}</strong>。随后结果进入 AgentState，Task Runtime 完成后才返回 Scheduler。</p>`,
     };
   }
 
   if (event.type === 'final') {
     return {
-      node: 'final', label: 'Final', title: 'Agent 完成', file: 'agent.py',
-      code: `state.status = "completed"\nstate.final_answer = ${JSON.stringify(event.content)}\n_save_state(...)`,
-      explanation: `<p><strong>最终输出：</strong>${event.content}</p><p>最终答案也进入 durable checkpoint。</p>`,
+      label: `${taskId} · Runtime final`,
+      title: `Task ${taskId}：单任务 Runtime 完成`,
+      file: 'agent.py',
+      code: `state.status = "completed"\nstate.final_answer = ${JSON.stringify(event.content)}`,
+      explain: '<p>单个 Task 的 Runtime 已经完成。注意：这还不是整个 DAG 完成；Scheduler 还要把结果写回并检查下游依赖。</p>',
     };
   }
 
   return {
-    node: 'runtime', label: event.type, title: 'Runtime Event', file: 'agent.py', code: pretty(event), explanation: '<p>Runtime event。</p>',
+    label: `${taskId} · ${event.type}`,
+    title: `Task ${taskId} Runtime`,
+    file: 'agent.py',
+    code: pretty(event),
+    explain: '<p>Task Runtime event。</p>',
+  };
+}
+
+function eventMeta(event) {
+  if (event.type === 'task_runtime_event') return runtimeMeta(event);
+  return schedulerMeta(event) || {
+    label: event.type,
+    title: 'Runtime event',
+    file: 'scheduler.py',
+    code: pretty(event),
+    explain: '<p>事件。</p>',
   };
 }
 
 function renderTimeline() {
-  timelineList.innerHTML = '';
-  events.forEach((event, index) => {
-    const meta = eventMeta(event);
+  timeline.innerHTML = '';
+  displayEvents.forEach((item, index) => {
+    const meta = eventMeta(item.event);
     const li = document.createElement('li');
-    li.textContent = `${index + 1}. ${meta.label}`;
+    li.className = 'timeline-item';
     if (index < currentIndex) li.classList.add('done');
     if (index === currentIndex) li.classList.add('active');
-    li.addEventListener('click', () => showStep(index));
-    timelineList.appendChild(li);
-  });
-}
 
-function highlightNode(name) {
-  document.querySelectorAll('.node').forEach((node) => {
-    node.classList.toggle('active', node.dataset.node === name);
+    const marker = document.createElement('span');
+    marker.className = 'timeline-marker';
+    marker.textContent = String(index + 1);
+
+    const text = document.createElement('span');
+    text.textContent = meta.label;
+
+    li.appendChild(marker);
+    li.appendChild(text);
+    li.addEventListener('click', () => showStep(index));
+    timeline.appendChild(li);
   });
 }
 
 function showStep(index) {
-  if (events.length === 0) return;
-  currentIndex = Math.max(0, Math.min(index, events.length - 1));
-  const event = events[currentIndex];
-  const meta = eventMeta(event);
-  highlightNode(meta.node);
-  renderState(latestStateAt(currentIndex));
+  if (!displayEvents.length) return;
+  currentIndex = Math.max(0, Math.min(index, displayEvents.length - 1));
+  const item = displayEvents[currentIndex];
+  const meta = eventMeta(item.event);
+
+  renderPlan(item.plan);
+  eventCounter.textContent = `${currentIndex + 1} / ${displayEvents.length}`;
+  currentAction.innerHTML = `<strong>${meta.title}</strong><span>${meta.label}</span>`;
   codeTitle.textContent = meta.title;
   codeFile.textContent = meta.file;
   codePanel.textContent = meta.code;
-  explainTitle.textContent = meta.title;
-  explainBody.innerHTML = meta.explanation;
-  eventJson.textContent = pretty(event);
-  stepCounter.textContent = `Trace ${currentIndex + 1}/${events.length}`;
+  explainBody.innerHTML = meta.explain;
+
+  const runtime = item.event.type === 'task_runtime_event'
+    ? {
+        task_id: item.event.task_id,
+        runtime_event: item.event.event,
+        task_plan_snapshot: item.plan && item.plan.tasks
+          ? item.plan.tasks.find((task) => task.task_id === item.event.task_id)
+          : null,
+      }
+    : {
+        plan_snapshot: item.plan,
+      };
+  runtimeDetail.textContent = pretty(runtime);
+  rawEvent.textContent = pretty(item.event);
   renderTimeline();
 }
 
 function stopAuto() {
   if (autoTimer) clearInterval(autoTimer);
   autoTimer = null;
-  autoButton.textContent = '自动播放';
+  autoButton.textContent = '自动';
 }
 
 function resetView() {
   stopAuto();
+  rawEvents = [];
+  displayEvents = [];
   currentIndex = -1;
-  highlightNode('');
-  renderState(null);
-  timelineList.innerHTML = events.length
-    ? '<li class="empty">Trace 已保留，点击上一步/下一步或重新执行。</li>'
-    : '<li class="empty">点击“① 运行到 Crash”开始。</li>';
+  lastResponse = null;
+  renderPlan(null);
+  eventCounter.textContent = '尚未运行';
+  currentAction.innerHTML = '<strong>等待运行</strong><span>Scheduler 会先判断哪些 Task READY。</span>';
+  timeline.innerHTML = '<li class="empty-state">点击“运行计划”开始。</li>';
   codeTitle.textContent = '对应代码';
-  codeFile.textContent = 'agent.py';
+  codeFile.textContent = 'planner.py';
   codePanel.textContent = '等待执行事件…';
-  explainTitle.textContent = '代码进度与逻辑';
-  explainBody.innerHTML = '<p>推荐：① Crash → 查看 checkpoint=observation_ready/30 → ② Resume → 确认只执行 6×7。</p>';
-  eventJson.textContent = '{}';
-  stepCounter.textContent = '尚未选中 Trace';
+  explainBody.innerHTML = '<p>每次选中一个进度事件，这里解释这段代码为什么存在，以及下一步由哪个组件负责。</p>';
+  runtimeDetail.textContent = '{}';
+  rawEvent.textContent = '{}';
 }
 
-async function callRuntime(action) {
+async function runPlan() {
   stopAuto();
-  [runButton, crashButton, resumeButton, clearButton].forEach((button) => { button.disabled = true; });
+  runButton.disabled = true;
+  runButton.textContent = '运行中…';
 
   try {
     const response = await fetch('/api/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        action,
-        message: promptInput.value,
-        scenario: scenarioSelect.value,
-        context_preset: contextPresetSelect.value,
-        max_steps: Number.parseInt(maxStepsInput.value, 10),
+        action: 'plan',
+        goal: goalInput.value,
+        context_preset: contextPreset.value,
       }),
     });
     const data = await response.json();
-    renderCheckpoint(data);
-
-    if (!response.ok) {
-      throw new Error(data.error || 'Runtime request failed.');
+    if (!response.ok || !data.ok) {
+      throw new Error(typeof data.error === 'string' ? data.error : pretty(data.error));
     }
 
-    if (action === 'clear') {
-      events = [];
-      resetView();
-      return;
-    }
-
-    if (action === 'resume' && events.length > 0) {
-      events = events.concat([{ type: 'process_restart' }], data.events || []);
-    } else {
-      events = data.events || [];
-    }
-
-    if (events.length > 0) {
-      showStep(0);
-    }
+    lastResponse = data;
+    rawEvents = data.events || [];
+    displayEvents = buildDisplayEvents(rawEvents);
+    if (!displayEvents.length) throw new Error('No visible planner events were emitted.');
+    showStep(0);
   } catch (error) {
-    explainTitle.textContent = '运行失败';
-    explainBody.innerHTML = `<p class="note">${error.message}</p>`;
+    currentAction.innerHTML = `<strong>运行失败</strong><span>${error.message}</span>`;
+    explainBody.innerHTML = `<p>${error.message}</p>`;
   } finally {
-    [runButton, crashButton, resumeButton, clearButton].forEach((button) => { button.disabled = false; });
+    runButton.disabled = false;
+    runButton.textContent = '运行计划';
   }
 }
 
-runButton.addEventListener('click', () => callRuntime('run'));
-crashButton.addEventListener('click', () => callRuntime('crash'));
-resumeButton.addEventListener('click', () => callRuntime('resume'));
-clearButton.addEventListener('click', () => callRuntime('clear'));
+runButton.addEventListener('click', runPlan);
 prevButton.addEventListener('click', () => showStep(currentIndex - 1));
 nextButton.addEventListener('click', () => showStep(currentIndex + 1));
 resetButton.addEventListener('click', resetView);
 autoButton.addEventListener('click', () => {
-  if (events.length === 0) return;
+  if (!displayEvents.length) return;
   if (autoTimer) {
     stopAuto();
     return;
   }
-  if (currentIndex < 0) showStep(0);
-  autoButton.textContent = '停止播放';
+  autoButton.textContent = '停止';
   autoTimer = setInterval(() => {
-    if (currentIndex >= events.length - 1) {
+    if (currentIndex >= displayEvents.length - 1) {
       stopAuto();
       return;
     }
     showStep(currentIndex + 1);
-  }, 850);
+  }, 700);
 });
 
-stateStoreLabel.textContent = 'JsonCheckpointStore';
-renderCheckpoint(null);
 resetView();

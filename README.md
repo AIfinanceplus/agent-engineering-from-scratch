@@ -21,113 +21,117 @@ The goal is to understand the system underneath agent frameworks before using La
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V8 — Checkpoint / Durable Execution
+## Current stage: V9 — Planner + DAG Scheduler
 
-V7 made AgentState explicit and visible, but its `InMemoryStateStore` disappeared when the Python process died. V8 makes selected Runtime state durable on disk.
+V8 made one Agent run durable. V9 moves one layer up and asks:
 
-The teaching experiment is deliberately concrete:
+> What if the goal contains multiple tasks with dependencies?
 
-```text
-Step 1
-calculator(10, 20, add)
-    ↓
-30
-    ↓
-AgentState.phase = observation_ready
-    ↓
-JsonCheckpointStore.save(...)
-    ↓
-💥 simulated process crash
-
-NEW Runtime + NEW Model object
-    ↓
-JsonCheckpointStore.load(task_id)
-    ↓
-recover Observation = 30
-    ↓
-DO NOT execute 10 + 20 again
-    ↓
-send saved Observation back to Model
-    ↓
-Step 2: calculator(6, 7, multiply)
-    ↓
-42
-    ↓
-Final Answer
-```
-
-### Why `observation_ready` is the V8 recovery boundary
-
-V8 resumes only from a checkpoint where the Tool result has already been recorded:
+V9 deliberately separates three responsibilities:
 
 ```text
-Tool execution
-    ↓
-Observation produced
-    ↓
-state.record_observation(...)
-    ↓
-checkpoint saved to disk
-    ↓
-SAFE DEMO CRASH POINT
+Planner
+= WHAT tasks should exist?
+= What depends on what?
+
+Scheduler
+= WHICH task is READY now?
+= Which tasks are BLOCKED?
+
+Agent Runtime
+= HOW does one selected task execute safely?
 ```
 
-The checkpoint also persists the continuation identifiers needed to continue model reasoning:
+The existing Runtime is still used inside every scheduled task, so Tool validation, Policy, Retry, MAX_STEPS, StateStore, and other deterministic boundaries are not bypassed.
 
-```python
-AgentState(
-    ...,
-    last_observation=30,
-    pending_response_id="...",
-    pending_call_id="...",
-    seen_calls=[...],
-)
-```
+## Teaching DAG
 
-A fresh Runtime can therefore continue from the saved Observation instead of re-running the completed Tool.
-
-### Durable StateStore
-
-V8 adds `JsonCheckpointStore`:
-
-```python
-store = JsonCheckpointStore(".checkpoints")
-store.save(state, reason="observation_recorded")
-state = store.load(task_id)
-history = store.history(task_id)
-```
-
-Writes use a temporary file plus `os.replace` so the local checkpoint document is atomically replaced.
-
-The `.checkpoints/` directory is ignored by Git and exists only as local Runtime data.
-
-### Checkpoint is NOT exactly-once execution
-
-This distinction is essential.
-
-A checkpoint can tell the Runtime what state was durably recorded. It cannot magically prove whether an external side effect happened if the process died in this window:
+The deterministic Planner creates:
 
 ```text
-send_email() actually succeeds
-    ↓
-💥 crash BEFORE post-effect checkpoint
+Task A: 10 + 20 = 30 ──┐
+                        ├──> Task C: A + B = 72
+Task B:  6 × 7 = 42 ──┘
 ```
 
-After restart, the checkpoint may still say the action was not completed, even though the external email was sent.
-
-Production systems therefore combine durable execution with mechanisms such as:
+Initial Scheduler state:
 
 ```text
-idempotency keys
-transactional outbox
-provider request IDs
-side-effect receipts
-workflow-engine activity semantics
+A = READY
+B = READY
+C = BLOCKED
 ```
 
-V8 intentionally does not claim exactly-once behavior.
+V9 uses a sequential Scheduler on purpose. A and B may both be READY, but the teaching implementation executes one READY Task at a time:
 
-## Visual debugger
+```text
+Tick 1
+READY   = [A, B]
+BLOCKED = [C]
+    ↓
+run A
+    ↓
+A = COMPLETED (30)
+
+Tick 2
+READY   = [B]
+BLOCKED = [C]
+    ↓
+run B
+    ↓
+B = COMPLETED (42)
+
+Tick 3
+READY   = [C]
+BLOCKED = []
+    ↓
+resolve C arguments from A/B results
+    ↓
+calculator(30, 42, add)
+    ↓
+72
+```
+
+This keeps DAG semantics separate from concurrency. Parallel execution can be added later without changing what READY/BLOCKED means.
+
+## Planner validation
+
+`validate_plan(...)` fails closed on:
+
+```text
+duplicate task IDs
+missing dependency IDs
+self-dependency
+cycles
+```
+
+A Scheduler should not try to "figure out" a malformed DAG while executing it.
+
+## Compact visual debugger UI
+
+V9 redesigns the browser around the information needed at this stage.
+
+Desktop layout:
+
+```text
+┌──────────── PLAN ────────────┐
+│ Task cards / dependency state │
+│ READY / RUNNING / BLOCKED     │
+└───────────────────────────────┘
+
+┌──────────── RUN ─────────────┐
+│ selected teaching events      │
+│ current Scheduler/Runtime step │
+└───────────────────────────────┘
+
+┌──────────── CODE ────────────┐
+│ matching code                 │
+│ WHY / NEXT explanation        │
+│ collapsible Runtime details   │
+└───────────────────────────────┘
+```
+
+The three panes share one viewport on larger screens and scroll independently. Raw Runtime events remain available under collapsible `Details`, but they no longer dominate the main screen.
 
 Run:
 
@@ -141,27 +145,16 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Recommended sequence:
+Recommended learning sequence:
 
-1. Select `两步任务 · Crash / Resume`.
-2. Click `① 运行到 Crash`.
-3. Walk the Trace until `Checkpoint Saved · observation_ready` and `💥 Simulated Crash`.
-4. Confirm the checkpoint dashboard shows one saved Observation: `30`.
-5. Click `② 从 Checkpoint 恢复`.
-6. The Trace inserts `NEW PROCESS / RUNTIME`.
-7. Confirm `Checkpoint Loaded` and `Resume Boundary` appear.
-8. Confirm the Resume segment contains only the second Tool attempt: `6 × 7`.
-9. Final State contains observations `[30, 42]`.
-
-The page keeps four views synchronized:
-
-```text
-Trace        → what just happened
-AgentState   → where the Agent is and what it already knows
-Checkpoint   → what survives process death
-Code         → which Runtime line caused the transition
-Commentary   → why this transition is safe / what happens next
-```
+1. `Planner created DAG` — inspect `planner.py`.
+2. First `Scheduler tick` — confirm A/B READY and C BLOCKED.
+3. `Task A started` — observe Scheduler handoff to Runtime.
+4. Walk through A's Tool validation, Policy, Tool execution, and result.
+5. Observe the next Scheduler tick: B READY, C still BLOCKED.
+6. After B completes, observe C become READY.
+7. At `Task C started`, inspect resolved arguments `{a: 30, b: 42}`.
+8. Finish at final result `72`.
 
 ## Tests
 
@@ -169,22 +162,14 @@ Commentary   → why this transition is safe / what happens next
 python -m unittest -v
 ```
 
-V8 tests verify:
+V9 adds tests that verify:
 
-- JSON checkpoint state survives a brand-new Store instance;
-- crash occurs only after Observation 30 is durable;
-- a fresh Runtime + fresh FakeModel can resume;
-- resumed execution does not re-run the completed `10 + 20` Tool;
-- final durable State contains both `30` and `42`;
-- resume without a checkpoint fails closed;
-- all prior Runtime, Policy, Context, Retry, MAX_STEPS, duplicate, and validation behavior remains covered.
+- the Planner creates A/B → C dependencies;
+- cyclic DAGs are rejected;
+- Scheduler transitions are exactly `READY [A,B] / BLOCKED [C]`, then `READY [B]`, then `READY [C]`;
+- dependency results are resolved into C as `30` and `42`;
+- final result is `72`;
+- every Task still passes through the existing Runtime validation, Policy, Tool execution, and StateStore events;
+- all V0–V8 regression tests continue to run.
 
-## Run with a real OpenAI model
-
-```bash
-pip install -r requirements.txt
-export OPENAI_API_KEY="your_api_key_here"
-python run_real.py
-```
-
-Secrets are never stored in source code.
+V8 crash/resume endpoints remain in the local server for backward-compatible experiments, but the V9 UI intentionally makes Planner/Scheduler the primary view.
