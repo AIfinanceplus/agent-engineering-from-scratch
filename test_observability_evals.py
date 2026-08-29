@@ -69,13 +69,38 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(report["scores"]["citation_completeness"], 1.0)
         self.assertTrue(report["scores"]["citations_grounded"])
         self.assertEqual(report["trace_metrics"]["tool_attempts"], 3)
+        self.assertEqual(len(report["checks"]), 6)
+        self.assertTrue(all(check["passed"] for check in report["checks"]))
 
-    def test_default_eval_suite_is_repeatable_and_green(self):
+    def test_eval_case_exposes_case_run_checks_and_verdict_process(self):
+        run = run_eval_case(DEFAULT_EVAL_CASES[0], execution_context=CONTEXT)
+        process = run["process"]
+        self.assertEqual(process[0]["type"], "eval_case_started")
+        self.assertEqual(process[1]["type"], "eval_agent_run_completed")
+        self.assertEqual(
+            [step["check_id"] for step in process if step["type"] == "eval_check"],
+            [
+                "success",
+                "task_completion_rate",
+                "evidence_coverage",
+                "citation_completeness",
+                "citations_grounded",
+                "confidence",
+            ],
+        )
+        self.assertEqual(process[-1]["type"], "eval_case_verdict")
+        self.assertTrue(process[-1]["passed"])
+
+    def test_default_eval_suite_is_repeatable_green_and_visualizable(self):
         suite = run_eval_suite(execution_context=CONTEXT)
         self.assertEqual(suite["passed"], 2)
         self.assertEqual(suite["total"], 2)
         self.assertEqual(suite["pass_rate"], 1.0)
         self.assertTrue(all(case["report"]["passed"] for case in suite["cases"]))
+        self.assertTrue(all(case["process"] for case in suite["cases"]))
+        self.assertTrue(
+            all(case["process"][-1]["type"] == "eval_case_verdict" for case in suite["cases"])
+        )
 
     def test_ungrounded_or_missing_citation_fails_eval(self):
         case = EvalCase(
@@ -112,6 +137,10 @@ class EvalTests(unittest.TestCase):
         self.assertLess(report.scores["citation_completeness"], 1.0)
         self.assertFalse(report.scores["citations_grounded"])
         self.assertTrue(report.failures)
+        grounded_check = next(
+            check for check in report.checks if check["check_id"] == "citations_grounded"
+        )
+        self.assertFalse(grounded_check["passed"])
 
 
 if __name__ == "__main__":
