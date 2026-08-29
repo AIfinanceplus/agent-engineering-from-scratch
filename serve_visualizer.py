@@ -1,8 +1,7 @@
-"""Serve the active R4 source-health + R3 research intelligence workbench.
+"""Serve the active R5 source-quality research workbench.
 
-R4 adds an operational source boundary before research debugging:
-Source Health -> Question -> Subquestions -> Source Intents -> Query Specs ->
-dynamic DAG -> Runtime -> Evidence -> Synthesis -> Citations -> Trace/Evals.
+R5 preserves R4 source health and R3 research decomposition, then adds explicit
+Evidence quality, mixed-signal, and contradiction assessment before synthesis.
 """
 
 from datetime import date
@@ -13,10 +12,10 @@ from pathlib import Path
 
 from context import ExecutionContext
 from observability import TraceRecorder
-from r3_evals import make_r3_eval_suite
 from r3_planner import R3ResearchPlanner
 from r3_tooling import register_r3_tools
 from r4_source_health import run_source_health
+from r5_evals import make_r5_eval_suite
 from scheduler import DAGScheduler
 
 
@@ -29,15 +28,15 @@ CONTEXT_PRESETS = {
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="macro-research-agent",
-        task_id="r4-research-root",
-        trace_id="r4-research-trace",
+        task_id="r5-research-root",
+        trace_id="r5-research-trace",
     ),
     "read_only": ExecutionContext(
         tenant_id="demo-tenant",
         user_id="user-123",
         agent_id="read-only-agent",
-        task_id="r4-read-only-root",
-        trace_id="r4-read-only-trace",
+        task_id="r5-read-only-root",
+        trace_id="r5-read-only-trace",
     ),
 }
 
@@ -67,11 +66,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 report = run_source_health(providers)
                 self.send_json(
                     200,
-                    {
-                        "ok": report["ready"],
-                        "action": "source_health",
-                        "source_health": report,
-                    },
+                    {"ok": report["ready"], "action": "source_health", "source_health": report},
                 )
             except Exception as exc:
                 self.send_json(
@@ -97,18 +92,18 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
         execution_context = CONTEXT_PRESETS[context_preset]
 
         if action == "r3_run":
-            self.send_json(200, self.execute_r3(question, execution_context))
+            self.send_json(200, self.execute_research(question, execution_context))
             return
 
         if action == "r3_evals":
-            result = self.execute_r3(question, execution_context)
+            result = self.execute_research(question, execution_context)
             blueprint = result.get("blueprint") or {}
-            suite = make_r3_eval_suite(blueprint, result) if blueprint else {
+            suite = make_r5_eval_suite(blueprint, result) if blueprint else {
                 "passed": 0,
                 "total": 1,
                 "pass_rate": 0.0,
                 "cases": [],
-                "error": "No blueprint was produced, so R3 evals could not run.",
+                "error": "No blueprint was produced, so R5 evals could not run.",
             }
             self.send_json(
                 200,
@@ -123,15 +118,12 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 
         self.send_json(400, {"ok": False, "error": f"Unknown action: {action}"})
 
-    def execute_r3(self, question: str, execution_context: ExecutionContext) -> dict:
+    def execute_research(self, question: str, execution_context: ExecutionContext) -> dict:
         reference_date = date.today().isoformat()
         events = [{"type": "research_question_received", "question": question}]
 
         try:
-            blueprint_obj, plan = R3ResearchPlanner().build(
-                question,
-                reference_date=reference_date,
-            )
+            blueprint_obj, plan = R3ResearchPlanner().build(question, reference_date=reference_date)
             blueprint = blueprint_obj.to_dict()
         except Exception as exc:
             return {
@@ -150,12 +142,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 "intents": blueprint["intents"],
             }
         )
-        events.append(
-            {
-                "type": "queries_compiled",
-                "queries": blueprint["queries"],
-            }
-        )
+        events.append({"type": "queries_compiled", "queries": blueprint["queries"]})
 
         required_env = sorted(
             {
@@ -188,6 +175,16 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 on_event=events.append,
                 trace_recorder=trace,
             )
+            artifact = result.get("final_artifact") or {}
+            if result.get("ok") and isinstance(artifact, dict) and artifact.get("quality"):
+                events.append(
+                    {
+                        "type": "quality_assessed",
+                        "quality": artifact["quality"],
+                        "confidence": artifact.get("confidence"),
+                        "confidence_type": artifact.get("confidence_type"),
+                    }
+                )
             payload = {
                 "ok": result["ok"],
                 "action": "r3_run",
@@ -205,17 +202,10 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
                 "events": events,
             }
             if not result["ok"]:
-                provider_map = {
-                    query["query_id"]: query["provider"]
-                    for query in blueprint["queries"]
-                }
+                provider_map = {query["query_id"]: query["provider"] for query in blueprint["queries"]}
                 provider_map["S1"] = "ANALYSIS"
                 payload["stage"] = "source_or_runtime"
-                payload["error"] = _source_failure(
-                    events,
-                    result.get("error"),
-                    provider_map,
-                )
+                payload["error"] = _source_failure(events, result.get("error"), provider_map)
             return payload
         except Exception as exc:
             return {
@@ -243,7 +233,7 @@ class VisualizerHandler(SimpleHTTPRequestHandler):
 def _source_failure(events: list[dict], fallback, provider_map: dict[str, str]) -> dict:
     failed = next((event for event in reversed(events) if event.get("type") == "task_failed"), None)
     if failed is None:
-        return {"code": "runtime_failed", "message": str(fallback or "R3 research run failed")}
+        return {"code": "runtime_failed", "message": str(fallback or "R5 research run failed")}
     task_id = failed.get("task_id")
     error = failed.get("error") or {}
     return {
@@ -256,11 +246,11 @@ def _source_failure(events: list[dict], fallback, provider_map: dict[str, str]) 
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), VisualizerHandler)
-    print("Agent Research Workbench · R4")
+    print("Agent Research Workbench · R5")
     print("Open http://127.0.0.1:8000")
-    print("Source Health: real BLS + FRED + EIA smoke tests through native OS TLS trust")
-    print("Research: Question -> Subquestions -> Source Intents -> Query Specs -> Dynamic DAG -> Evidence")
-    print("Source diagnostics never expose FRED_API_KEY or EIA_API_KEY values.")
+    print("Source Health: BLS + FRED + EIA operational diagnostics")
+    print("Research: Question -> Query Specs -> Evidence -> Quality/Relations -> Synthesis")
+    print("Quality support score is a heuristic, not a calibrated probability.")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
