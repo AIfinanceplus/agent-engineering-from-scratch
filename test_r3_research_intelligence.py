@@ -2,6 +2,7 @@ import unittest
 from dataclasses import replace
 
 from context import ExecutionContext
+from observability import TraceRecorder
 from r3_decomposition import QueryCompiler, ResearchDecomposer, build_blueprint
 from r3_evals import make_r3_eval_suite
 from r3_planner import R3ResearchPlanner
@@ -179,12 +180,18 @@ class R3IntegrationTests(unittest.TestCase):
             "Assess current inflation pressure.",
             reference_date="2026-08-29",
         )
-        result = DAGScheduler().run(plan, execution_context=CONTEXT)
+        trace = TraceRecorder(CONTEXT.trace_id)
+        result = DAGScheduler().run(
+            plan,
+            execution_context=CONTEXT,
+            trace_recorder=trace,
+        )
         self.assertTrue(result["ok"], result.get("error"))
         self.assertEqual([task["task_id"] for task in result["plan"]["tasks"]], ["Q1", "Q2", "Q3", "Q4", "S1"])
         self.assertEqual(len(result["evidence"]), 4)
         self.assertEqual(len(result["citations"]), 4)
         self.assertEqual(len(result["final_artifact"]["evidence_ids"]), 4)
+        self.assertGreaterEqual(result["trace"]["metrics"]["tool_attempts"], 5)
 
         suite = make_r3_eval_suite(blueprint.to_dict(), result)
         self.assertEqual(suite["passed"], 2, suite)
