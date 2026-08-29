@@ -1,11 +1,11 @@
 """API-only macro source adapters for the active R2 workbench.
 
 Production code has no fixture/live switch. The active path always calls public
-APIs. Tests inject a transport that returns API-shaped JSON so parser behavior is
-repeatable without adding a user-visible fixture mode.
+APIs. Tests inject API-shaped transports so parser behavior remains repeatable
+without creating a user-visible fixture mode.
 
 Credentials stay Runtime-owned:
-- BLS v1 single-series GET: no key required.
+- BLS v2 single-series API: no key required.
 - FRED observations: FRED_API_KEY from environment.
 - EIA v2 petroleum route: EIA_API_KEY from environment.
 """
@@ -20,7 +20,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
-BLS_BASE_URL = "https://api.bls.gov/publicAPI/v1/timeseries/data"
+BLS_BASE_URL = "https://api.bls.gov/publicAPI/v2/timeseries/data"
 FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
 EIA_GASOLINE_URL = "https://api.eia.gov/v2/petroleum/pri/gnd/data/"
 
@@ -69,14 +69,44 @@ class Point:
 
 
 class BLSPublicAPI:
-    def __init__(self, transport=None):
+    """BLS v2 API adapter with GET -> POST transport fallback.
+
+    BLS documents both signatures. GET is simplest for one series; POST is used
+    as a second real-API transport path when the local network/TLS stack rejects
+    the GET connection before an HTTP response is received.
+    """
+
+    def __init__(self, transport=None, post_transport=None):
         self._transport = transport or _http_get_json
+        self._post_transport = post_transport or _http_post_json
+        self._custom_transport = transport is not None
 
     def fetch(self, series_id: str, label: str) -> dict:
         _require_text(series_id, "series_id")
         _require_text(label, "label")
         request_url = f"{BLS_BASE_URL}/{series_id}"
-        payload = self._transport(request_url)
+        transport_used = "GET"
+        first_error = None
+
+        try:
+            payload = self._transport(request_url)
+        except (ConnectionError, TimeoutError, SourceAPIError) as exc:
+            if self._custom_transport:
+                raise
+            first_error = exc
+            transport_used = "POST"
+            try:
+                payload = self._post_transport(
+                    f"{BLS_BASE_URL}/",
+                    {"seriesid": [series_id]},
+                )
+            except (ConnectionError, TimeoutError, SourceAPIError) as post_exc:
+                raise ConnectionError(
+                    "BLS v2 GET and POST both failed; "
+                    f"GET={_exception_summary(first_error)}; "
+                    f"POST={_exception_summary(post_exc)}"
+                ) from post_exc
+
         rows = _bls_rows(payload, series_id)
         history = _normalize_bls(rows)
         if not history:
@@ -100,7 +130,8 @@ class BLSPublicAPI:
                 "publisher": "U.S. Bureau of Labor Statistics",
                 "uri": request_url,
             },
-            "note": "Live BLS Public Data API observation.",
+            "transport": transport_used,
+            "note": "Live BLS Public Data API v2 observation.",
         }
 
 
@@ -269,17 +300,61 @@ def _require_text(value: str, name: str) -> None:
 
 
 def _http_get_json(url: str) -> dict:
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": "agent-engineering-from-scratch/2.1"})
+    request = Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 agent-engineering-from-scratch/2.2",
+        },
+    )
+    return _urlopen_json(request)
+
+
+def _http_post_json(url: str, payload: dict) -> dict:
+    body = json.dumps(payload).encode("utf-8")
+    request = Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 agent-engineering-from-scratch/2.2",
+        },
+    )
+    return _urlopen_json(request)
+
+
+def _urlopen_json(request: Request) -> dict:
     try:
         with urlopen(request, timeout=15) as response:
-            return json.loads(response.read().decode("utf-8"))
+            raw = response.read().decode("utf-8")
+            return json.loads(raw)
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
-        raise SourceAPIError("HTTP", f"HTTP {exc.code}: {body}", status=exc.code) from exc
-    except TimeoutError:
-        raise
+        message = f"HTTP {exc.code} {exc.reason or ''}".strip()
+        if body:
+            message += f": {body}"
+        if 500 <= exc.code < 600:
+            raise ConnectionError(message) from exc
+        raise SourceAPIError("HTTP", message, status=exc.code) from exc
+    except TimeoutError as exc:
+        raise TimeoutError("public API request timed out after 15s") from exc
     except URLError as exc:
-        raise ConnectionError(f"public API request failed: {exc}") from exc
+        reason = getattr(exc, "reason", None)
+        reason_type = type(reason).__name__ if reason is not None else type(exc).__name__
+        detail = str(reason).strip() if reason is not None else str(exc).strip()
+        if not detail:
+            detail = repr(reason if reason is not None else exc)
+        raise ConnectionError(f"{reason_type}: {detail}") from exc
+    except json.JSONDecodeError as exc:
+        raise SourceAPIError("HTTP", f"response was not valid JSON: {exc.msg}") from exc
+
+
+def _exception_summary(exc: BaseException) -> str:
+    text = str(exc).strip()
+    return f"{exc.__class__.__name__}: {text or repr(exc)}"
 
 
 DEFAULT_BLS_API = BLSPublicAPI()
