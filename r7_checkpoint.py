@@ -91,9 +91,10 @@ class ResearchCheckpointRecorder:
         self._saved_boundaries: set[str] = set()
         self._checkpoints: list[dict] = []
 
-    def observe(self, event: dict) -> None:
+    def observe(self, event: dict) -> dict | None:
+        """Observe one event and return a newly persisted checkpoint, if any."""
         if not isinstance(event, dict):
-            return
+            return None
 
         event_type = event.get("type")
         if event_type == "evidence_registered":
@@ -101,14 +102,13 @@ class ResearchCheckpointRecorder:
             evidence_id = evidence.get("evidence_id")
             if evidence_id and evidence_id not in self.evidence_ids:
                 self.evidence_ids.append(evidence_id)
-            return
+            return None
 
         if event_type == "plan_created":
-            self._save_boundary("after_plan_created", event.get("plan") or {})
-            return
+            return self._save_boundary("after_plan_created", event.get("plan") or {})
 
         if event_type != "task_completed":
-            return
+            return None
 
         task_id = event.get("task_id")
         plan = event.get("plan") or {}
@@ -119,15 +119,17 @@ class ResearchCheckpointRecorder:
             task for task in (plan.get("tasks") or [])
             if str(task.get("task_id", "")).startswith("Q")
         ]
+        checkpoint = None
         if source_tasks and all(task.get("status") == "completed" for task in source_tasks):
-            self._save_boundary("after_evidence", plan)
+            checkpoint = self._save_boundary("after_evidence", plan)
 
         if task_id == "S1":
-            self._save_boundary("after_S1", plan)
-        elif task_id == "D1":
-            self._save_boundary("after_D1", plan)
-        elif task_id == "F1":
-            self._save_boundary("after_F1", plan)
+            return self._save_boundary("after_S1", plan) or checkpoint
+        if task_id == "D1":
+            return self._save_boundary("after_D1", plan) or checkpoint
+        if task_id == "F1":
+            return self._save_boundary("after_F1", plan) or checkpoint
+        return checkpoint
 
     def checkpoints(self) -> list[dict]:
         return deepcopy(self._checkpoints)
@@ -135,9 +137,9 @@ class ResearchCheckpointRecorder:
     def latest(self) -> dict | None:
         return deepcopy(self._checkpoints[-1]) if self._checkpoints else None
 
-    def _save_boundary(self, boundary: str, plan: dict) -> None:
+    def _save_boundary(self, boundary: str, plan: dict) -> dict | None:
         if boundary in self._saved_boundaries:
-            return
+            return None
         self._saved_boundaries.add(boundary)
         self.sequence += 1
         checkpoint = _checkpoint_view(
@@ -151,6 +153,7 @@ class ResearchCheckpointRecorder:
         )
         self.store.save(checkpoint)
         self._checkpoints.append(checkpoint)
+        return deepcopy(checkpoint)
 
 
 def _checkpoint_view(
