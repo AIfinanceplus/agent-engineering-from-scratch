@@ -3,6 +3,7 @@ from datetime import date
 from unittest.mock import patch
 
 from r4_source_health import SourceHealthChecker
+from source_smoke import build_parser, normalize_providers
 
 
 def evidence(provider, series_id, as_of):
@@ -23,6 +24,20 @@ def evidence(provider, series_id, as_of):
         },
         "transport": "GET" if provider == "BLS" else None,
     }
+
+
+class SourceSmokeCLITests(unittest.TestCase):
+    def test_no_provider_arguments_mean_all_sources(self):
+        args = build_parser().parse_args([])
+        self.assertEqual(args.providers, [])
+        self.assertIsNone(normalize_providers(args.providers))
+
+    def test_provider_arguments_are_case_insensitive(self):
+        self.assertEqual(normalize_providers(["bls", "fred"]), ["BLS", "FRED"])
+
+    def test_invalid_provider_is_rejected_by_manual_validation(self):
+        with self.assertRaises(ValueError):
+            normalize_providers(["NOAA"])
 
 
 class SourceHealthTests(unittest.TestCase):
