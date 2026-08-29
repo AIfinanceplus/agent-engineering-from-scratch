@@ -24,8 +24,13 @@ def _quality_case(result: dict) -> dict:
     quality = artifact.get("quality") or {}
     rows = quality.get("evidence_quality") or []
     relation_summary = quality.get("relation_summary") or {}
+    penalties = quality.get("penalties") or {}
     score_type = artifact.get("confidence_type")
     support_score = quality.get("support_score")
+
+    contradiction_count = int(relation_summary.get("contradiction", 0) or 0)
+    contradiction_penalty = float(penalties.get("contradiction", 0.0) or 0.0)
+    expected_contradiction_penalty = min(0.40, contradiction_count * 0.20)
 
     checks = [
         _check(
@@ -64,10 +69,9 @@ def _quality_case(result: dict) -> dict:
         ),
         _check(
             "contradiction_guardrail",
-            "A contradiction adds a stronger or equal penalty than mixed-signal uncertainty",
-            float((quality.get("penalties") or {}).get("contradiction", 0.0))
-            >= float((quality.get("penalties") or {}).get("mixed_signal", 0.0)),
-            True,
+            "When contradiction exists, its configured penalty is applied",
+            round(contradiction_penalty, 3),
+            round(expected_contradiction_penalty, 3),
         ),
     ]
     return _case("r5-evidence-quality-relation-contract", checks)
