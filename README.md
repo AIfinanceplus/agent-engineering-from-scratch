@@ -114,7 +114,7 @@ The two scoring profiles share one live research run to avoid unnecessarily repe
 
 ### CI
 
-CI does not depend on internet availability. Adapter tests inject API-shaped JSON responses into the same production parsers. This is transport mocking, not a user-selectable fixture data mode.
+CI does not depend on internet availability. Adapter tests inject API-shaped JSON responses into the same production parsers. This is HTTP transport mocking for parser/contract tests, not a second product data mode.
 
 Run locally:
 
