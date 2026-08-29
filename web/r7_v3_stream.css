@@ -1,0 +1,31 @@
+.node:has(.node-status .pill.running){
+  border-color:var(--blue);
+  background:linear-gradient(180deg,#fff,#f5f9ff);
+  box-shadow:0 0 0 3px rgba(23,105,255,.08),0 8px 20px rgba(23,105,255,.08);
+  animation:live-node-pulse 1.25s ease-in-out infinite;
+}
+.node:has(.node-status .pill.ready){
+  border-color:#bcd0ee;
+  background:#fbfdff;
+}
+.node:has(.checkpoint-marker:not(:empty)) .checkpoint-marker{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  border-radius:999px;
+  background:var(--purple-soft);
+  padding:2px 5px;
+}
+.trace-row:last-child{
+  background:linear-gradient(90deg,rgba(23,105,255,.04),transparent);
+}
+.statusbar strong#status-current{
+  color:#7fb1ff;
+}
+@keyframes live-node-pulse{
+  0%,100%{box-shadow:0 0 0 3px rgba(23,105,255,.06),0 8px 20px rgba(23,105,255,.06)}
+  50%{box-shadow:0 0 0 5px rgba(23,105,255,.11),0 10px 24px rgba(23,105,255,.11)}
+}
+@media (prefers-reduced-motion:reduce){
+  .node:has(.node-status .pill.running){animation:none}
+}
