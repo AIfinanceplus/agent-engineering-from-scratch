@@ -15,10 +15,10 @@
         <span class="version">R2</span>
         <div>
           <strong>Multi-Source Macro Workbench</strong>
-          <small>BLS · FRED · EIA · freshness · cross-source synthesis</small>
+          <small>BLS · FRED · EIA · live preflight · freshness · R2 evals</small>
         </div>
       </div>
-      <div class="principle">Source Plan → Evidence → Freshness → Synthesis</div>
+      <div class="principle">Preflight → Source Plan → Evidence → Freshness → Synthesis</div>
     </header>
 
     <section class="controlbar">
@@ -41,7 +41,7 @@
         </select>
       </label>
       <button id="run-btn" class="primary">运行 Multi-Source 研究</button>
-      <button id="eval-btn">运行 V11 Evals</button>
+      <button id="eval-btn">运行 R2 Evals</button>
       <div class="step-controls">
         <button id="prev-btn">←</button>
         <button id="next-btn">→</button>
@@ -82,11 +82,11 @@
         </div>
         <div id="mode-strip" class="mode-strip run-mode">
           <strong id="mode-label">R2 MACRO RUN</strong>
-          <span id="mode-help">BLS + FRED + EIA → Evidence → Freshness → Synthesis</span>
+          <span id="mode-help">Live 先 Preflight；通过后才进入 Planner / Scheduler / Runtime</span>
         </div>
         <div id="current-action" class="current-action">
           <strong>等待运行</strong>
-          <span>建议先用 Fixture Replay，看清四来源与 freshness。</span>
+          <span>Fixture 直接运行；Live 会先显示 BLS/FRED/EIA readiness。</span>
         </div>
         <ol id="timeline" class="timeline"><li class="empty-state">点击“运行 Multi-Source 研究”开始。</li></ol>
       </section>
@@ -100,12 +100,12 @@
 
         <div class="explanation">
           <span class="kicker">WHY / NEXT</span>
-          <div id="explain-body"><p>这里解释 Source Plan、凭证边界、Evidence、Freshness 与 Synthesis。</p></div>
+          <div id="explain-body"><p>这里解释 Live Preflight、Source Plan、凭证边界、Evidence、Freshness 与 R2 Eval。</p></div>
         </div>
 
         <section id="support-box" class="citation-box">
           <div class="citation-head"><span id="support-kicker" class="kicker">CITATIONS</span><strong id="citation-title">尚未形成</strong></div>
-          <div id="citation-list" class="citation-list"><div class="empty-state">A1 完成后显示来源与 freshness；Eval 模式显示当前 check。</div></div>
+          <div id="citation-list" class="citation-list"><div class="empty-state">Live 模式显示 credential readiness；研究完成显示 citations/freshness；Eval 模式显示当前 check。</div></div>
         </section>
 
         <details class="details-box">
@@ -113,7 +113,7 @@
           <pre><code id="trace-detail">{}</code></pre>
         </details>
         <details class="details-box">
-          <summary>Eval report / suite</summary>
+          <summary>R2 Eval report / suite</summary>
           <pre><code id="eval-detail">{}</code></pre>
         </details>
         <details class="details-box">
@@ -127,8 +127,8 @@
       </aside>
     </section>
 
-    <footer>Fixture Replay 只用于教学与 CI。Live 模式需要本地 FRED_API_KEY 与 EIA_API_KEY；API key 不进入 Tool 参数、Plan、Evidence 或 Trace。</footer>
+    <footer>Live 模式在任何 Tool 执行前检查 FRED_API_KEY / EIA_API_KEY；只显示 credential 是否存在，不显示 secret value。R2 Eval 直接评估 H1/C1/F1/G1/A1。</footer>
   </main>
-  <script src="r2_app.js"></script>
+  <script src="r2_app_v2.js"></script>
 </body>
 </html>
