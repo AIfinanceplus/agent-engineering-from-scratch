@@ -55,6 +55,7 @@ def score_api_result(case: APIEvalCase, result: dict) -> dict:
     freshness = artifact.get("freshness") or {} if isinstance(artifact, dict) else {}
     limitations = artifact.get("limitations") or [] if isinstance(artifact, dict) else []
     limitation_text = " ".join(str(item).lower() for item in limitations)
+    tool_attempts = int(metrics.get("tool_attempts", 0))
 
     all_checks = {
         "success": _check(
@@ -107,9 +108,9 @@ def score_api_result(case: APIEvalCase, result: dict) -> dict:
         ),
         "tool_attempts": _check(
             "tool_attempts",
-            "Expected Tool attempts",
-            int(metrics.get("tool_attempts", 0)),
-            case.expected_tool_attempts,
+            f"At least {case.expected_tool_attempts} Tool attempts (retries allowed)",
+            tool_attempts >= case.expected_tool_attempts,
+            True,
         ),
         "causal_guardrail": _check(
             "causal_guardrail",
@@ -145,7 +146,7 @@ def build_eval_process(case: APIEvalCase, result: dict, report: dict) -> list[di
                 "providers": list(case.expected_providers),
                 "evidence_count": case.expected_evidence_count,
                 "citation_count": case.expected_citation_count,
-                "tool_attempts": case.expected_tool_attempts,
+                "minimum_tool_attempts": case.expected_tool_attempts,
             },
         },
         {
@@ -158,6 +159,7 @@ def build_eval_process(case: APIEvalCase, result: dict, report: dict) -> list[di
                 "evidence_ids": [item.get("evidence_id") for item in result.get("evidence") or []],
                 "providers": sorted({_provider_from_evidence(item) for item in result.get("evidence") or [] if _provider_from_evidence(item)}),
                 "citations": [item.get("citation") for item in result.get("citations") or []],
+                "tool_attempts": int(((result.get("trace") or {}).get("metrics") or {}).get("tool_attempts", 0)),
                 "signals": artifact.get("signals") if isinstance(artifact, dict) else None,
             },
         },
