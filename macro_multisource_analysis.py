@@ -1,8 +1,8 @@
 """R2 deterministic cross-source macro synthesis.
 
-This layer combines already-collected BLS, FRED, and EIA evidence. It produces
-descriptive signals only; it does not infer causal CPI contributions from price
-co-movement.
+This layer combines already-collected BLS, FRED, and EIA API evidence. It
+produces descriptive signals only; it does not infer causal CPI contributions
+from price co-movement.
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def synthesize_macro_signals(
         "answer": (
             f"Headline CPI YoY is {cpi_metrics['headline_yoy_pct']:.2f}% and core CPI YoY is "
             f"{cpi_metrics['core_yoy_pct']:.2f}% for {cpi_metrics['period']}. "
-            f"The latest fixture/live gasoline window is {price_signal} ({gasoline_change_pct:+.2f}%), "
+            f"The latest API gasoline window is {price_signal} ({gasoline_change_pct:+.2f}%), "
             f"while the 5-year breakeven window is {expectation_signal} ({breakeven_change:+.2f} pp). "
             f"This is a descriptive cross-source read, not a causal CPI attribution. "
             + " ".join(f"[{evidence_id}]" for evidence_id in evidence_ids)
@@ -75,9 +75,9 @@ def synthesize_macro_signals(
         },
         "freshness": freshness,
         "limitations": [
-            "Different sources publish at different frequencies and dates.",
+            "Different public APIs publish at different frequencies and dates.",
             "Gasoline and breakeven movements are descriptive signals, not causal CPI contributions.",
-            "Fixture mode is teaching-only and must not be interpreted as current macro data.",
+            "API availability, revisions, and release timing can change the latest observable values.",
         ],
     }
 
