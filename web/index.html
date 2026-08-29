@@ -3,108 +3,63 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Engineering · V10 Evidence</title>
+  <title>Agent Engineering · V11</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <main class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <span class="version">V10</span>
-        <div>
-          <strong>Evidence → Synthesis → Citation</strong>
-          <small>Plan tasks · preserve provenance · synthesize only collected evidence</small>
-        </div>
+        <span class="version">V11</span>
+        <div><strong>Tracing + Evals</strong><small>Observe one run · score repeatable cases</small></div>
       </div>
-      <div class="principle">Citation starts at evidence ingestion</div>
+      <div class="principle">Trace explains · Eval judges</div>
     </header>
 
     <section class="controlbar">
-      <label class="goal-field">
-        <span>Research Goal</span>
-        <input id="goal" value="Use only the collected synthetic evidence to estimate the combined contribution and cite every supporting source." />
-      </label>
-      <label class="compact-field">
-        <span>Identity</span>
-        <select id="context-preset">
-          <option value="general">research-agent</option>
-          <option value="read_only">read-only-agent</option>
-        </select>
-      </label>
+      <label class="goal-field"><span>Research Goal</span><input id="goal" value="Use only the collected synthetic evidence to estimate the combined contribution and cite every supporting source." /></label>
+      <label class="compact-field"><span>Identity</span><select id="context-preset"><option value="general">research-agent</option><option value="read_only">read-only-agent</option></select></label>
       <button id="run-btn" class="primary">运行研究</button>
-      <div class="step-controls">
-        <button id="prev-btn">←</button>
-        <button id="next-btn">→</button>
-        <button id="auto-btn">自动</button>
-        <button id="reset-btn">重置</button>
-      </div>
+      <button id="eval-btn">运行 Evals</button>
+      <div class="step-controls"><button id="prev-btn">←</button><button id="next-btn">→</button><button id="auto-btn">自动</button><button id="reset-btn">重置</button></div>
     </section>
 
-    <section class="summary-strip">
+    <section class="summary-strip v11-summary">
       <div><span>Plan</span><strong id="plan-status">未运行</strong></div>
       <div><span>Progress</span><strong id="plan-progress">0 / 3</strong></div>
       <div><span>Evidence</span><strong id="evidence-count">0</strong></div>
-      <div><span>Confidence</span><strong id="confidence">—</strong></div>
+      <div><span>Trace</span><strong id="trace-kpi">—</strong></div>
+      <div><span>Eval</span><strong id="eval-kpi">—</strong></div>
       <div class="result-summary"><span>Final</span><strong id="final-result">—</strong></div>
     </section>
 
     <section class="studio">
       <aside class="pane plan-pane">
-        <div class="pane-header">
-          <div><span class="kicker">PLAN</span><h2>研究任务</h2></div>
-          <span id="plan-badge" class="badge neutral">planned</span>
-        </div>
+        <div class="pane-header"><div><span class="kicker">PLAN</span><h2>研究任务</h2></div><span id="plan-badge" class="badge neutral">planned</span></div>
         <div class="dag-hint"><span>E1</span><span>+</span><span>E2</span><span>→</span><span>S1</span></div>
-        <div id="plan-list" class="plan-list"><div class="empty-state">运行后显示 Evidence 与 Synthesis Task。</div></div>
-        <div class="legend">
-          <span><i class="dot ready"></i>READY</span>
-          <span><i class="dot running"></i>RUNNING</span>
-          <span><i class="dot blocked"></i>BLOCKED</span>
-          <span><i class="dot completed"></i>DONE</span>
-        </div>
+        <div id="plan-list" class="plan-list"><div class="empty-state">运行后显示任务。</div></div>
+        <div class="legend"><span><i class="dot ready"></i>READY</span><span><i class="dot running"></i>RUNNING</span><span><i class="dot blocked"></i>BLOCKED</span><span><i class="dot completed"></i>DONE</span></div>
       </aside>
 
       <section class="pane run-pane">
-        <div class="pane-header">
-          <div><span class="kicker">RUN</span><h2>证据链进度</h2></div>
-          <span id="event-counter" class="subtle">尚未运行</span>
-        </div>
-        <div id="current-action" class="current-action">
-          <strong>等待运行</strong>
-          <span>先收集 evidence，再允许 synthesis。</span>
-        </div>
+        <div class="pane-header"><div><span class="kicker">RUN</span><h2>执行与 Trace</h2></div><span id="event-counter" class="subtle">尚未运行</span></div>
+        <div id="current-action" class="current-action"><strong>等待运行</strong><span>Trace 记录一次运行；Eval 用固定规则评分。</span></div>
         <ol id="timeline" class="timeline"><li class="empty-state">点击“运行研究”开始。</li></ol>
       </section>
 
       <aside class="pane code-pane">
-        <div class="pane-header">
-          <div><span class="kicker">CODE</span><h2 id="code-title">对应代码</h2></div>
-          <span id="code-file" class="file-pill">planner.py</span>
-        </div>
+        <div class="pane-header"><div><span class="kicker">CODE</span><h2 id="code-title">对应代码</h2></div><span id="code-file" class="file-pill">observability.py</span></div>
         <pre class="code-window"><code id="code-panel">等待执行事件…</code></pre>
-
-        <div class="explanation">
-          <span class="kicker">WHY / NEXT</span>
-          <div id="explain-body"><p>这里解释当前代码为什么存在，以及 provenance 下一步流向哪里。</p></div>
-        </div>
-
-        <section class="citation-box">
-          <div class="citation-head"><span class="kicker">CITATIONS</span><strong id="citation-title">尚未形成</strong></div>
-          <div id="citation-list" class="citation-list"><div class="empty-state">Synthesis 完成后显示引用来源。</div></div>
-        </section>
-
-        <details class="details-box">
-          <summary>Evidence / Runtime 细节</summary>
-          <pre><code id="runtime-detail">{}</code></pre>
-        </details>
-        <details class="details-box">
-          <summary>完整原始事件</summary>
-          <pre><code id="raw-event">{}</code></pre>
-        </details>
+        <div class="explanation"><span class="kicker">WHY / NEXT</span><div id="explain-body"><p>这里解释当前事件如何进入 Trace / Eval。</p></div></div>
+        <section class="citation-box"><div class="citation-head"><span class="kicker">CITATIONS</span><strong id="citation-title">尚未形成</strong></div><div id="citation-list" class="citation-list"><div class="empty-state">完成后显示引用。</div></div></section>
+        <details class="details-box"><summary>Trace spans / metrics</summary><pre><code id="trace-detail">{}</code></pre></details>
+        <details class="details-box"><summary>Eval report</summary><pre><code id="eval-detail">{}</code></pre></details>
+        <details class="details-box"><summary>Evidence / Runtime 细节</summary><pre><code id="runtime-detail">{}</code></pre></details>
+        <details class="details-box"><summary>完整原始事件</summary><pre><code id="raw-event">{}</code></pre></details>
       </aside>
     </section>
 
-    <footer>所有 E1/E2 数字与来源均为 synthetic teaching data。V10 学习目标是 provenance、confidence 与 citation lineage，不是宏观结论本身。</footer>
+    <footer>V11：Trace 用于解释一次运行；Eval 用固定案例和指标比较多次运行。研究数据仍为教学数据。</footer>
   </main>
   <script src="app.js"></script>
 </body>
