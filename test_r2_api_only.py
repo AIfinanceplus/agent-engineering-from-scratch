@@ -1,9 +1,14 @@
 import unittest
-from urllib.error import URLError
 from urllib.parse import unquote
 
-from api_sources import BLSPublicAPI, EIAPublicAPI, FREDPublicAPI, _urlopen_json
-from r2_api_evals import APIEvalCase, score_api_result
+from api_sources import BLSPublicAPI, EIAPublicAPI, FREDPublicAPI
+from r2_api_evals import (
+    APIEvalCase,
+    LINEAGE_CHECKS,
+    QUALITY_CHECKS,
+    make_api_eval_suite,
+    score_api_result,
+)
 from r2_api_planner import APIMacroPlanner
 
 
@@ -17,6 +22,36 @@ def bls_payload(series_id="CUSR0000SA0"):
     return {
         "status": "REQUEST_SUCCEEDED",
         "Results": {"series": [{"seriesID": series_id, "data": BLS_ROWS}]},
+    }
+
+
+def generic_live_result():
+    tasks = [
+        {"task_id": task_id, "status": "completed"}
+        for task_id in ("H1", "C1", "F1", "G1", "A1")
+    ]
+    # Match EvidenceStore output: no adapter-specific `provider` field survives.
+    evidence = [
+        {"kind": "evidence", "evidence_id": "BLS:H", "source": {"source_id": "BLS:H"}},
+        {"kind": "evidence", "evidence_id": "BLS:C", "source": {"source_id": "BLS:C"}},
+        {"kind": "evidence", "evidence_id": "FRED:F", "source": {"source_id": "FRED:F"}},
+        {"kind": "evidence", "evidence_id": "EIA:G", "source": {"source_id": "EIA:G"}},
+    ]
+    citations = [
+        {"evidence_id": item["evidence_id"], "citation": f"[{item['evidence_id']}]"}
+        for item in evidence
+    ]
+    return {
+        "ok": True,
+        "plan": {"status": "completed", "tasks": tasks},
+        "evidence": evidence,
+        "citations": citations,
+        "final_artifact": {
+            "answer": "Descriptive cross-source signals; not causal attribution.",
+            "freshness": {item["evidence_id"]: {"status": "fresh"} for item in evidence},
+            "limitations": ["These cross-source signals are not causal CPI attribution."],
+        },
+        "trace": {"metrics": {"tool_attempts": 5}},
     }
 
 
@@ -82,7 +117,9 @@ class APIOnlySourceTests(unittest.TestCase):
                 {"date": "2026-08-08", "value": "2.35"},
             ]}
 
-        result = FREDPublicAPI(transport=transport, env={"FRED_API_KEY": "secretfred"}).fetch("T5YIE", "5Y Breakeven", "percent")
+        result = FREDPublicAPI(transport=transport, env={"FRED_API_KEY": "secretfred"}).fetch(
+            "T5YIE", "5Y Breakeven", "percent"
+        )
         decoded = unquote(captured[0])
         self.assertIn("file_type=json", decoded)
         self.assertIn("sort_order=desc", decoded)
@@ -123,39 +160,31 @@ class APIOnlyPlannerEvalTests(unittest.TestCase):
             self.assertNotIn("mode", task.arguments)
             self.assertNotIn("fixture", str(task.arguments).lower())
 
-    def test_api_eval_uses_h1_c1_f1_g1_a1(self):
-        tasks = [
-            {"task_id": task_id, "status": "completed"}
-            for task_id in ("H1", "C1", "F1", "G1", "A1")
-        ]
-        evidence = [
-            {"evidence_id": "BLS:H", "provider": "BLS"},
-            {"evidence_id": "BLS:C", "provider": "BLS"},
-            {"evidence_id": "FRED:F", "provider": "FRED"},
-            {"evidence_id": "EIA:G", "provider": "EIA"},
-        ]
-        citations = [
-            {"evidence_id": item["evidence_id"], "citation": f"[{item['evidence_id']}]"}
-            for item in evidence
-        ]
-        result = {
-            "ok": True,
-            "plan": {"status": "completed", "tasks": tasks},
-            "evidence": evidence,
-            "citations": citations,
-            "final_artifact": {
-                "answer": "Descriptive signals; not causal attribution.",
-                "freshness": {item["evidence_id"]: {"status": "fresh"} for item in evidence},
-                "limitations": ["not causal"],
-            },
-            "trace": {"metrics": {"tool_attempts": 5}},
-        }
+    def test_api_eval_recovers_provider_from_generic_provenance(self):
+        result = generic_live_result()
         report = score_api_result(APIEvalCase("api-contract"), result)
         self.assertTrue(report["passed"], report["failures"])
+        provider_check = next(check for check in report["checks"] if check["check_id"] == "provider_coverage")
+        self.assertEqual(provider_check["actual"], ["BLS", "EIA", "FRED"])
+        self.assertNotIn("provider", result["evidence"][0])
+
+    def test_api_eval_uses_h1_c1_f1_g1_a1(self):
+        report = score_api_result(APIEvalCase("api-contract"), generic_live_result())
         serialized = str(report)
         self.assertIn("H1", str(APIEvalCase("api-contract").expected_tasks))
         self.assertNotIn("E1", serialized)
         self.assertNotIn("E2", serialized)
+
+    def test_eval_cases_have_distinct_responsibilities(self):
+        self.assertNotEqual(LINEAGE_CHECKS, QUALITY_CHECKS)
+        suite = make_api_eval_suite(generic_live_result())
+        self.assertEqual(suite["passed"], 2)
+        self.assertEqual(suite["total"], 2)
+        first, second = suite["cases"]
+        self.assertEqual(first["case"]["case_id"], "api-source-lineage")
+        self.assertEqual(first["case"]["check_ids"], list(LINEAGE_CHECKS))
+        self.assertEqual(second["case"]["case_id"], "api-freshness-causal-guardrails")
+        self.assertEqual(second["case"]["check_ids"], list(QUALITY_CHECKS))
 
 
 if __name__ == "__main__":
