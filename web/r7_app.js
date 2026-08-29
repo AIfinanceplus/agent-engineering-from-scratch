@@ -1,490 +1,490 @@
 const $ = (selector) => document.querySelector(selector);
+const $$ = (selector) => [...document.querySelectorAll(selector)];
 const pretty = (value) => JSON.stringify(value, null, 2);
-const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 
-const runButton = $('#run-btn');
-const evalButton = $('#eval-btn');
-const checkForecastButton = $('#check-forecast-btn');
-const prevButton = $('#prev-btn');
-const nextButton = $('#next-btn');
-const autoButton = $('#auto-btn');
-const resetButton = $('#reset-btn');
-const goalInput = $('#goal');
-const domainInput = $('#domain');
-const contextPreset = $('#context-preset');
-const forecastPackInput = $('#forecast-pack');
+const state = {
+  result: null,
+  suite: null,
+  pack: null,
+  packs: [],
+  selectedStep: 'Q',
+  logicTab: 'code',
+  evidenceTab: 'evidence',
+};
 
-const planStatus = $('#plan-status');
-const planProgress = $('#plan-progress');
-const evidenceCount = $('#evidence-count');
-const traceKpi = $('#trace-kpi');
-const evalKpi = $('#eval-kpi');
-const finalResult = $('#final-result');
-const planBadge = $('#plan-badge');
-const planList = $('#plan-list');
-const leftKicker = $('#left-kicker');
-const leftTitle = $('#left-title');
-const dagHint = $('#dag-hint');
-const legend = $('#legend');
-const runKicker = $('#run-kicker');
-const runTitle = $('#run-title');
-const modeLabel = $('#mode-label');
-const modeHelp = $('#mode-help');
-const eventCounter = $('#event-counter');
-const currentAction = $('#current-action');
-const timeline = $('#timeline');
-const codeTitle = $('#code-title');
-const codeFile = $('#code-file');
-const codePanel = $('#code-panel');
-const explainBody = $('#explain-body');
-const supportKicker = $('#support-kicker');
-const citationTitle = $('#citation-title');
-const citationList = $('#citation-list');
-const qualityDetail = $('#quality-detail');
-const domainDetail = $('#domain-detail');
-const forecastDetail = $('#forecast-detail');
-const traceDetail = $('#trace-detail');
-const evalDetail = $('#eval-detail');
-const runtimeDetail = $('#runtime-detail');
-const rawEvent = $('#raw-event');
+const el = {
+  goal: $('#goal'), domain: $('#domain'), context: $('#context-preset'), packSelect: $('#forecast-pack'),
+  run: $('#run-btn'), health: $('#health-btn'), eval: $('#eval-btn'), check: $('#check-forecast-btn'), export: $('#export-btn'),
+  healthRefresh: $('#health-refresh'), healthList: $('#health-list'), healthChecked: $('#health-checked'), systemStatus: $('#system-status-text'),
+  runStatus: $('#run-status-pill'), runId: $('#run-id'), runProgress: $('#run-progress'), flow: $('#agent-flow'),
+  traceList: $('#trace-list'), eventCount: $('#event-count'), selectedStep: $('#selected-step'), logicCode: $('#logic-code'), logicNote: $('#logic-note'),
+  evidenceContent: $('#evidence-content'), evidenceKpi: $('#evidence-kpi'),
+  outputBody: $('#output-body'), outputStage: $('#output-stage'), outputProgressBar: $('#output-progress-bar'),
+  visibleQuestion: $('#visible-question'), visibleConfig: $('#visible-config'),
+  evalGrid: $('#eval-grid'), evalSummary: $('#eval-summary'), forecastBody: $('#forecast-table-body'),
+  trackingRunId: $('#tracking-run-id'), trackingScenario: $('#tracking-scenario'), trackingEvidence: $('#tracking-evidence'), trackingForecasts: $('#tracking-forecasts'),
+  refreshPacks: $('#refresh-packs'), copyOutput: $('#copy-output'), toast: $('#toast'),
+  quickRerun: $('#quick-rerun'), quickEval: $('#quick-eval'), quickCheck: $('#quick-check'), quickExport: $('#quick-export'),
+};
 
-let stepItems = [];
-let stepIndex = -1;
-let autoTimer = null;
-let mode = 'run';
+const STEP_META = {
+  Q: {
+    title: 'Question', file: 'serve_visualizer.py',
+    why: '研究问题是整个 run 的不可变入口。这里记录问题、Domain Lens 与 ExecutionContext，但 Domain 不获得数据源选择权。',
+    code: `question = request_data["goal"]\ndomain = request_data["domain"]\nexecution_context = CONTEXT_PRESETS[preset]\n# Question is input; Runtime still owns execution authority.`,
+    payload: (r) => ({question: r?.question, domain: r?.domain, execution_context: r?.execution_context}),
+  },
+  DEC: {
+    title: 'Decomposition', file: 'r3_decomposition.py',
+    why: 'Decomposer 只决定“需要知道什么”，把研究问题拆成语义子问题；它不能发 URL、API key 或任意 series ID。',
+    code: `subquestions = ResearchDecomposer().decompose(question)\n# WHAT to know, not HOW to fetch it.`,
+    payload: (r) => ({subquestions: r?.blueprint?.subquestions, intents: r?.blueprint?.intents}),
+  },
+  QC: {
+    title: 'Query Compiler', file: 'r3_decomposition.py',
+    why: 'QueryCompiler 是可信边界：把 approved capability 映射到 provider / series / Tool，并把 credentials 留在 Runtime。',
+    code: `queries = QueryCompiler().compile(subquestions)\n# capability -> approved provider / series / tool\n# no secret, raw URL, or arbitrary source authority`,
+    payload: (r) => ({queries: r?.blueprint?.queries}),
+  },
+  QN: {
+    title: 'Q1..Qn', file: 'scheduler.py + agent.py',
+    why: 'Scheduler 只运行依赖已满足的任务；每个 source task 仍进入 Tool validation → Policy → Retry → execution。',
+    code: `ready = scheduler.ready_tasks(plan)\nfor task in ready:\n    Runtime.validate(task)\n    Policy.check(context, tool)\n    result = Runtime.execute(tool, args)`,
+    payload: (r) => ({source_tasks: (r?.plan?.tasks || []).filter((t) => String(t.task_id || '').startsWith('Q'))}),
+  },
+  E: {
+    title: 'Evidence', file: 'evidence.py',
+    why: 'Source output 不能直接变成答案。先标准化成 Evidence，并保留 source / as_of / history / provenance，后续 Citation 才可验证。',
+    code: `evidence = normalize(source_result)\nEvidenceStore.register(evidence)\n# Tool Result != Evidence != Synthesis != Citation`,
+    payload: (r) => ({evidence: r?.evidence, citations: r?.citations}),
+  },
+  S1: {
+    title: 'S1 Research Synthesis', file: 'r3_synthesis.py + r5_quality.py',
+    why: 'S1 先判断 Evidence 支持什么：authority、freshness、completeness、relevance，以及 AGREEMENT / MIXED_SIGNAL / CONTRADICTION。',
+    code: `quality = assess_evidence_quality(evidence_bundle, signals, reference_date)\nS1 = synthesize_research_bundle(question, evidence_bundle, reference_date)\n# support score is heuristic, not probability`,
+    payload: (r) => r?.research_synthesis || r?.results?.S1 || {},
+  },
+  D1: {
+    title: 'D1 Domain Brief', file: 'r6_domain.py',
+    why: 'D1 只改变决策框架，不允许重新抓数据、增加 Evidence ID 或抬高 confidence。Investment / Policy 的数据 lineage 完全一致。',
+    code: `D1 = synthesize_domain_brief(\n  question, domain, research_synthesis=S1\n)\nassert D1.evidence_ids == S1.evidence_ids\nassert D1.confidence <= S1.confidence`,
+    payload: (r) => r?.domain_brief || r?.results?.D1 || {},
+  },
+  F1: {
+    title: 'F1 Forecast Pack', file: 'r7_forecast.py',
+    why: 'Forecast 不是观点装饰，而是可结算 contract：baseline、方向、horizon、due date、Evidence lineage、invalidation rule。无法可靠预测时允许 ABSTAIN。',
+    code: `F1 = build_forecast_pack(S1, D1, reference_date)\n# OPEN / ABSTAINED -> later PENDING / HIT / MISS / REVISE\nForecastStore.save(F1)`,
+    payload: (r) => r?.forecast_pack || r?.results?.F1 || {},
+  },
+  EV: {
+    title: 'Eval / Tracking', file: 'r7_evals.py',
+    why: 'Eval 判断系统是否遵守合同；Tracking 则让旧 Forecast 等待真正的新 observation 后再结算，避免提前或用旧数据假结算。',
+    code: `suite = make_r7_eval_suite(blueprint, result, domain)\nupdated = evaluate_forecast_pack(old_pack, fresh_S1, today)\n# due date + newer observation are both required for resolution`,
+    payload: () => ({eval_suite: state.suite, forecast_pack: state.pack}),
+  },
+};
 
 async function post(payload) {
   const response = await fetch('/api/run', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(payload),
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(typeof data.error === 'string' ? data.error : `HTTP ${response.status}`);
   return data;
+}
+
+function toast(message, kind = 'ok') {
+  el.toast.textContent = message;
+  el.toast.className = `toast show${kind === 'error' ? ' error' : ''}`;
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => { el.toast.className = 'toast'; }, 2400);
+}
+
+function pill(status) {
+  const s = String(status || '—').toLowerCase();
+  let cls = 'neutral';
+  if (['ready','pass','hit','completed','success'].some((x) => s.includes(x))) cls = 'pass';
+  else if (['running','open','pending_not_due','awaiting'].some((x) => s.includes(x))) cls = 'running';
+  else if (['abstain','pending'].some((x) => s.includes(x))) cls = 'pending';
+  else if (['fail','miss','error','rate_limited','invalid'].some((x) => s.includes(x))) cls = 'fail';
+  return `<span class="pill ${cls}">${esc(status || '—')}</span>`;
+}
+
+function setBusy(button, busy, text = null) {
+  if (!button) return;
+  if (busy) {
+    button.dataset.label = button.textContent;
+    button.disabled = true;
+    button.textContent = text || '运行中…';
+  } else {
+    button.disabled = false;
+    button.textContent = button.dataset.label || button.textContent;
+  }
+}
+
+function currentConfig() {
+  return {goal: el.goal.value.trim(), domain: el.domain.value, context_preset: el.context.value};
 }
 
 async function loadForecastPacks(preferId = null) {
   try {
     const payload = await post({action: 'r7_packs'});
-    const packs = payload.packs || [];
-    const selected = preferId || forecastPackInput.value;
-    forecastPackInput.innerHTML = '<option value="">none</option>';
-    packs.forEach((pack) => {
+    state.packs = payload.packs || [];
+    const before = preferId || el.packSelect.value;
+    el.packSelect.innerHTML = '<option value="">none</option>';
+    state.packs.forEach((pack) => {
       const option = document.createElement('option');
       option.value = pack.pack_id;
-      const score = pack.scoreboard || {};
-      option.textContent = `${pack.pack_id} · ${pack.created_at || '—'} · ${pack.domain || '—'} · ${pack.scenario || '—'} · ${score.resolved || 0} resolved`;
-      forecastPackInput.appendChild(option);
+      option.textContent = `${pack.pack_id} · ${pack.created_at || '—'} · ${pack.scenario || '—'}`;
+      el.packSelect.appendChild(option);
     });
-    if (selected && packs.some((pack) => pack.pack_id === selected)) {
-      forecastPackInput.value = selected;
-    } else if (packs.length) {
-      forecastPackInput.value = packs[0].pack_id;
-    }
+    if (before && state.packs.some((p) => p.pack_id === before)) el.packSelect.value = before;
+    else if (state.packs.length) el.packSelect.value = state.packs[0].pack_id;
   } catch (error) {
-    console.warn('Could not load saved forecast packs', error);
+    console.warn('forecast pack list failed', error);
   }
 }
 
-function meaningful(event) {
-  return [
-    'research_question_received', 'decomposition_created', 'queries_compiled',
-    'domain_lens_selected', 'plan_created', 'scheduler_tick', 'task_started',
-    'evidence_registered', 'synthesis_verified', 'task_completed', 'task_failed',
-    'quality_assessed', 'domain_brief_created', 'forecast_pack_created',
-    'forecast_pack_saved', 'plan_completed', 'plan_failed',
-  ].includes(event.type) || (
-    event.type === 'task_runtime_event' &&
-    ['tool_validation', 'policy_decision', 'tool_attempt', 'tool_result'].includes((event.event || {}).type)
-  );
+function meaningfulEvents(result) {
+  return (result?.events || []).filter((event) => event && event.type);
 }
 
-function renderPlan(result) {
-  const blueprint = result.blueprint || {};
-  const plan = result.plan || {};
-  const tasks = plan.tasks || [];
-  const taskById = Object.fromEntries(tasks.map((item) => [item.task_id, item]));
-  const subById = Object.fromEntries((blueprint.subquestions || []).map((item) => [item.subquestion_id, item]));
-
-  leftKicker.textContent = 'R7 PLAN';
-  leftTitle.textContent = 'Queries → S1 → D1 → F1';
-  legend.style.display = 'flex';
-  dagHint.innerHTML = `${(blueprint.queries || []).map((q) => `<span>${esc(q.query_id)}</span>`).join('<span>+</span>')}<span>→</span><span>S1</span><span>→</span><span>D1</span><span>→</span><span>F1</span>`;
-  planList.innerHTML = '';
-
-  (blueprint.queries || []).forEach((query) => {
-    const task = taskById[query.query_id] || {};
-    const sub = subById[query.subquestion_id] || {};
-    const card = document.createElement('article');
-    card.className = `blueprint-card ${task.status || 'pending'}`;
-    card.innerHTML = `
-      <div class="blueprint-head"><strong>${esc(query.query_id)} · ${esc(query.provider)}</strong><code>${esc(query.capability)}</code></div>
-      <p>${esc(sub.question)}</p>
-      <small>${esc(query.tool_name)} · ${esc((query.arguments || {}).series_id || '')}</small>`;
-    planList.appendChild(card);
-  });
-
-  [
-    ['S1', 'RESEARCH SYNTHESIS', 'Evidence → quality / relations → grounded conclusion'],
-    ['D1', `${String(result.domain || '').toUpperCase()} DOMAIN`, 'S1 → decision frame without new Evidence'],
-    ['F1', 'FORECAST PACK', 'S1 + D1 → falsifiable forecast contracts + scenario tracker'],
-  ].forEach(([taskId, title, detail]) => {
-    const task = taskById[taskId] || {};
-    const card = document.createElement('article');
-    card.className = `blueprint-card ${task.status || 'pending'}`;
-    card.innerHTML = `<div class="blueprint-head"><strong>${taskId} · ${esc(title)}</strong><code>${esc(task.tool_name || '')}</code></div><p>${esc(detail)}</p><small>depends on: ${esc((task.depends_on || []).join(' + '))}</small>`;
-    planList.appendChild(card);
-  });
-
-  const completed = tasks.filter((item) => item.status === 'completed').length;
-  planStatus.textContent = plan.status || (result.ok ? 'completed' : 'failed');
-  planProgress.textContent = `${completed} / ${tasks.length}`;
-  planBadge.textContent = plan.status || 'planned';
-  planBadge.className = `badge ${plan.status === 'completed' ? 'completed' : 'neutral'}`;
+function eventLabel(event) {
+  const type = event.type || 'event';
+  const nested = event.event || {};
+  if (type === 'task_runtime_event') return `${event.task_id || 'task'} · ${nested.type || 'runtime'}`;
+  const map = {
+    research_question_received: 'Research question received', decomposition_created: 'Decomposition completed',
+    queries_compiled: 'Queries compiled', domain_lens_selected: 'Domain lens selected', plan_created: 'Plan created',
+    scheduler_tick: 'Scheduler tick', task_started: `${event.task_id || 'Task'} started`, task_completed: `${event.task_id || 'Task'} completed`,
+    task_failed: `${event.task_id || 'Task'} failed`, evidence_registered: 'Evidence registered', synthesis_verified: 'Citation lineage verified',
+    quality_assessed: 'Evidence quality assessed', domain_brief_created: 'D1 Domain Brief created', forecast_pack_created: 'F1 Forecast Pack created',
+    forecast_pack_saved: 'Forecast Pack saved', plan_completed: 'Plan completed', plan_failed: 'Plan failed',
+  };
+  return map[type] || type.replaceAll('_', ' ');
 }
 
-function renderCitations(result) {
-  const citations = result.citations || [];
-  supportKicker.textContent = 'GROUNDED CITATIONS';
-  citationTitle.textContent = `${citations.length} verified`;
-  citationList.innerHTML = '';
-  if (!citations.length) {
-    citationList.innerHTML = '<div class="empty-state">No citations yet.</div>';
+function eventLevel(event) {
+  if (String(event.type).includes('failed')) return ['FAIL', 'fail'];
+  if (['task_completed','plan_completed','evidence_registered','synthesis_verified','forecast_pack_saved'].includes(event.type)) return ['SUCCESS', 'success'];
+  if (event.type === 'task_runtime_event') return ['RUNTIME', ''];
+  return ['INFO', ''];
+}
+
+function renderTrace(result) {
+  const events = meaningfulEvents(result);
+  el.eventCount.textContent = `${events.length} events`;
+  if (!events.length) {
+    el.traceList.innerHTML = '<div class="empty">没有运行事件。</div>';
     return;
   }
-  citations.forEach((item) => {
-    const row = document.createElement('article');
-    row.className = 'citation-row';
-    row.innerHTML = `<div><strong>${esc(item.citation)}</strong><span>${esc(item.publisher)}</span></div><span>${esc(item.title)}</span><code>${esc(item.evidence_id)}</code>`;
-    citationList.appendChild(row);
-  });
+  el.traceList.innerHTML = events.map((event, index) => {
+    const [level, cls] = eventLevel(event);
+    const time = event.timestamp || event.time || `#${String(index + 1).padStart(2, '0')}`;
+    return `<div class="trace-row"><span class="trace-time">${esc(time)}</span><span class="trace-badge ${cls}">${level}</span><span class="trace-text">${esc(eventLabel(event))}</span></div>`;
+  }).join('');
 }
 
-function renderQuality(result) {
-  const s1 = result.research_synthesis || (result.results || {}).S1 || {};
-  const quality = s1.quality || {};
-  const rows = quality.evidence_quality || [];
-  qualityDetail.innerHTML = `<div class="citation-head"><span class="kicker">S1 · EVIDENCE QUALITY</span><strong>${esc(quality.support_label || '—')} · ${esc(quality.support_score ?? '—')}</strong></div>`;
+function taskStatus(result, taskId) {
+  const tasks = result?.plan?.tasks || [];
+  const task = tasks.find((item) => item.task_id === taskId);
+  return task?.status || null;
+}
+
+function setNode(node, status, detail) {
+  node.classList.remove('done', 'active', 'failed');
+  const statusEl = node.querySelector('.flow-status');
+  if (status === 'completed') { node.classList.add('done'); statusEl.innerHTML = `<strong>✓ ${esc(detail || '完成')}</strong>`; }
+  else if (status === 'running') { node.classList.add('active'); statusEl.textContent = detail || '运行中'; }
+  else if (status === 'failed') { node.classList.add('failed'); statusEl.textContent = detail || '失败'; }
+  else statusEl.textContent = detail || '待处理';
+}
+
+function renderFlow(result, evalMode = false) {
+  const nodes = Object.fromEntries($$('.flow-node').map((n) => [n.dataset.step, n]));
+  const blueprint = result?.blueprint || {};
+  const queryTasks = (result?.plan?.tasks || []).filter((t) => String(t.task_id || '').startsWith('Q'));
+  const hasQuestion = Boolean(result?.question || result?.events?.length);
+  setNode(nodes.Q, hasQuestion ? 'completed' : null, hasQuestion ? '已接收' : null);
+  setNode(nodes.DEC, blueprint.subquestions?.length ? 'completed' : null, blueprint.subquestions?.length ? `${blueprint.subquestions.length} 子问题` : null);
+  setNode(nodes.QC, blueprint.queries?.length ? 'completed' : null, blueprint.queries?.length ? `${blueprint.queries.length} Queries` : null);
+  const qCompleted = queryTasks.filter((t) => t.status === 'completed').length;
+  const qFailed = queryTasks.some((t) => t.status === 'failed');
+  setNode(nodes.QN, qFailed ? 'failed' : qCompleted === queryTasks.length && queryTasks.length ? 'completed' : queryTasks.some((t) => t.status === 'running') ? 'running' : null, queryTasks.length ? `${qCompleted}/${queryTasks.length}` : null);
+  setNode(nodes.E, result?.evidence?.length ? 'completed' : null, result?.evidence?.length ? `${result.evidence.length} Evidence` : null);
+  ['S1','D1','F1'].forEach((id) => setNode(nodes[id], taskStatus(result, id), taskStatus(result, id) || null));
+  setNode(nodes.EV, evalMode && state.suite ? (state.suite.pass_rate === 1 ? 'completed' : 'failed') : state.pack ? 'completed' : null, evalMode && state.suite ? `${state.suite.passed}/${state.suite.total} PASS` : state.pack ? 'Tracking ready' : null);
+
+  const tasks = result?.plan?.tasks || [];
+  const complete = tasks.filter((t) => t.status === 'completed').length;
+  el.runProgress.textContent = `${complete} / ${tasks.length || 0}`;
+  el.runId.textContent = result?.execution_context?.trace_id ? `Trace ${result.execution_context.trace_id}` : `Run ${result?.reference_date || '—'}`;
+  const status = result?.ok === false ? 'FAILED' : result?.ok ? 'COMPLETED' : 'IDLE';
+  el.runStatus.textContent = status;
+  el.runStatus.className = `pill ${status === 'COMPLETED' ? 'pass' : status === 'FAILED' ? 'fail' : 'neutral'}`;
+}
+
+function renderVisibleInput(result = null) {
+  el.visibleQuestion.textContent = result?.question || el.goal.value.trim() || '—';
+  el.visibleConfig.textContent = `Domain: ${result?.domain || el.domain.value}\nIdentity: ${el.context.value}\nSaved Forecast: ${el.packSelect.value || 'none'}`;
+}
+
+function renderOutput(result, packOverride = null, checkMode = false) {
+  const s1 = result?.research_synthesis || result?.results?.S1 || {};
+  const d1 = result?.domain_brief || result?.results?.D1 || {};
+  const pack = packOverride || result?.forecast_pack || result?.results?.F1 || {};
+  const scenario = pack?.scenario_tracker?.current_state;
+  const score = pack?.scoreboard || {};
+  const sections = d1?.sections || {};
+  const progress = result?.ok ? 100 : result ? 40 : 0;
+  el.outputProgressBar.style.width = `${progress}%`;
+  el.outputStage.textContent = checkMode ? `Forecast Check · ${scenario || '—'}` : pack?.artifact_type === 'forecast_pack' ? `F1 Forecast Pack · ${scenario || '—'}` : d1?.domain ? 'D1 Domain Brief' : s1?.answer ? 'S1 Research Synthesis' : '等待研究';
+  if (!result) return;
+  const limitations = d1?.upstream?.limitations || s1?.limitations || [];
+  el.outputBody.innerHTML = `
+    <div class="output-stage"><strong>${esc(el.outputStage.textContent)}</strong><div class="output-progress"><i style="width:${progress}%"></i></div></div>
+    <div class="output-section"><h4>综合答案 / Executive Summary</h4><p>${esc(d1?.answer || s1?.answer || '尚无综合答案。')}</p></div>
+    ${sections.thesis ? `<div class="output-section"><h4>投资 Thesis</h4><p>${esc(sections.thesis)}</p></div>` : ''}
+    ${sections.policy_problem ? `<div class="output-section"><h4>Policy Problem</h4><p>${esc(sections.policy_problem)}</p></div>` : ''}
+    <div class="output-section"><h4>结构化状态</h4><ul>
+      <li>S1 support: ${esc(s1?.confidence ?? '—')} · ${esc(s1?.confidence_type || '—')}</li>
+      <li>D1 decision: ${esc(d1?.decision_status || '—')} · domain=${esc(d1?.domain || result.domain || '—')}</li>
+      <li>F1 scenario: ${esc(scenario || '—')} · OPEN=${esc(score.open || 0)} · ABSTAINED=${esc(score.abstained || 0)} · RESOLVED=${esc(score.resolved || 0)}</li>
+      <li>Citations: ${esc((result?.citations || []).length)} verified · Evidence: ${esc((result?.evidence || []).length)}</li>
+    </ul></div>
+    ${limitations.length ? `<div class="output-section"><h4>Limitations</h4><ul>${limitations.slice(0,4).map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    <div class="final-card"><strong>Final Result</strong><pre>${esc(pretty({scenario, decision_status: d1?.decision_status, confidence: d1?.confidence, scoreboard: score, revision: pack?.revision}))}</pre></div>`;
+}
+
+function renderEvidence(result) {
+  const evidence = result?.evidence || [];
+  const citations = result?.citations || [];
+  const quality = result?.research_synthesis?.quality || result?.results?.S1?.quality || {};
+  el.evidenceKpi.textContent = `${evidence.length} Evidence`;
+  if (state.evidenceTab === 'citations') {
+    el.evidenceContent.innerHTML = citations.length ? `<div class="evidence-list">${citations.map((c) => `<div class="evidence-card"><div class="evidence-card-head"><strong>${esc(c.citation || c.evidence_id)}</strong>${pill('VERIFIED')}</div><small>${esc(c.publisher || '')} · ${esc(c.title || '')}</small><small>${esc(c.evidence_id)}</small></div>`).join('')}</div>` : '<div class="empty">暂无 Citation。</div>';
+    return;
+  }
+  if (state.evidenceTab === 'quality') {
+    const rows = quality.evidence_quality || [];
+    const relations = quality.relations || [];
+    el.evidenceContent.innerHTML = rows.length ? `<div class="quality-bars">${rows.map((row) => {
+      const score = Number(row.quality_score || 0);
+      return `<div class="quality-row"><span>${esc(row.evidence_id)}</span><span class="bar ${score < .65 ? 'amber' : ''}"><i style="width:${Math.round(score*100)}%"></i></span><strong>${esc(row.quality_score)}</strong></div>`;
+    }).join('')}</div><div class="evidence-list" style="margin-top:10px">${relations.map((rel) => `<div class="evidence-card"><div class="evidence-card-head"><strong>${esc(rel.relation)}</strong>${pill(rel.relation === 'CONTRADICTION' ? 'WARNING' : 'OK')}</div><small>${esc(rel.detail || '')}</small></div>`).join('')}</div>` : '<div class="empty">暂无 Quality assessment。</div>';
+    return;
+  }
+  const qRows = quality.evidence_quality || [];
+  const qById = Object.fromEntries(qRows.map((q) => [q.evidence_id, q]));
+  const high = qRows.filter((q) => q.quality_label === 'HIGH').length;
+  const medium = qRows.filter((q) => q.quality_label === 'MEDIUM').length;
+  const low = qRows.filter((q) => q.quality_label === 'LOW').length;
+  el.evidenceContent.innerHTML = `
+    <div class="evidence-summary">
+      <div class="evidence-stat"><strong>${evidence.length}</strong><span>总证据</span></div>
+      <div class="evidence-stat"><strong>${citations.length}</strong><span>Verified</span></div>
+      <div class="evidence-stat"><strong>${high}</strong><span>高质量</span></div>
+      <div class="evidence-stat"><strong>${medium}</strong><span>中等</span></div>
+      <div class="evidence-stat"><strong>${low}</strong><span>低质量</span></div>
+    </div>
+    ${evidence.length ? `<div class="evidence-list">${evidence.map((item) => {
+      const q = qById[item.evidence_id] || {};
+      return `<div class="evidence-card"><div class="evidence-card-head"><strong>${esc(item.claim || item.evidence_id)}</strong>${pill(q.quality_label || 'EVIDENCE')}</div><small>${esc(item.provider || item.source?.publisher || '')} · as_of ${esc(item.as_of || '—')} · ${esc(item.unit || '')}</small><small>${esc(item.evidence_id)} · value ${esc(item.value)}</small></div>`;
+    }).join('')}</div>` : '<div class="empty">暂无 Evidence。</div>'}`;
+}
+
+function renderForecastTable(pack) {
+  const rows = pack?.forecasts || [];
+  el.trackingScenario.textContent = pack?.scenario_tracker?.current_state || '—';
+  el.trackingForecasts.textContent = String(rows.length);
   if (!rows.length) {
-    qualityDetail.innerHTML += '<div class="empty-state">No quality assessment.</div>';
+    el.forecastBody.innerHTML = '<tr><td colspan="6" class="empty">暂无 Forecast。</td></tr>';
     return;
   }
-  rows.forEach((row) => {
-    const dims = row.dimensions || {};
-    qualityDetail.innerHTML += `<article class="eval-check-card pass"><strong>${esc(row.evidence_id)} · ${esc(row.quality_label)}</strong><span>score ${esc(row.quality_score)}</span><span>authority ${esc(dims.authority)} · freshness ${esc(dims.freshness)} · completeness ${esc(dims.completeness)} · relevance ${esc(dims.relevance)}</span><span>${esc(row.direction)} · ${esc((row.freshness || {}).status)}</span></article>`;
-  });
-  (quality.relations || []).forEach((rel) => {
-    qualityDetail.innerHTML += `<article class="eval-check-card ${rel.relation === 'CONTRADICTION' ? 'fail' : 'pass'}"><strong>${esc(rel.relation)}</strong><span>${esc((rel.evidence_ids || []).join(' ↔ '))}</span><span>${esc(rel.detail)}</span></article>`;
-  });
+  el.forecastBody.innerHTML = rows.map((item) => {
+    const ev = item.evaluation || {};
+    return `<tr><td>${esc(item.forecast_id)}</td><td>${esc(item.target_evidence_id)}</td><td>${esc(item.expected_direction || 'ABSTAIN')}</td><td>${esc(item.due_date || '—')}</td><td>${pill(item.status)}</td><td>${pill(ev.outcome || ev.status || '—')}</td></tr>`;
+  }).join('');
 }
 
-function renderDomain(result) {
-  const d1 = result.domain_brief || (result.results || {}).D1 || {};
-  const sections = d1.sections || {};
-  domainDetail.innerHTML = `<div class="citation-head"><span class="kicker">D1 · ${esc(String(d1.domain || '').toUpperCase())} BRIEF</span><strong>${esc(d1.decision_status || '—')}</strong></div>`;
-  domainDetail.innerHTML += `<article class="eval-check-card pass"><strong>Executive Summary</strong><span>${esc(sections.executive_summary || d1.answer || '')}</span><span>confidence ${esc(d1.confidence)} · ${esc(d1.confidence_type)}</span></article>`;
-  const preferred = d1.domain === 'investment'
-    ? ['thesis', 'market_channels', 'base_case', 'upside_inflation_scenario', 'downside_inflation_scenario', 'counterevidence', 'what_would_change_the_view', 'monitoring_signals', 'limitations']
-    : ['policy_problem', 'evidence_posture', 'options', 'tradeoffs', 'counterevidence', 'what_would_change_the_view', 'monitoring_signals', 'limitations'];
-  preferred.forEach((key) => {
-    if (!(key in sections)) return;
-    const card = document.createElement('article');
-    card.className = 'eval-check-card pass';
-    card.innerHTML = `<strong>${esc(key)}</strong><pre><code>${esc(pretty(sections[key]))}</code></pre>`;
-    domainDetail.appendChild(card);
-  });
-}
-
-function renderForecast(pack) {
-  if (!pack || pack.artifact_type !== 'forecast_pack') {
-    forecastDetail.innerHTML = '<div class="citation-head"><span class="kicker">F1 · FORECAST TRACKER</span><strong>—</strong></div><div class="empty-state">No forecast pack.</div>';
+function renderEval(suite) {
+  state.suite = suite || null;
+  if (!suite) {
+    el.evalSummary.textContent = '未运行'; el.evalSummary.className = 'pill neutral';
+    el.evalGrid.innerHTML = ['Query / Blueprint Contract','Evidence Lineage','Domain Discipline','Forecast Verifiability'].map((x) => `<div class="eval-item"><span>${x}</span><span class="pill neutral">—</span></div>`).join('');
     return;
   }
-  const tracker = pack.scenario_tracker || {};
-  const score = pack.scoreboard || {};
-  forecastDetail.innerHTML = `
-    <div class="citation-head"><span class="kicker">F1 · ${esc(pack.pack_id)}</span><strong>${esc(tracker.current_state || '—')}</strong></div>
-    <article class="eval-check-card pass">
-      <strong>Scoreboard</strong>
-      <span>OPEN ${esc(score.open || 0)} · ABSTAINED ${esc(score.abstained || 0)} · RESOLVED ${esc(score.resolved || 0)}</span>
-      <span>HIT ${esc(score.hits || 0)} · MISS ${esc(score.misses || 0)} · historical directional accuracy ${esc(score.directional_accuracy ?? '—')}</span>
-      <span>${esc(score.accuracy_type || '')}</span>
-    </article>`;
-
-  (pack.forecasts || []).forEach((item) => {
-    const evaluation = item.evaluation || {};
-    const failed = evaluation.outcome === 'MISS' || item.abstain_reason === 'same_claim_contradiction';
-    const card = document.createElement('article');
-    card.className = `eval-check-card ${failed ? 'fail' : 'pass'}`;
-    card.innerHTML = `
-      <strong>${esc(item.forecast_id)} · ${esc(item.status)} · ${esc(item.target_evidence_id)}</strong>
-      <span>${esc(item.claim)}</span>
-      <span>metric ${esc(item.target_metric)} · baseline ${esc(item.baseline_metric_value)} · expected ${esc(item.expected_direction || '—')}</span>
-      <span>created ${esc(item.created_at)} · due ${esc(item.due_date)} · horizon ${esc(item.horizon_days)}d</span>
-      <span>support ${esc(item.support_score)} · ${esc(item.support_score_type)}</span>
-      ${item.abstain_reason ? `<span>abstain: ${esc(item.abstain_reason)}</span>` : ''}
-      ${Object.keys(evaluation).length ? `<pre><code>${esc(pretty(evaluation))}</code></pre>` : ''}`;
-    forecastDetail.appendChild(card);
-  });
-
-  const revision = pack.revision || {};
-  forecastDetail.innerHTML += `<article class="eval-check-card ${revision.required ? 'fail' : 'pass'}"><strong>Revision ${revision.required ? 'REQUIRED' : 'not required'}</strong><pre><code>${esc(pretty(revision.reasons || []))}</code></pre></article>`;
-  forecastDetail.innerHTML += `<article class="eval-check-card pass"><strong>Scenario History</strong><pre><code>${esc(pretty(tracker.history || []))}</code></pre></article>`;
+  el.evalSummary.textContent = `${suite.passed}/${suite.total} PASS`;
+  el.evalSummary.className = `pill ${suite.pass_rate === 1 ? 'pass' : 'fail'}`;
+  el.evalGrid.innerHTML = (suite.cases || []).map((entry) => {
+    const report = entry.report || {};
+    const failed = (report.checks || []).filter((x) => !x.passed).length;
+    return `<div class="eval-item"><span>${esc(report.case_id || entry.case?.case_id || 'Eval')}</span>${pill(report.passed ? 'PASS' : `FAIL ${failed}`)}</div>`;
+  }).join('');
 }
 
-function renderSummary(result, packOverride = null) {
-  const trace = result.trace || {};
-  const pack = packOverride || result.forecast_pack || result.final_artifact || {};
-  evidenceCount.textContent = String((result.evidence || []).length);
-  traceKpi.textContent = trace.trace_id ? 'TRACE ✓' : '—';
-  evalKpi.textContent = String(result.domain || 'R7').toUpperCase();
-  finalResult.textContent = ((pack.scenario_tracker || {}).current_state) || (result.ok ? 'DONE' : 'FAILED');
-  modeLabel.textContent = `R7 · ${String(result.domain || '').toUpperCase()}`;
-  modeHelp.textContent = 'F1 converts grounded S1/D1 outputs into explicit forecasts that can later be checked and revised.';
-  runKicker.textContent = 'R7 PROCESS';
-  runTitle.textContent = 'Evidence → S1 → D1 → F1 → Track';
+function renderTracking(result, pack) {
+  el.trackingRunId.textContent = result?.execution_context?.trace_id || result?.reference_date || '—';
+  el.trackingScenario.textContent = pack?.scenario_tracker?.current_state || '—';
+  el.trackingEvidence.textContent = String((result?.evidence || []).length);
+  el.trackingForecasts.textContent = String((pack?.forecasts || []).length);
 }
 
-function eventMeta(event) {
-  if (event.type === 'research_question_received') return ['Research question', 'r7_planner.py', 'Question enters R7; domain is explicit but does not control source selection.'];
-  if (event.type === 'decomposition_created') return ['Research decomposition', 'r3_decomposition.py', 'Question becomes semantic source requirements.'];
-  if (event.type === 'queries_compiled') return ['Safe query compilation', 'r3_decomposition.py', 'Runtime-owned catalog resolves approved provider/series/tool.'];
-  if (event.type === 'domain_lens_selected') return ['Domain lens selected', 'r7_planner.py', 'Investment/Policy changes D1 only.'];
-  if (event.type === 'plan_created') return ['R7 DAG created', 'r7_planner.py', 'Queries feed S1, then D1, then F1.'];
-  if (event.type === 'evidence_registered') return ['Evidence registered', 'evidence.py', 'Source output becomes grounded Evidence before synthesis.'];
-  if (event.type === 'synthesis_verified') return ['Artifact citations verified', 'scheduler.py', 'S1, D1, and F1 must use Evidence IDs already present in EvidenceStore.'];
-  if (event.type === 'quality_assessed') return ['S1 Evidence quality', 'r5_quality.py', 'Evidence quality and contradictions are evaluated before forecasting.'];
-  if (event.type === 'domain_brief_created') return ['D1 Domain brief', 'r6_domain.py', 'D1 adds decision framing without new facts.'];
-  if (event.type === 'forecast_pack_created') return ['F1 Forecast pack', 'r7_forecast.py', 'Forecasts receive baseline, expected direction, horizon, due date, lineage, and invalidation rule.'];
-  if (event.type === 'forecast_pack_saved') return ['Forecast pack saved', 'r7_forecast.py', 'The pack survives process restart under .forecasts/.'];
-  if (event.type === 'task_started') return [`${event.task_id} started`, event.task_id === 'F1' ? 'r7_forecast.py' : 'scheduler.py', 'Task enters existing Runtime validation/policy/execution.'];
-  if (event.type === 'task_completed') return [`${event.task_id} completed`, event.task_id === 'F1' ? 'r7_forecast.py' : 'scheduler.py', 'Task output is recorded in plan state.'];
-  if (event.type === 'task_failed') return [`${event.task_id} failed`, 'scheduler.py', 'Failure stays attributable to a concrete task.'];
-  if (event.type === 'scheduler_tick') return ['Scheduler tick', 'scheduler.py', 'Dependency-satisfied tasks become READY.'];
-  if (event.type === 'plan_completed') return ['R7 completed', 'scheduler.py', 'Final F1 artifact is returned with citations to original Evidence.'];
-  if (event.type === 'task_runtime_event') return [`${event.task_id} · ${(event.event || {}).type}`, 'agent.py', 'Runtime still owns validation, policy, retry, and execution.'];
-  return [event.type, 'serve_visualizer.py', 'R7 event.'];
+function renderLogic() {
+  const meta = STEP_META[state.selectedStep] || STEP_META.Q;
+  el.selectedStep.textContent = meta.title;
+  const payload = meta.payload(state.result || {});
+  if (state.logicTab === 'payload') el.logicCode.textContent = pretty(payload);
+  else el.logicCode.textContent = `# ${meta.file}\n\n${meta.code}`;
+  el.logicNote.innerHTML = `<strong>为什么：</strong>${esc(meta.why)}<br><strong>组件：</strong>${esc(meta.file)}`;
+  $$('.flow-node').forEach((node) => node.classList.toggle('active', node.dataset.step === state.selectedStep));
 }
 
-function buildRunSteps(result) {
-  return (result.events || []).filter(meaningful).map((event) => ({type: 'run', event}));
-}
-
-function buildEvalSteps(suite) {
-  const rows = [];
-  (suite.cases || []).forEach((entry) => {
-    (entry.process || []).forEach((event) => rows.push({type: 'eval', event, entry}));
-  });
-  return rows;
-}
-
-function renderTimeline(items, activeIndex) {
-  timeline.innerHTML = '';
-  items.forEach((item, index) => {
-    const event = item.event;
-    const label = item.type === 'eval'
-      ? (event.type === 'eval_check' ? `${event.passed ? '✓' : '✕'} ${event.label}` : `${event.case_id} · ${event.type}`)
-      : eventMeta(event)[0];
-    const li = document.createElement('li');
-    li.className = index === activeIndex ? 'running' : index < activeIndex ? 'completed' : '';
-    li.innerHTML = `<div class="timeline-index">${index + 1}</div><div><strong>${esc(label)}</strong><span>${esc(event.task_id || event.case_id || event.type)}</span></div>`;
-    timeline.appendChild(li);
-  });
-}
-
-function showStep(index) {
-  if (!stepItems.length) return;
-  stepIndex = Math.max(0, Math.min(index, stepItems.length - 1));
-  const item = stepItems[stepIndex];
-  const event = item.event;
-  renderTimeline(stepItems, stepIndex);
-  eventCounter.textContent = `${stepIndex + 1} / ${stepItems.length}`;
-
-  if (item.type === 'eval') {
-    const label = event.type === 'eval_check' ? event.label : `${event.case_id} · ${event.type}`;
-    currentAction.innerHTML = `<strong>${esc(label)}</strong><span>${event.type === 'eval_check' ? esc(event.passed ? 'Actual satisfies expected contract.' : event.failure) : 'R7 eval process event.'}</span>`;
-    codeTitle.textContent = label;
-    codeFile.textContent = 'r7_evals.py';
-    codePanel.textContent = pretty(event);
-    explainBody.innerHTML = event.type === 'eval_check'
-      ? `<p><strong>${event.passed ? 'PASS' : 'FAIL'}</strong> · Actual=${esc(pretty(event.actual))} · Expected=${esc(pretty(event.expected))}</p>`
-      : '<p>Eval keeps expected contracts separate from the research run being judged.</p>';
-    rawEvent.textContent = pretty(event);
-    return;
-  }
-
-  const [label, file, explanation] = eventMeta(event);
-  currentAction.innerHTML = `<strong>${esc(label)}</strong><span>${esc(explanation)}</span>`;
-  codeTitle.textContent = label;
-  codeFile.textContent = file;
-  codePanel.textContent = pretty(event);
-  explainBody.innerHTML = `<p>${esc(explanation)}</p>`;
-  rawEvent.textContent = pretty(event);
+function renderAll(result, packOverride = null, options = {}) {
+  state.result = result;
+  state.pack = packOverride || result?.forecast_pack || result?.results?.F1 || null;
+  renderVisibleInput(result);
+  renderFlow(result, Boolean(options.evalMode));
+  renderTrace(result);
+  renderEvidence(result);
+  renderOutput(result, state.pack, Boolean(options.checkMode));
+  renderForecastTable(state.pack);
+  renderTracking(result, state.pack);
+  renderLogic();
+  if (!options.evalMode) renderEval(null);
 }
 
 function renderFailure(result) {
-  const error = result.error || {};
-  planStatus.textContent = 'failed';
-  planBadge.textContent = 'FAILED';
-  finalResult.textContent = 'FAILED';
-  citationTitle.textContent = error.provider || result.stage || 'ERROR';
-  citationList.innerHTML = `<article class="eval-check-card fail"><strong>${esc(error.task_id || error.code || 'error')}</strong><span>${esc(error.message || pretty(error))}</span>${error.missing_env ? `<span>Missing: ${esc(error.missing_env.join(', '))}</span>` : ''}</article>`;
+  const err = result?.error || {};
+  const message = err.message || (typeof err === 'string' ? err : pretty(err));
+  el.runStatus.textContent = 'FAILED'; el.runStatus.className = 'pill fail';
+  el.outputBody.innerHTML = `<div class="output-section"><h4>运行失败</h4><p>${esc(message)}</p></div><div class="final-card"><strong>${esc(err.code || result?.stage || 'ERROR')}</strong><pre>${esc(pretty(err))}</pre></div>`;
 }
 
-function renderRun(result, packOverride = null) {
-  mode = 'run';
-  renderPlan(result);
-  renderSummary(result, packOverride);
-  renderCitations(result);
-  renderQuality(result);
-  renderDomain(result);
-  renderForecast(packOverride || result.forecast_pack || result.final_artifact);
-  runtimeDetail.textContent = pretty({blueprint: result.blueprint, results: result.results, forecast_pack: packOverride || result.forecast_pack});
-  traceDetail.textContent = pretty(result.trace || {});
-  evalDetail.textContent = '{}';
-  if (!result.ok) renderFailure(result);
-  stepItems = buildRunSteps(result);
-  if (stepItems.length) showStep(0);
-}
-
-function renderEval(payload) {
-  mode = 'eval';
-  const suite = payload.eval_suite || {};
-  const result = payload.research_result || {};
-  renderSummary(result);
-  renderCitations(result);
-  renderQuality(result);
-  renderDomain(result);
-  renderForecast(result.forecast_pack || result.final_artifact);
-  leftKicker.textContent = 'R7 EVALS';
-  leftTitle.textContent = 'Blueprint · S1 · D1 · F1';
-  legend.style.display = 'none';
-  dagHint.innerHTML = '<span>Research</span><span>→</span><span>Domain</span><span>→</span><span>Forecast</span><span>→</span><span>Verdict</span>';
-  planList.innerHTML = '';
-  (suite.cases || []).forEach((entry) => {
-    const report = entry.report || {};
-    const checks = report.checks || [];
-    const card = document.createElement('article');
-    card.className = `task-card ${report.passed ? 'completed' : 'failed'}`;
-    card.innerHTML = `<div class="task-head"><span class="task-id">R7</span><span class="status-chip ${report.passed ? 'completed' : 'failed'}">${report.passed ? 'PASS' : 'FAIL'}</span></div><strong>${esc(entry.case.case_id)}</strong><small>${checks.filter((c) => c.passed).length}/${checks.length} checks</small>`;
-    planList.appendChild(card);
-  });
-  planStatus.textContent = 'r7 evals';
-  planProgress.textContent = `${suite.passed || 0} / ${suite.total || 0}`;
-  planBadge.textContent = suite.passed === suite.total ? 'PASS' : 'FAIL';
-  planBadge.className = `badge ${suite.passed === suite.total ? 'completed' : 'neutral'}`;
-  evalKpi.textContent = `${Math.round((suite.pass_rate || 0) * 100)}%`;
-  evalDetail.textContent = pretty(suite);
-  runtimeDetail.textContent = pretty(result);
-  traceDetail.textContent = pretty(result.trace || {});
-  stepItems = buildEvalSteps(suite);
-  if (stepItems.length) showStep(0);
-}
-
-function stopAuto() {
-  if (autoTimer) clearInterval(autoTimer);
-  autoTimer = null;
-  autoButton.textContent = '自动';
-}
-
-prevButton.addEventListener('click', () => { stopAuto(); showStep(stepIndex - 1); });
-nextButton.addEventListener('click', () => { stopAuto(); showStep(stepIndex + 1); });
-autoButton.addEventListener('click', () => {
-  if (autoTimer) { stopAuto(); return; }
-  autoButton.textContent = '停止';
-  autoTimer = setInterval(() => {
-    if (stepIndex >= stepItems.length - 1) { stopAuto(); return; }
-    showStep(stepIndex + 1);
-  }, 900);
-});
-resetButton.addEventListener('click', () => {
-  stopAuto();
-  stepIndex = -1;
-  stepItems = [];
-  timeline.innerHTML = '<li class="empty-state">等待新的 R7 run / eval。</li>';
-  eventCounter.textContent = '尚未运行';
-  currentAction.innerHTML = '<strong>等待运行</strong><span>Forecast 必须可结算；允许 ABSTAIN。</span>';
-  rawEvent.textContent = '{}';
-});
-
-runButton.addEventListener('click', async () => {
-  stopAuto();
-  runButton.disabled = true;
-  const original = runButton.textContent;
-  runButton.textContent = '运行中…';
+async function runResearch() {
+  const cfg = currentConfig();
+  if (!cfg.goal) return toast('请输入研究问题', 'error');
+  setBusy(el.run, true, '运行中…');
+  el.runStatus.textContent = 'RUNNING'; el.runStatus.className = 'pill running';
+  $$('.flow-node').forEach((n) => n.classList.add('loading-shimmer'));
+  renderVisibleInput();
   try {
-    const result = await post({
-      action: 'r7_run',
-      goal: goalInput.value,
-      domain: domainInput.value,
-      context_preset: contextPreset.value,
-    });
-    renderRun(result);
-    const packId = (result.forecast_pack || {}).pack_id;
-    await loadForecastPacks(packId);
-  } catch (error) {
-    renderFailure({error: {code: 'frontend_error', message: error.message}});
-  } finally {
-    runButton.disabled = false;
-    runButton.textContent = original;
-  }
-});
-
-evalButton.addEventListener('click', async () => {
-  stopAuto();
-  evalButton.disabled = true;
-  const original = evalButton.textContent;
-  evalButton.textContent = '评测中…';
-  try {
-    const payload = await post({
-      action: 'r7_evals',
-      goal: goalInput.value,
-      domain: domainInput.value,
-      context_preset: contextPreset.value,
-    });
-    renderEval(payload);
-  } catch (error) {
-    renderFailure({error: {code: 'frontend_error', message: error.message}});
-  } finally {
-    evalButton.disabled = false;
-    evalButton.textContent = original;
-  }
-});
-
-checkForecastButton.addEventListener('click', async () => {
-  stopAuto();
-  const packId = forecastPackInput.value;
-  if (!packId) {
-    currentAction.innerHTML = '<strong>没有 Forecast Pack</strong><span>先运行 R7 研究，或从 Saved Forecast 选择一个历史 pack。</span>';
-    return;
-  }
-  checkForecastButton.disabled = true;
-  const original = checkForecastButton.textContent;
-  checkForecastButton.textContent = '检查中…';
-  try {
-    const payload = await post({
-      action: 'r7_check',
-      pack_id: packId,
-      context_preset: contextPreset.value,
-    });
-    if (!payload.ok) {
-      const result = payload.research_result || {error: payload.error || {code: 'check_failed', message: 'Forecast check failed'}};
-      renderFailure(result);
-      return;
+    const result = await post({action: 'r7_run', ...cfg});
+    $$('.flow-node').forEach((n) => n.classList.remove('loading-shimmer'));
+    renderAll(result);
+    if (!result.ok) renderFailure(result);
+    else {
+      await loadForecastPacks(result.forecast_pack?.pack_id);
+      toast('R7 研究完成，Forecast Pack 已保存');
     }
-    const result = payload.research_result || {};
-    renderRun(result, payload.forecast_pack);
-    modeLabel.textContent = 'R7 · FORECAST CHECK';
-    modeHelp.textContent = 'Saved forecast is checked against a fresh grounded S1; forecasts remain pending until due and a newer observation exists.';
-    currentAction.innerHTML = `<strong>${esc(packId)} checked</strong><span>${esc((payload.forecast_pack || {}).answer || '')}</span>`;
-    await loadForecastPacks(packId);
   } catch (error) {
-    renderFailure({error: {code: 'frontend_error', message: error.message}});
-  } finally {
-    checkForecastButton.disabled = false;
-    checkForecastButton.textContent = original;
-  }
+    $$('.flow-node').forEach((n) => n.classList.remove('loading-shimmer'));
+    toast(error.message, 'error');
+  } finally { setBusy(el.run, false); }
+}
+
+async function runEvals() {
+  const cfg = currentConfig();
+  if (!cfg.goal) return toast('请输入研究问题', 'error');
+  setBusy(el.eval, true, '评估中…');
+  try {
+    const payload = await post({action: 'r7_evals', ...cfg});
+    const result = payload.research_result || {};
+    renderAll(result, result.forecast_pack || result.results?.F1, {evalMode: true});
+    renderEval(payload.eval_suite || {});
+    state.selectedStep = 'EV'; renderLogic();
+    if (!result.ok) renderFailure(result);
+    else toast(`Evals: ${(payload.eval_suite || {}).passed || 0}/${(payload.eval_suite || {}).total || 0} PASS`);
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(el.eval, false); }
+}
+
+async function checkForecast() {
+  const packId = el.packSelect.value;
+  if (!packId) return toast('请选择 Saved Forecast', 'error');
+  setBusy(el.check, true, '检查中…');
+  try {
+    const payload = await post({action: 'r7_check', pack_id: packId, context_preset: el.context.value});
+    const result = payload.research_result || {};
+    if (!payload.ok) {
+      renderAll(result || {}, payload.forecast_pack || null, {checkMode: true});
+      renderFailure(payload);
+      return toast(payload.error?.message || 'Forecast check failed', 'error');
+    }
+    renderAll(result, payload.forecast_pack, {checkMode: true});
+    state.selectedStep = 'EV'; renderLogic();
+    await loadForecastPacks(packId);
+    toast('Forecast 已用最新 grounded Evidence 检查');
+  } catch (error) { toast(error.message, 'error'); }
+  finally { setBusy(el.check, false); }
+}
+
+async function runHealth() {
+  setBusy(el.health, true, '检查中…');
+  if (el.healthRefresh) setBusy(el.healthRefresh, true, '…');
+  try {
+    const payload = await post({action: 'source_health'});
+    const report = payload.source_health || {};
+    const rows = report.results || [];
+    el.healthList.innerHTML = rows.map((row) => `<div class="health-row"><span class="health-name">${esc(row.provider)}</span><span class="health-meta">${esc(row.latency_ms ?? '—')} ms</span>${pill(row.status)}</div>`).join('') || '<div class="empty">无 health result。</div>';
+    el.healthChecked.textContent = `checked ${report.checked_at || 'now'} · ${report.ready_count || 0}/${report.total || 0} READY`;
+    el.systemStatus.textContent = report.ready ? 'ALL SYSTEMS OPERATIONAL' : 'SOURCE DEGRADED';
+    toast(report.ready ? '数据源全部 READY' : '部分数据源需要处理', report.ready ? 'ok' : 'error');
+  } catch (error) { el.systemStatus.textContent = 'HEALTH CHECK FAILED'; toast(error.message, 'error'); }
+  finally { setBusy(el.health, false); if (el.healthRefresh) setBusy(el.healthRefresh, false); }
+}
+
+function exportJson() {
+  if (!state.result && !state.pack && !state.suite) return toast('当前没有可导出的结果', 'error');
+  const blob = new Blob([pretty({research_result: state.result, forecast_pack: state.pack, eval_suite: state.suite})], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `agent-research-${Date.now()}.json`; a.click();
+  URL.revokeObjectURL(url); toast('JSON 已导出');
+}
+
+async function copyOutput() {
+  const text = el.outputBody.innerText.trim();
+  if (!text) return toast('当前没有输出', 'error');
+  try { await navigator.clipboard.writeText(text); toast('输出已复制'); }
+  catch { toast('浏览器未允许复制', 'error'); }
+}
+
+$$('.flow-node').forEach((node) => node.addEventListener('click', () => { state.selectedStep = node.dataset.step; renderLogic(); }));
+$$('[data-logic-tab]').forEach((tab) => tab.addEventListener('click', () => {
+  state.logicTab = tab.dataset.logicTab;
+  $$('[data-logic-tab]').forEach((x) => x.classList.toggle('active', x === tab));
+  renderLogic();
+}));
+$$('[data-evidence-tab]').forEach((tab) => tab.addEventListener('click', () => {
+  state.evidenceTab = tab.dataset.evidenceTab;
+  $$('[data-evidence-tab]').forEach((x) => x.classList.toggle('active', x === tab));
+  renderEvidence(state.result || {});
+}));
+
+el.run.addEventListener('click', runResearch);
+el.eval.addEventListener('click', runEvals);
+el.check.addEventListener('click', checkForecast);
+el.health.addEventListener('click', runHealth);
+el.healthRefresh.addEventListener('click', runHealth);
+el.export.addEventListener('click', exportJson);
+el.copyOutput.addEventListener('click', copyOutput);
+el.refreshPacks.addEventListener('click', () => loadForecastPacks());
+el.quickRerun.addEventListener('click', runResearch);
+el.quickEval.addEventListener('click', runEvals);
+el.quickCheck.addEventListener('click', checkForecast);
+el.quickExport.addEventListener('click', exportJson);
+el.goal.addEventListener('input', () => renderVisibleInput());
+el.domain.addEventListener('change', () => renderVisibleInput());
+el.context.addEventListener('change', () => renderVisibleInput());
+el.packSelect.addEventListener('change', () => renderVisibleInput());
+
+document.addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') runResearch();
 });
 
+renderVisibleInput();
+renderLogic();
+renderEval(null);
 loadForecastPacks();
