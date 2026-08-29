@@ -3,145 +3,119 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Research Workbench · R6</title>
-  <link rel="stylesheet" href="styles.css" />
-  <link rel="stylesheet" href="eval.css" />
-  <link rel="stylesheet" href="r2.css" />
-  <link rel="stylesheet" href="r3.css" />
+  <title>Agent Research Workbench · R7 UI V3</title>
+  <link rel="stylesheet" href="r7_v3.css" />
+  <link rel="stylesheet" href="r7_v3_stream.css" />
 </head>
 <body>
-  <main class="app-shell">
+  <div id="app" class="app">
     <header class="topbar">
       <div class="brand">
-        <span class="version">R6</span>
-        <div>
-          <strong>Investment & Policy Research Synthesis</strong>
-          <small>Source Health · Dynamic Queries · Evidence Quality · S1 Research · D1 Domain Brief · Domain Evals</small>
-        </div>
+        <div class="logo">A</div>
+        <strong>Agent Research Workbench</strong>
+        <span class="version">R7</span>
       </div>
-      <div class="principle">Evidence → S1 Research → D1 Decision Lens</div>
+      <div class="top-actions">
+        <div class="system"><i></i><span>系统状态</span><strong id="system-status-text">SYSTEM READY</strong></div>
+        <button class="top-icon" title="Help">?</button>
+        <button class="top-icon" title="Activity">◔</button>
+        <div class="user"><div class="avatar">AR</div><span>Analyst</span><span>⌄</span></div>
+      </div>
     </header>
 
-    <section class="controlbar">
-      <label class="goal-field">
-        <span>Research Question</span>
-        <input id="goal" value="Assess current inflation pressure using headline CPI, core CPI, market inflation expectations, and gasoline prices." />
-      </label>
-      <label class="compact-field">
-        <span>Domain</span>
-        <select id="domain">
-          <option value="investment">Investment</option>
-          <option value="policy">Policy</option>
-        </select>
-      </label>
-      <label class="compact-field">
-        <span>Identity</span>
-        <select id="context-preset">
-          <option value="general">macro-research-agent</option>
-          <option value="read_only">read-only-agent</option>
-        </select>
-      </label>
-      <button id="health-btn">测试数据源 API</button>
-      <button id="run-btn" class="primary">运行 R6 研究</button>
-      <button id="eval-btn">运行 R6 Evals</button>
-      <div class="step-controls">
-        <button id="prev-btn">←</button>
-        <button id="next-btn">→</button>
-        <button id="auto-btn">自动</button>
-        <button id="reset-btn">重置</button>
+    <aside class="sidebar">
+      <nav class="nav">
+        <button class="nav-btn active" data-nav="workbench"><span class="nav-ico">⌂</span><span class="nav-label">工作台</span></button>
+        <button class="nav-btn" data-nav="architecture"><span class="nav-ico">◫</span><span class="nav-label">项目设计</span></button>
+        <button class="nav-btn" data-nav="sources"><span class="nav-ico">◉</span><span class="nav-label">数据源</span></button>
+        <button class="nav-btn" data-nav="tools"><span class="nav-ico">⌘</span><span class="nav-label">工具库</span></button>
+        <button class="nav-btn" data-nav="evidence"><span class="nav-ico">◇</span><span class="nav-label">Evidence</span></button>
+        <button class="nav-btn" data-nav="forecasts"><span class="nav-ico">↗</span><span class="nav-label">Forecasts</span></button>
+        <button class="nav-btn" data-nav="eval"><span class="nav-ico">✓</span><span class="nav-label">评估中心</span></button>
+        <button class="nav-btn" data-nav="trace"><span class="nav-ico">◎</span><span class="nav-label">Trace</span></button>
+        <button class="nav-btn" data-nav="checkpoints"><span class="nav-ico">◆</span><span class="nav-label">Checkpoints</span></button>
+        <button class="nav-btn" data-nav="settings"><span class="nav-ico">⚙</span><span class="nav-label">设置</span></button>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="health-mini">
+          <div class="health-mini-head"><span>Source Health</span><button id="health-btn" class="top-icon" style="color:#1769ff;width:24px;height:24px">↻</button></div>
+          <div class="health-mini-grid"><span id="health-bls" class="health-chip">BLS</span><span id="health-fred" class="health-chip">FRED</span><span id="health-eia" class="health-chip">EIA</span></div>
+        </div>
+        <button id="collapse-sidebar" class="collapse-btn">‹ <span class="collapse-label">收起</span></button>
       </div>
-    </section>
+    </aside>
 
-    <section class="summary-strip v11-summary">
-      <div><span>Status</span><strong id="plan-status">未运行</strong></div>
-      <div><span>Progress</span><strong id="plan-progress">0</strong></div>
-      <div><span>Evidence / Pass</span><strong id="evidence-count">0</strong></div>
-      <div><span>Trace</span><strong id="trace-kpi">—</strong></div>
-      <div><span>Domain / Eval</span><strong id="eval-kpi">R6</strong></div>
-      <div class="result-summary"><span>Final</span><strong id="final-result">—</strong></div>
-    </section>
-
-    <section class="studio">
-      <aside class="pane plan-pane">
-        <div class="pane-header">
-          <div><span id="left-kicker" class="kicker">R6 PLAN</span><h2 id="left-title">Queries → S1 → D1</h2></div>
-          <span id="plan-badge" class="badge neutral">planned</span>
+    <main class="workspace">
+      <section class="panel input-panel">
+        <div class="input-title">
+          <div><div class="kicker">Research Input</div><h2>文字输入窗口 / Research Question</h2></div>
+          <span id="input-output-hint" class="pill">Investment · macro-research-agent</span>
         </div>
-        <div id="dag-hint" class="dag-hint"><span>Q1..Qn</span><span>→</span><span>S1</span><span>→</span><span>D1</span></div>
-        <div id="plan-list" class="plan-list"><div class="empty-state">先测试数据源，或运行 R6 观察两层 synthesis。</div></div>
-        <div id="legend" class="legend">
-          <span><i class="dot ready"></i>READY</span>
-          <span><i class="dot running"></i>RUNNING</span>
-          <span><i class="dot blocked"></i>BLOCKED</span>
-          <span><i class="dot completed"></i>DONE</span>
+        <textarea id="goal" class="research-input" placeholder="请输入研究问题，例如：Assess current inflation pressure and forecast the next update.">Assess current inflation pressure using headline CPI, core CPI, market inflation expectations, and gasoline prices.</textarea>
+        <div class="config-actions">
+          <div class="field"><label for="domain">Domain Lens</label><select id="domain" class="control"><option value="investment">Investment</option><option value="policy">Policy</option></select></div>
+          <div class="field"><label for="context-preset">Execution Identity</label><select id="context-preset" class="control"><option value="general">macro-research-agent</option><option value="read_only">read-only-agent</option></select></div>
+          <div class="field"><label for="forecast-pack">Saved Forecast</label><select id="forecast-pack" class="control"><option value="">none</option></select></div>
+          <div class="actions">
+            <button id="run-btn" class="btn primary">▶ 运行研究</button>
+            <button id="eval-btn" class="btn">✓ Evals</button>
+            <button id="check-forecast-btn" class="btn">↻ Forecast</button>
+            <button id="export-btn" class="btn">⇩ JSON</button>
+          </div>
         </div>
-      </aside>
-
-      <section class="pane run-pane">
-        <div class="pane-header">
-          <div><span id="run-kicker" class="kicker">R6 PROCESS</span><h2 id="run-title">Evidence → Research → Decision Frame</h2></div>
-          <span id="event-counter" class="subtle">尚未运行</span>
-        </div>
-        <div id="mode-strip" class="mode-strip run-mode">
-          <strong id="mode-label">R6 DOMAIN SYNTHESIS</strong>
-          <span id="mode-help">S1 determines what the Evidence supports; D1 determines how to frame it for a domain</span>
-        </div>
-        <div id="current-action" class="current-action">
-          <strong>等待运行</strong>
-          <span>Investment / Policy 只改变 D1 lens，不改变前面的 Evidence collection。</span>
-        </div>
-        <ol id="timeline" class="timeline"><li class="empty-state">运行研究后观察 Q → Evidence → S1 → D1。</li></ol>
       </section>
 
-      <aside class="pane code-pane">
-        <div class="pane-header">
-          <div><span class="kicker">CODE</span><h2 id="code-title">对应代码</h2></div>
-          <span id="code-file" class="file-pill">r6_domain.py</span>
+      <section class="panel execution">
+        <div class="execution-head">
+          <div class="execution-title"><h2>Agent 运行过程</h2><span id="run-status" class="pill">IDLE</span></div>
+          <div class="run-meta"><span id="visible-run-id">No active run</span><span id="run-id">Run —</span><span id="run-progress">0/0 tasks</span></div>
         </div>
-        <pre class="code-window"><code id="code-panel">等待执行事件…</code></pre>
-
-        <div class="explanation">
-          <span class="kicker">WHY / NEXT</span>
-          <div id="explain-body"><p>D1 只能消费 S1 已经 grounded 的结论，不能新抓数据、增加 Evidence ID 或提高 confidence。</p></div>
+        <div class="flow-scroll">
+          <div class="flow">
+            <article class="node selected" data-node="Q"><span class="node-index">1</span><strong class="node-name">Question</strong><span class="node-icon">?</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="DEC"><span class="node-index">2</span><strong class="node-name">Decomposition</strong><span class="node-icon">✣</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="QC"><span class="node-index">3</span><strong class="node-name">Query Compiler</strong><span class="node-icon">⌘</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="QN"><span class="node-index">4</span><strong class="node-name">Q1..Qn</strong><span class="node-icon">⌕</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="E"><span class="node-index">5</span><strong class="node-name">Evidence</strong><span class="node-icon">▤</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="S1"><span class="node-index">6</span><strong class="node-name">S1 Research</strong><span class="node-icon">⌁</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="D1"><span class="node-index">7</span><strong class="node-name">D1 Domain</strong><span class="node-icon">▧</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="F1"><span class="node-index">8</span><strong class="node-name">F1 Forecast</strong><span class="node-icon">↗</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="EV"><span class="node-index">9</span><strong class="node-name">Eval / Tracking</strong><span class="node-icon">✓</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+          </div>
         </div>
+      </section>
 
-        <section id="support-box" class="citation-box">
-          <div class="citation-head"><span id="support-kicker" class="kicker">CITATIONS / HEALTH</span><strong id="citation-title">尚未运行</strong></div>
-          <div id="citation-list" class="citation-list"><div class="empty-state">Research 模式显示 D1 仍然继承并验证的 citations。</div></div>
-        </section>
+      <section class="panel detail">
+        <div class="tabs">
+          <button class="tab detail-tab active" data-detail-tab="trace">Trace</button>
+          <button class="tab detail-tab" data-detail-tab="logic">Logic</button>
+          <button class="tab detail-tab" data-detail-tab="evidence">Evidence</button>
+          <button class="tab detail-tab" data-detail-tab="state">State</button>
+          <button class="tab detail-tab" data-detail-tab="checkpoint">Checkpoint</button>
+          <button class="tab detail-tab" data-detail-tab="architecture">Architecture</button>
+        </div>
+        <div id="detail-body" class="detail-body"><div class="empty">运行研究后显示 Trace / Logic / Evidence / State / Checkpoint。</div></div>
+      </section>
+    </main>
 
-        <section id="quality-detail" class="citation-box">
-          <div class="citation-head"><span class="kicker">S1 · EVIDENCE QUALITY</span><strong>等待研究</strong></div>
-          <div class="empty-state">显示 R5 authority / freshness / completeness / relevance 与 relations。</div>
-        </section>
+    <aside class="inspector">
+      <div class="inspector-tabs">
+        <button class="tab inspector-tab active" data-inspector-tab="output">Output</button>
+        <button class="tab inspector-tab" data-inspector-tab="checkpoint">Checkpoint</button>
+        <button class="tab inspector-tab" data-inspector-tab="eval">Eval</button>
+        <button class="tab inspector-tab" data-inspector-tab="json">JSON</button>
+        <button id="copy-output" class="tab" style="margin-left:auto;color:#1769ff">复制</button>
+      </div>
+      <div id="inspector-body" class="inspector-body"><div class="empty">输出窗口等待 Research Run。</div></div>
+    </aside>
 
-        <section id="domain-detail" class="citation-box">
-          <div class="citation-head"><span class="kicker">D1 · DOMAIN BRIEF</span><strong>等待研究</strong></div>
-          <div class="empty-state">Investment: thesis/scenarios/counterevidence；Policy: options/tradeoffs/counterevidence。</div>
-        </section>
-
-        <details class="details-box">
-          <summary>Trace spans / metrics</summary>
-          <pre><code id="trace-detail">{}</code></pre>
-        </details>
-        <details class="details-box">
-          <summary>R6 Eval report / suite</summary>
-          <pre><code id="eval-detail">{}</code></pre>
-        </details>
-        <details class="details-box">
-          <summary>Blueprint / Runtime / Artifacts</summary>
-          <pre><code id="runtime-detail">{}</code></pre>
-        </details>
-        <details class="details-box">
-          <summary>当前原始事件</summary>
-          <pre><code id="raw-event">{}</code></pre>
-        </details>
-      </aside>
-    </section>
-
-    <footer>R6 separates grounded research from domain framing. D1 inherits upstream Evidence IDs and confidence, performs no new source fetch, and uses qualitative scenarios rather than fabricated probabilities.</footer>
-  </main>
-  <script src="r6_app.js"></script>
-  <script src="r4_health.js"></script>
+    <footer class="statusbar">
+      <strong>R7</strong><span class="status-sep"></span><span>Current: <strong id="status-current">Question</strong></span><span>Tasks: <strong id="status-tasks">—</strong></span><span>Evidence: <strong id="status-evidence">0</strong></span><span>Trace: <strong id="status-trace">0</strong></span><span>Checkpoint: <strong id="status-checkpoint">—</strong></span><span class="status-hide-small">Last save: <strong id="status-save">—</strong></span><span class="status-hide-small">Source Health: <strong id="status-health">—</strong></span><span style="margin-left:auto">State shows NOW · Checkpoint shows WHAT SURVIVES DEATH</span>
+    </footer>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="r7_v3.js"></script>
+  <script src="r7_v3_stream.js"></script>
+  <script src="r7_v3_stream_polish.js"></script>
 </body>
 </html>
