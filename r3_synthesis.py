@@ -1,14 +1,16 @@
-"""R3 synthesis for a variable set of approved source queries.
+"""R5 synthesis for a variable set of approved source queries.
 
-This module consumes collected Evidence outputs, not source names hardcoded into
-one four-input function. It emits descriptive signals only and preserves the
-Evidence IDs required for citation verification.
+R3 introduced variable Evidence bundles. R5 adds explicit Evidence quality,
+provider-aware freshness, and source-relation analysis before a conclusion is
+formed. Support scores are teaching heuristics, not calibrated probabilities.
 """
 
 from __future__ import annotations
 
 import calendar
 from datetime import date
+
+from r5_quality import assess_evidence_quality
 
 
 def synthesize_research_bundle(question: str, evidence_bundle: list[dict], reference_date: str) -> dict:
@@ -21,7 +23,6 @@ def synthesize_research_bundle(question: str, evidence_bundle: list[dict], refer
     evidence_ids = []
     signals = []
     freshness = {}
-    confidences = []
 
     for item in evidence_bundle:
         if not isinstance(item, dict) or item.get("kind") != "evidence":
@@ -30,15 +31,17 @@ def synthesize_research_bundle(question: str, evidence_bundle: list[dict], refer
         if not isinstance(evidence_id, str) or not evidence_id:
             raise ValueError("Evidence record is missing evidence_id")
         evidence_ids.append(evidence_id)
-        confidences.append(float(item.get("confidence", 1.0)))
         freshness[evidence_id] = _freshness(item.get("as_of"), reference)
         signals.append(_signal(item))
+
+    quality = assess_evidence_quality(evidence_bundle, signals, reference_date)
 
     summary_parts = []
     for signal in signals:
         if signal["kind"] == "yoy":
+            direction = signal.get("direction", "unknown")
             summary_parts.append(
-                f"{signal['evidence_id']} YoY={signal['yoy_pct']:.2f}%"
+                f"{signal['evidence_id']} YoY={signal['yoy_pct']:.2f}% ({direction})"
             )
         elif signal["kind"] == "change":
             summary_parts.append(
@@ -49,26 +52,45 @@ def synthesize_research_bundle(question: str, evidence_bundle: list[dict], refer
                 f"{signal['evidence_id']} latest={signal.get('latest_value')}"
             )
 
+    relation_summary = quality["relation_summary"]
+    relation_text = (
+        f"relations: agreement={relation_summary['agreement']}, "
+        f"mixed={relation_summary['mixed_signal']}, "
+        f"contradiction={relation_summary['contradiction']}"
+    )
     answer = (
         f"Research question: {question} "
         + " | ".join(summary_parts)
-        + ". These are descriptive cross-source signals and not causal attribution."
+        + f". Evidence support={quality['support_label']} ({quality['support_score']:.3f}; heuristic, not probability); {relation_text}. "
+        + "These are descriptive cross-source signals and not causal attribution."
     )
+
+    limitations = [
+        "Different sources publish on different calendars and frequencies.",
+        "Cross-source co-movement is descriptive and not causal attribution.",
+        "Quality/support scores are deterministic heuristics, not calibrated probabilities of truth.",
+    ]
+    if relation_summary["mixed_signal"]:
+        limitations.append(
+            "Some indicators point in different directions; treat the macro signal as mixed rather than forcing one narrative."
+        )
+    if relation_summary["contradiction"]:
+        limitations.append(
+            "Comparable Evidence contains a contradiction; the conclusion requires reconciliation or additional Evidence."
+        )
 
     return {
         "kind": "synthesis",
         "answer": answer,
         "value": float(len(evidence_ids)),
         "unit": "evidence_records",
-        "confidence": min(confidences) if confidences else 0.0,
+        "confidence": quality["support_score"],
+        "confidence_type": quality["score_type"],
         "evidence_ids": evidence_ids,
         "signals": signals,
         "freshness": freshness,
-        "limitations": [
-            "Different sources publish on different calendars and frequencies.",
-            "Cross-source co-movement is descriptive and not causal attribution.",
-            "This R3 teaching synthesizer does not estimate causal contribution or forecast error bands.",
-        ],
+        "quality": quality,
+        "limitations": limitations,
     }
 
 
@@ -80,11 +102,14 @@ def _signal(item: dict) -> dict:
     if evidence_id.startswith("BLS:"):
         yoy = _bls_yoy(history)
         if yoy is not None:
+            trend = _bls_yoy_trend(history)
             return {
                 "evidence_id": evidence_id,
                 "kind": "yoy",
                 "latest_value": latest_value,
                 "yoy_pct": yoy,
+                "yoy_change_pp": trend["change_pp"] if trend else None,
+                "direction": trend["direction"] if trend else "unknown",
             }
 
     if len(history) >= 2:
@@ -105,13 +130,14 @@ def _signal(item: dict) -> dict:
         "evidence_id": evidence_id,
         "kind": "level",
         "latest_value": latest_value,
+        "direction": "unknown",
     }
 
 
-def _bls_yoy(history: list[dict]) -> float | None:
+def _bls_yoy(history: list[dict], index: int = -1) -> float | None:
     if not history:
         return None
-    latest = history[-1]
+    latest = history[index]
     year = latest.get("year")
     month = latest.get("month")
     latest_value = _history_value(latest)
@@ -129,6 +155,22 @@ def _bls_yoy(history: list[dict]) -> float | None:
     if prior_value in {None, 0}:
         return None
     return round((latest_value / prior_value - 1) * 100, 4)
+
+
+def _bls_yoy_trend(history: list[dict]) -> dict | None:
+    if len(history) < 2:
+        return None
+    current = _bls_yoy(history, -1)
+    previous = _bls_yoy(history, -2)
+    if current is None or previous is None:
+        return None
+    change = round(current - previous, 4)
+    return {
+        "current_yoy": current,
+        "previous_yoy": previous,
+        "change_pp": change,
+        "direction": "rising" if change > 0 else "falling" if change < 0 else "flat",
+    }
 
 
 def _history_value(row) -> float | None:
