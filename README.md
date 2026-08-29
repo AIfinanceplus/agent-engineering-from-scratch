@@ -1,181 +1,125 @@
 # Agent Engineering from Scratch
 
-A step-by-step learning repository that first builds an Agent Runtime from first principles, then turns it into a grounded investment / policy research Agent.
+A step-by-step repository for building an Agent Runtime and turning it into a grounded research Agent.
 
 ## Phase 1 — Runtime from scratch
 
-- V0 — Minimal Agent Loop
-- V0.1 — Replaceable Model Adapter
-- V0.2 — Visual Runtime Debugger
-- V1 — Tool Registry + Basic Validation
-- V2 — MAX_STEPS + Model Response Validation
-- V3 — Retry + Loop Detection
-- V4 — Tool Object
-- V5 — Policy Engine
-- V6 — ExecutionContext
-- V7 — StateStore
-- V8 — Checkpoint / Durable Execution
-- V9 — Planner + DAG Scheduler
-- V10 — Evidence / Synthesis / Citation
-- V11 — Tracing + Evals
+V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, ExecutionContext, StateStore, checkpointing, Planner/DAG Scheduler, Evidence/Citation, Tracing, and Evals.
 
 ## Phase 2 — Research Agent
 
-- R1 — Real Source Adapter: BLS CPI
-- **R2 — Multi-source macro evidence: BLS + FRED + EIA**
+- R1 — Real BLS source adapter
+- R2 — API-only multi-source macro research
 - R3 — Research decomposition + query generation
-- R4 — Source quality / contradiction handling
+- R4 — Source quality / freshness / contradiction
 - R5 — Investment & policy synthesis + domain evals
 
-## Current stage: R2 — Multi-Source Macro Research
+## Current stage: R2 — API-only multi-source macro research
 
-R1 proved one real-source path. R2 introduces a source plan with independent public-data adapters and a downstream synthesis that can only consume already-collected evidence.
+The active R2 application has one data path only:
 
 ```text
 Research Question
-       ↓
-MultiSourceMacroPlanner
-       ↓
-┌────────────┬────────────┬────────────┬────────────┐
-│ H1         │ C1         │ F1         │ G1         │
-│ BLS        │ BLS        │ FRED       │ EIA        │
-│ headline   │ core CPI   │ 5Y BEI     │ gasoline   │
-└─────┬──────┴─────┬──────┴─────┬──────┴─────┬──────┘
-      │ Evidence    │ Evidence    │ Evidence    │ Evidence
-      └─────────────┴──────┬──────┴─────────────┘
-                           ↓
-                          A1
-                 cross-source synthesis
-                           ↓
-             freshness + signals + limitations
-                           ↓
-                 verified 4-source citations
+      ↓
+APIMacroPlanner
+      ↓
+H1 BLS Headline CPI API
+C1 BLS Core CPI API
+F1 FRED 5Y Breakeven API
+G1 EIA Weekly Gasoline API
+      ↓
+A1 Cross-source synthesis
+      ↓
+EvidenceStore → Citations → Trace → API Evals
 ```
 
-### Responsibilities
+There is no user-visible Fixture/Live switch and no `mode` argument in the active R2 Planner or Tool schemas.
+
+### Active source routes
 
 ```text
-Source Adapter = fetch + normalize + provenance
-EvidenceStore  = register grounded source identity
-Analysis       = consume completed Evidence only
-Freshness      = compare each source's as-of clock
-Synthesis      = descriptive cross-source read
-Citation       = verify every claimed evidence ID
+BLS
+https://api.bls.gov/publicAPI/v1/timeseries/data/{series_id}
+
+FRED
+https://api.stlouisfed.org/fred/series/observations
+FRED_API_KEY required
+
+EIA
+https://api.eia.gov/v2/petroleum/pri/gnd/data/
+EIA_API_KEY required
 ```
 
-R2 deliberately does **not** infer causal CPI contributions from gasoline or breakeven co-movement. Those are descriptive signals only.
+The EIA adapter uses the current petroleum REST route with:
 
-## Source adapters
+```text
+frequency=weekly
+data[0]=value
+facets[series][]=EMM_EPMR_PTE_NUS_DPG
+sort by period desc
+length=8
+```
 
-### BLS
+FRED requests only a recent observation window instead of downloading the entire series history.
 
-R1's `BLSAdapter` remains the source for headline and core CPI.
+### Credentials
 
-### FRED
-
-`FREDAdapter` uses `fred/series/observations` in live mode and the `T5YIE` 5-year breakeven series in the first R2 plan.
-
-Live FRED requires:
+Set the keys in the shell before starting the workbench:
 
 ```bash
 export FRED_API_KEY="..."
-```
-
-### EIA
-
-`EIAAdapter` uses EIA API v2's `seriesid` compatibility route for the first gasoline series.
-
-Live EIA requires:
-
-```bash
 export EIA_API_KEY="..."
+python3 serve_visualizer.py
 ```
 
-### Credential rule
+Credentials are Runtime-owned. They do not enter Planner arguments, Tool arguments, Evidence, citations, or Trace.
 
-API keys are Runtime-owned configuration. They are never included in:
+### Failure behavior
+
+External API failure is no longer returned as a generic HTTP 500. `/api/run` returns HTTP 200 with a structured application result:
+
+```json
+{
+  "ok": false,
+  "stage": "source_or_runtime",
+  "error": {
+    "task_id": "G1",
+    "provider": "EIA",
+    "message": "..."
+  }
+}
+```
+
+This makes the failing provider visible in the UI and keeps web-server health separate from upstream data-source health.
+
+### API Evals
+
+The visible eval path uses only the R2 task names:
 
 ```text
-Tool arguments
-Plan fields
-ExecutionContext
-Evidence
-Trace events
-Citation metadata
+H1 / C1 / F1 / G1 / A1
 ```
 
-The adapters persist only public source pages / series identifiers, never the credential-bearing request URL.
+Checks include:
 
-## Fixture vs live
+- five-task contract;
+- four API Evidence records;
+- BLS/FRED/EIA provider coverage;
+- four grounded citations;
+- freshness coverage;
+- five Tool attempts;
+- causal guardrail: gasoline/breakeven are descriptive signals, not causal CPI attribution.
 
-```text
-Fixture Replay
-→ deterministic BLS / FRED / EIA payloads
-→ same normalized Evidence contract
-→ CI and teaching
-→ no network dependency
+The two scoring profiles share one live research run to avoid unnecessarily repeating external API requests.
 
-Live Public APIs
-→ local Runtime performs external requests
-→ BLS + FRED + EIA
-→ same downstream Planner / Scheduler / Evidence / Citation path
-```
+### CI
 
-The fixture values are teaching-only and are not current macro observations.
+CI does not depend on internet availability. Adapter tests inject API-shaped JSON responses into the same production parsers. This is transport mocking, not a user-selectable fixture data mode.
 
-## R2 Tool Pack
-
-Domain-specific capabilities are loaded as an explicit extension pack instead of permanently bloating the core Runtime registry:
-
-```python
-register_r2_tools()
-```
-
-The pack adds:
-
-```text
-fetch_fred_series
-fetch_eia_series
-synthesize_macro_signals
-```
-
-The existing R1 `fetch_bls_series` capability remains available.
-
-Every Tool still passes through the original Runtime:
-
-```text
-Validation → Policy → Retry → Execution → AgentState → EvidenceStore → Trace
-```
-
-## Freshness-aware synthesis
-
-A1 receives complete H1/C1/F1/G1 results through DAG dependency resolution and calculates:
-
-```text
-headline CPI YoY
-core CPI YoY
-core-minus-headline gap
-gasoline window % change
-5Y breakeven window change
-per-evidence age / freshness status
-```
-
-The first deterministic freshness buckets are:
-
-```text
-0–45 days   = fresh
-46–90 days  = aging
->90 days    = stale
-```
-
-If any required evidence is stale, synthesis confidence is capped instead of silently pretending all sources are equally current.
-
-## Research Workbench
-
-Run:
+Run locally:
 
 ```bash
-python serve_visualizer.py
+python3 serve_visualizer.py
 ```
 
 Open:
@@ -184,32 +128,4 @@ Open:
 http://127.0.0.1:8000
 ```
 
-The compact UI remains:
-
-```text
-SOURCE PLAN              RUN / TRACE              CODE
-BLS / FRED / EIA         Scheduler / Runtime      matching Python
-status / as-of / value   evidence / synthesis     WHY / NEXT
-                         Eval Mode preserved       citations / freshness
-```
-
-Start with `Fixture Replay`. For live FRED/EIA, set the two API keys before launching the server.
-
-V11 Eval Mode remains available and still shows `Case → Agent Run → Checks → Verdict` step by step.
-
-## Tests
-
-```bash
-python -m unittest -v
-```
-
-R2 adds coverage for:
-
-- FRED and EIA normalization;
-- missing live credentials failing explicitly;
-- credentials reaching the HTTP transport but never being persisted in Evidence;
-- freshness calculation;
-- descriptive gasoline / breakeven signal calculation;
-- H1/C1/F1/G1 → A1 dependency structure;
-- five Tool attempts, four Evidence records, and four grounded citations in a full fixture run;
-- all R1 and V0–V11 regressions.
+The active UI script is `web/r2_api_app.js`.
