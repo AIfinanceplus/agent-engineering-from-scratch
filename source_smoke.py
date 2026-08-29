@@ -17,16 +17,36 @@ import json
 from r4_source_health import PROVIDER_ORDER, run_source_health
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Test real macro source APIs")
     parser.add_argument(
         "providers",
         nargs="*",
-        choices=PROVIDER_ORDER,
-        help="Providers to test. Default: BLS FRED EIA",
+        metavar="PROVIDER",
+        help="Providers to test (BLS, FRED, EIA). Default: all providers",
     )
-    args = parser.parse_args()
-    report = run_source_health(args.providers or None)
+    return parser
+
+
+def normalize_providers(values: list[str]) -> list[str] | None:
+    if not values:
+        return None
+    normalized = [value.upper() for value in values]
+    invalid = [value for value in normalized if value not in PROVIDER_ORDER]
+    if invalid:
+        allowed = ", ".join(PROVIDER_ORDER)
+        raise ValueError(f"unknown provider(s): {', '.join(invalid)}; choose from {allowed}")
+    return normalized
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        providers = normalize_providers(args.providers)
+    except ValueError as exc:
+        parser.error(str(exc))
+    report = run_source_health(providers)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0 if report["ready"] else 1
 
