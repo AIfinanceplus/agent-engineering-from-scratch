@@ -13,6 +13,7 @@ class UIV3StreamContractTests(unittest.TestCase):
         self.assertIn('r7_v3_stream.css', html)
         self.assertIn('r7_v3.js', html)
         self.assertIn('r7_v3_stream.js', html)
+        self.assertIn('r7_v3_stream_polish.js', html)
         self.assertIn('data-nav="checkpoints"', html)
         self.assertIn('data-detail-tab="checkpoint"', html)
         self.assertIn('data-inspector-tab="checkpoint"', html)
@@ -33,6 +34,13 @@ class UIV3StreamContractTests(unittest.TestCase):
         self.assertIn('applyLiveEvent', js)
         self.assertIn('applyLiveCheckpoint', js)
         self.assertIn('runResearch = streamRunResearch', js)
+
+    def test_output_has_explicit_streaming_intermediate_state(self):
+        js = (WEB / "r7_v3_stream_polish.js").read_text(encoding="utf-8")
+        self.assertIn('STREAMING', js)
+        self.assertIn('Live Summary', js)
+        self.assertIn('appState.live.currentNode', js)
+        self.assertIn('run.latest_checkpoint', js)
 
 
 if __name__ == "__main__":
