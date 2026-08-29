@@ -3,208 +3,116 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Agent Research Workbench · R7</title>
-  <link rel="stylesheet" href="r7.css" />
+  <title>Agent Research Workbench · R7 UI V3</title>
+  <link rel="stylesheet" href="r7_v3.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand-row">
-      <div class="logo-mark">A</div>
-      <div class="brand-title">Agent Research Workbench</div>
-      <span class="version-pill">R7</span>
-    </div>
-    <div class="system-row">
-      <div class="system-status"><i class="system-dot"></i><span>系统状态</span><strong id="system-status-text">ALL SYSTEMS OPERATIONAL</strong></div>
-      <button class="icon-button-dark" title="帮助">?</button>
-      <button class="icon-button-dark" title="通知">◔</button>
-      <div class="user-row"><div class="avatar">AR</div><span>Analyst</span><span>⌄</span></div>
-    </div>
-  </header>
+  <div id="app" class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo">A</div>
+        <strong>Agent Research Workbench</strong>
+        <span class="version">R7</span>
+      </div>
+      <div class="top-actions">
+        <div class="system"><i></i><span>系统状态</span><strong id="system-status-text">SYSTEM READY</strong></div>
+        <button class="top-icon" title="Help">?</button>
+        <button class="top-icon" title="Activity">◔</button>
+        <div class="user"><div class="avatar">AR</div><span>Analyst</span><span>⌄</span></div>
+      </div>
+    </header>
 
-  <div class="app-layout">
     <aside class="sidebar">
-      <nav class="nav-list">
-        <button class="nav-item active"><span class="nav-icon">⌂</span><span>工作台</span></button>
-        <button class="nav-item"><span class="nav-icon">▤</span><span>项目管理</span></button>
-        <button class="nav-item"><span class="nav-icon">◉</span><span>数据源</span></button>
-        <button class="nav-item"><span class="nav-icon">⌘</span><span>工具库</span></button>
-        <button class="nav-item"><span class="nav-icon">◇</span><span>知识库</span></button>
-        <button class="nav-item"><span class="nav-icon">↗</span><span>Forecasts</span></button>
-        <button class="nav-item"><span class="nav-icon">✓</span><span>评估中心</span></button>
-        <button class="nav-item"><span class="nav-icon">◎</span><span>追踪与监控</span></button>
-        <button class="nav-item"><span class="nav-icon">⚙</span><span>设置</span></button>
+      <nav class="nav">
+        <button class="nav-btn active" data-nav="workbench"><span class="nav-ico">⌂</span><span class="nav-label">工作台</span></button>
+        <button class="nav-btn" data-nav="architecture"><span class="nav-ico">◫</span><span class="nav-label">项目设计</span></button>
+        <button class="nav-btn" data-nav="sources"><span class="nav-ico">◉</span><span class="nav-label">数据源</span></button>
+        <button class="nav-btn" data-nav="tools"><span class="nav-ico">⌘</span><span class="nav-label">工具库</span></button>
+        <button class="nav-btn" data-nav="evidence"><span class="nav-ico">◇</span><span class="nav-label">Evidence</span></button>
+        <button class="nav-btn" data-nav="forecasts"><span class="nav-ico">↗</span><span class="nav-label">Forecasts</span></button>
+        <button class="nav-btn" data-nav="eval"><span class="nav-ico">✓</span><span class="nav-label">评估中心</span></button>
+        <button class="nav-btn" data-nav="trace"><span class="nav-ico">◎</span><span class="nav-label">Trace</span></button>
+        <button class="nav-btn" data-nav="checkpoints"><span class="nav-ico">◆</span><span class="nav-label">Checkpoints</span></button>
+        <button class="nav-btn" data-nav="settings"><span class="nav-ico">⚙</span><span class="nav-label">设置</span></button>
       </nav>
-      <div class="sidebar-bottom"><button class="nav-item"><span class="nav-icon">‹</span><span>收起</span></button></div>
+      <div class="sidebar-footer">
+        <div class="health-mini">
+          <div class="health-mini-head"><span>Source Health</span><button id="health-btn" class="top-icon" style="color:#1769ff;width:24px;height:24px">↻</button></div>
+          <div class="health-mini-grid"><span id="health-bls" class="health-chip">BLS</span><span id="health-fred" class="health-chip">FRED</span><span id="health-eia" class="health-chip">EIA</span></div>
+        </div>
+        <button id="collapse-sidebar" class="collapse-btn">‹ <span class="collapse-label">收起</span></button>
+      </div>
     </aside>
 
     <main class="workspace">
-      <div class="workspace-grid">
-        <div class="column logic-column">
-          <section class="panel design-logic">
-            <div class="panel-title-row"><div><div class="kicker">Architecture</div><h3 class="panel-title">项目设计逻辑</h3></div></div>
-            <div class="logic-list">
-              <div class="logic-item"><span class="logic-number">1</span><div><strong>Runtime 与 Tool 解耦</strong><span>Model 只提出动作，Runtime 负责验证、权限、重试与执行。</span></div></div>
-              <div class="logic-item"><span class="logic-number">2</span><div><strong>Evidence 先于 Synthesis</strong><span>先注册、评估证据，再形成结论；Citation 从 Evidence 边界开始。</span></div></div>
-              <div class="logic-item"><span class="logic-number">3</span><div><strong>Domain Lens 不改变抓取</strong><span>Investment / Policy 只改变 D1，不改变前面的数据需求与来源选择。</span></div></div>
-              <div class="logic-item"><span class="logic-number">4</span><div><strong>Forecast 必须可验证</strong><span>每条预测包含 baseline、方向、期限、due date、lineage 与结算规则。</span></div></div>
-              <div class="logic-item"><span class="logic-number">5</span><div><strong>Eval 贯穿全链路</strong><span>Query、Evidence、Synthesis、Domain、Forecast 都有明确合同与回归检查。</span></div></div>
-            </div>
-          </section>
-
-          <section class="panel source-health">
-            <div class="panel-title-row"><div><div class="kicker">Operational</div><h3 class="panel-title">Source Health</h3></div><button id="health-refresh" class="link-button">刷新</button></div>
-            <div id="health-list" class="health-list">
-              <div class="health-row"><span class="health-name">BLS</span><span class="pill neutral">UNKNOWN</span></div>
-              <div class="health-row"><span class="health-name">FRED</span><span class="pill neutral">UNKNOWN</span></div>
-              <div class="health-row"><span class="health-name">EIA</span><span class="pill neutral">UNKNOWN</span></div>
-            </div>
-            <div class="panel-subtitle" id="health-checked">尚未检查</div>
-          </section>
-
-          <section class="panel">
-            <div class="panel-header"><div><div class="kicker">Highlights</div><h3>新增亮点</h3></div></div>
-            <div class="highlight-grid">
-              <div class="highlight-card"><span class="highlight-icon">◉</span><strong>Source Health</strong></div>
-              <div class="highlight-card"><span class="highlight-icon">✓</span><strong>Evidence Quality</strong></div>
-              <div class="highlight-card"><span class="highlight-icon">⚠</span><strong>Contradiction Detection</strong></div>
-              <div class="highlight-card"><span class="highlight-icon">◇</span><strong>Investment / Policy Dual Lens</strong></div>
-              <div class="highlight-card"><span class="highlight-icon">↗</span><strong>Forecast Tracking</strong></div>
-              <div class="highlight-card"><span class="highlight-icon">◎</span><strong>Trace & Eval</strong></div>
-              <div class="highlight-card"><span class="highlight-icon">▣</span><strong>Saved Forecasts</strong></div>
-              <div class="highlight-card"><span class="highlight-icon">⌁</span><strong>Citation Verification</strong></div>
-            </div>
-          </section>
+      <section class="panel input-panel">
+        <div class="input-title">
+          <div><div class="kicker">Research Input</div><h2>文字输入窗口 / Research Question</h2></div>
+          <span id="input-output-hint" class="pill">Investment · macro-research-agent</span>
         </div>
-
-        <div class="column">
-          <section class="panel input-panel">
-            <div class="panel-title-row"><div><div class="kicker">Input</div><h2 class="panel-title">文字输入窗口</h2></div><span class="pill neutral">输入 → 输出</span></div>
-            <label class="input-label" for="goal">研究问题 / Research Question</label>
-            <textarea id="goal" class="research-input" placeholder="请输入研究问题，例如：Assess current inflation pressure and forecast the next update.">Assess current inflation pressure using headline CPI, core CPI, market inflation expectations, and gasoline prices.</textarea>
-            <div class="config-row">
-              <div class="select-field"><label for="domain">Domain Lens</label><select id="domain" class="control"><option value="investment">Investment</option><option value="policy">Policy</option></select></div>
-              <div class="select-field"><label for="context-preset">Execution Identity</label><select id="context-preset" class="control"><option value="general">macro-research-agent</option><option value="read_only">read-only-agent</option></select></div>
-              <div class="select-field"><label for="forecast-pack">Saved Forecast</label><select id="forecast-pack" class="control"><option value="">none</option></select></div>
-            </div>
-            <div class="action-row">
-              <button id="run-btn" class="btn primary">▶ 运行研究</button>
-              <button id="health-btn" class="btn">◉ 测试数据源 API</button>
-              <button id="eval-btn" class="btn">✓ 运行 Evals</button>
-              <button id="check-forecast-btn" class="btn">↻ 检查 Forecast</button>
-              <button id="export-btn" class="btn">⇩ 导出 JSON</button>
-            </div>
-          </section>
-
-          <section class="panel runtime-panel">
-            <div class="runtime-head">
-              <div class="runtime-title"><h2>Agent 运行过程</h2><span id="run-status-pill" class="pill neutral">IDLE</span></div>
-              <div class="runtime-meta"><span id="run-id">Run —</span><span id="run-progress">0 / 0</span></div>
-            </div>
-            <div class="flow-wrap">
-              <div id="agent-flow" class="agent-flow">
-                <article class="flow-node" data-step="Q"><span class="flow-index">1</span><strong class="flow-name">Question</strong><span class="flow-icon">?</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="DEC"><span class="flow-index">2</span><strong class="flow-name">Decomposition</strong><span class="flow-icon">✣</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="QC"><span class="flow-index">3</span><strong class="flow-name">Query Compiler</strong><span class="flow-icon">⌘</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="QN"><span class="flow-index">4</span><strong class="flow-name">Q1..Qn</strong><span class="flow-icon">⌕</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="E"><span class="flow-index">5</span><strong class="flow-name">Evidence</strong><span class="flow-icon">▤</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="S1"><span class="flow-index">6</span><strong class="flow-name">S1 Research Synthesis</strong><span class="flow-icon">⌁</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="D1"><span class="flow-index">7</span><strong class="flow-name">D1 Domain Brief</strong><span class="flow-icon">▧</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="F1"><span class="flow-index">8</span><strong class="flow-name">F1 Forecast Pack</strong><span class="flow-icon">↗</span><span class="flow-status">待处理</span></article>
-                <article class="flow-node" data-step="EV"><span class="flow-index">9</span><strong class="flow-name">Eval / Tracking</strong><span class="flow-icon">✓</span><span class="flow-status">待处理</span></article>
-              </div>
-            </div>
-          </section>
-
-          <section class="detail-grid">
-            <article class="panel trace-panel">
-              <div class="panel-header"><div><div class="kicker">Trace</div><h3>运行日志 / 事件时间线</h3></div><span id="event-count" class="pill neutral">0 events</span></div>
-              <div id="trace-list" class="trace-list"><div class="empty">运行研究后显示 Runtime / Scheduler / Evidence / Synthesis 事件。</div></div>
-            </article>
-
-            <article class="panel logic-panel">
-              <div class="panel-header"><div><div class="kicker">Explainability</div><h3>运行逻辑 / Code & Logic</h3></div><span id="selected-step" class="pill running">Question</span></div>
-              <div class="tabs"><button class="tab active" data-logic-tab="code">当前步骤逻辑</button><button class="tab" data-logic-tab="payload">输入 / 输出 Payload</button></div>
-              <div class="tab-content">
-                <pre id="logic-code" class="code-box"># 点击 Agent 流程中的任意节点\n# 这里会显示该步骤为什么运行、负责什么、以及对应事件。</pre>
-                <div id="logic-note" class="logic-note"><strong>为什么：</strong>研究问题进入系统后，先形成语义需求，再由可信的 Query Compiler 映射到允许的数据源。</div>
-              </div>
-            </article>
-
-            <article class="panel evidence-panel">
-              <div class="panel-header"><div><div class="kicker">Evidence</div><h3>证据 / Citation / Quality</h3></div><span id="evidence-kpi" class="pill neutral">0 Evidence</span></div>
-              <div class="tabs"><button class="tab active" data-evidence-tab="evidence">证据库</button><button class="tab" data-evidence-tab="citations">引用验证</button><button class="tab" data-evidence-tab="quality">质量评估</button></div>
-              <div id="evidence-content" class="tab-content"><div class="empty">等待 Evidence。</div></div>
-            </article>
-          </section>
+        <textarea id="goal" class="research-input" placeholder="请输入研究问题，例如：Assess current inflation pressure and forecast the next update.">Assess current inflation pressure using headline CPI, core CPI, market inflation expectations, and gasoline prices.</textarea>
+        <div class="config-actions">
+          <div class="field"><label for="domain">Domain Lens</label><select id="domain" class="control"><option value="investment">Investment</option><option value="policy">Policy</option></select></div>
+          <div class="field"><label for="context-preset">Execution Identity</label><select id="context-preset" class="control"><option value="general">macro-research-agent</option><option value="read_only">read-only-agent</option></select></div>
+          <div class="field"><label for="forecast-pack">Saved Forecast</label><select id="forecast-pack" class="control"><option value="">none</option></select></div>
+          <div class="actions">
+            <button id="run-btn" class="btn primary">▶ 运行研究</button>
+            <button id="eval-btn" class="btn">✓ Evals</button>
+            <button id="check-forecast-btn" class="btn">↻ Forecast</button>
+            <button id="export-btn" class="btn">⇩ JSON</button>
+          </div>
         </div>
+      </section>
 
-        <div class="column output-column">
-          <section class="panel output-panel">
-            <div class="panel-header"><div><div class="kicker">Output</div><h2>输出窗口</h2></div><div class="inline"><button id="copy-output" class="link-button">复制</button></div></div>
-            <div id="output-body" class="output-body">
-              <div class="output-stage"><strong id="output-stage">等待研究</strong><div class="output-progress"><i id="output-progress-bar"></i></div></div>
-              <div class="empty">最终输出会按 S1 → D1 → F1 的结构呈现，并保留 Evidence / Citation / Confidence / Forecast lineage。</div>
-            </div>
-          </section>
-
-          <section class="panel">
-            <div class="panel-header"><div><div class="kicker">Visible Prompt</div><h3>可见输入窗口 / Input Window</h3></div></div>
-            <div class="output-input-mini">
-              <strong style="font-size:10px">研究问题</strong>
-              <div id="visible-question" class="mini-text">尚未运行</div>
-              <strong style="font-size:10px">运行配置</strong>
-              <div id="visible-config" class="mini-text">Domain: Investment\nIdentity: macro-research-agent</div>
-            </div>
-          </section>
-
-          <section class="panel">
-            <div class="panel-header"><div><div class="kicker">Quick Actions</div><h3>快速操作</h3></div></div>
-            <div class="highlight-grid">
-              <button id="quick-rerun" class="btn">↻ 重新运行</button>
-              <button id="quick-eval" class="btn">✓ 运行 Eval</button>
-              <button id="quick-check" class="btn">◎ 检查 Forecast</button>
-              <button id="quick-export" class="btn">⇩ 导出结果</button>
-            </div>
-          </section>
+      <section class="panel execution">
+        <div class="execution-head">
+          <div class="execution-title"><h2>Agent 运行过程</h2><span id="run-status" class="pill">IDLE</span></div>
+          <div class="run-meta"><span id="visible-run-id">No active run</span><span id="run-id">Run —</span><span id="run-progress">0/0 tasks</span></div>
         </div>
+        <div class="flow-scroll">
+          <div class="flow">
+            <article class="node selected" data-node="Q"><span class="node-index">1</span><strong class="node-name">Question</strong><span class="node-icon">?</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="DEC"><span class="node-index">2</span><strong class="node-name">Decomposition</strong><span class="node-icon">✣</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="QC"><span class="node-index">3</span><strong class="node-name">Query Compiler</strong><span class="node-icon">⌘</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="QN"><span class="node-index">4</span><strong class="node-name">Q1..Qn</strong><span class="node-icon">⌕</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="E"><span class="node-index">5</span><strong class="node-name">Evidence</strong><span class="node-icon">▤</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="S1"><span class="node-index">6</span><strong class="node-name">S1 Research</strong><span class="node-icon">⌁</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="D1"><span class="node-index">7</span><strong class="node-name">D1 Domain</strong><span class="node-icon">▧</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="F1"><span class="node-index">8</span><strong class="node-name">F1 Forecast</strong><span class="node-icon">↗</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+            <article class="node" data-node="EV"><span class="node-index">9</span><strong class="node-name">Eval / Tracking</strong><span class="node-icon">✓</span><span class="node-status">waiting</span><span class="checkpoint-marker"></span></article>
+          </div>
+        </div>
+      </section>
 
-        <section class="bottom-grid">
-          <article class="panel">
-            <div class="panel-header"><div><div class="kicker">Evals</div><h3>Eval 状态 / Evaluation Checks</h3></div><span id="eval-summary" class="pill neutral">未运行</span></div>
-            <div id="eval-grid" class="eval-grid">
-              <div class="eval-item"><span>Relevance / Query Contract</span><span class="pill neutral">—</span></div>
-              <div class="eval-item"><span>Evidence Lineage</span><span class="pill neutral">—</span></div>
-              <div class="eval-item"><span>Domain Discipline</span><span class="pill neutral">—</span></div>
-              <div class="eval-item"><span>Forecast Verifiability</span><span class="pill neutral">—</span></div>
-            </div>
-          </article>
-
-          <article class="panel">
-            <div class="panel-header"><div><div class="kicker">Forecasts</div><h3>Forecast Tracking / Saved Forecasts</h3></div><button id="refresh-packs" class="link-button">刷新</button></div>
-            <div class="forecast-table-wrap">
-              <table class="forecast-table">
-                <thead><tr><th>Forecast ID</th><th>Target</th><th>Direction</th><th>Due</th><th>Status</th><th>Outcome</th></tr></thead>
-                <tbody id="forecast-table-body"><tr><td colspan="6" class="empty">暂无 Forecast。</td></tr></tbody>
-              </table>
-            </div>
-          </article>
-
-          <article class="panel">
-            <div class="panel-header"><div><div class="kicker">Tracking</div><h3>研究追踪</h3></div></div>
-            <div class="tracking-grid">
-              <div class="tracking-card"><span>Run ID</span><strong id="tracking-run-id">—</strong></div>
-              <div class="tracking-card"><span>Scenario</span><strong id="tracking-scenario">—</strong></div>
-              <div class="tracking-card"><span>Evidence</span><strong id="tracking-evidence">0</strong></div>
-              <div class="tracking-card"><span>Forecasts</span><strong id="tracking-forecasts">0</strong></div>
-              <div class="tracking-card full-row"><span>保存位置</span><strong>.forecasts/ · durable JSON</strong></div>
-            </div>
-          </article>
-        </section>
-      </div>
+      <section class="panel detail">
+        <div class="tabs">
+          <button class="tab detail-tab active" data-detail-tab="trace">Trace</button>
+          <button class="tab detail-tab" data-detail-tab="logic">Logic</button>
+          <button class="tab detail-tab" data-detail-tab="evidence">Evidence</button>
+          <button class="tab detail-tab" data-detail-tab="state">State</button>
+          <button class="tab detail-tab" data-detail-tab="checkpoint">Checkpoint</button>
+          <button class="tab detail-tab" data-detail-tab="architecture">Architecture</button>
+        </div>
+        <div id="detail-body" class="detail-body"><div class="empty">运行研究后显示 Trace / Logic / Evidence / State / Checkpoint。</div></div>
+      </section>
     </main>
-  </div>
 
+    <aside class="inspector">
+      <div class="inspector-tabs">
+        <button class="tab inspector-tab active" data-inspector-tab="output">Output</button>
+        <button class="tab inspector-tab" data-inspector-tab="checkpoint">Checkpoint</button>
+        <button class="tab inspector-tab" data-inspector-tab="eval">Eval</button>
+        <button class="tab inspector-tab" data-inspector-tab="json">JSON</button>
+        <button id="copy-output" class="tab" style="margin-left:auto;color:#1769ff">复制</button>
+      </div>
+      <div id="inspector-body" class="inspector-body"><div class="empty">输出窗口等待 Research Run。</div></div>
+    </aside>
+
+    <footer class="statusbar">
+      <strong>R7</strong><span class="status-sep"></span><span>Current: <strong id="status-current">Question</strong></span><span>Tasks: <strong id="status-tasks">—</strong></span><span>Evidence: <strong id="status-evidence">0</strong></span><span>Trace: <strong id="status-trace">0</strong></span><span>Checkpoint: <strong id="status-checkpoint">—</strong></span><span class="status-hide-small">Last save: <strong id="status-save">—</strong></span><span class="status-hide-small">Source Health: <strong id="status-health">—</strong></span><span style="margin-left:auto">State shows NOW · Checkpoint shows WHAT SURVIVES DEATH</span>
+    </footer>
+  </div>
   <div id="toast" class="toast"></div>
-  <script src="r7_app.js"></script>
+  <script src="r7_v3.js"></script>
 </body>
 </html>
