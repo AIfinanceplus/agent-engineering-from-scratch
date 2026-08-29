@@ -19,133 +19,135 @@ A step-by-step learning repository for building an Agent Runtime from first prin
 - V10 — Evidence / Synthesis / Citation
 - V11 — Tracing + Evals
 
-## Current stage: V10 — Evidence / Synthesis / Citation
+## Current stage: V11 — Tracing + Evals
 
-V9 could execute a multi-task DAG. V10 upgrades Task outputs from bare values into research artifacts with provenance.
+V10 made research outputs grounded in explicit evidence. V11 asks a different question:
 
-```text
-Research Goal
-    ↓
-ResearchPlanner
-    ↓
-E1: collect Evidence ──┐
-                       ├──> S1: synthesize
-E2: collect Evidence ──┘
-    ↓                         ↓
-EvidenceStore          verified evidence IDs
-    ↓                         ↓
-source + claim + confidence + citations
-                              ↓
-                         Final Answer
-```
+> How do we know the Agent is reliable, and how do we compare one version with another?
 
-### The key rule
-
-Citation is not decoration added after writing the answer.
+Two concepts stay separate:
 
 ```text
-BAD
-Model writes conclusion
-    ↓
-append [1] [2]
+Trace
+= explain one run
+= spans + duration + runtime counters
 
-V10
-Evidence enters Runtime
-    ↓
-assign evidence_id
-    ↓
-store source / claim / confidence
-    ↓
-Synthesis references evidence_ids
-    ↓
-EvidenceStore verifies those IDs
-    ↓
-render citations
+Eval
+= judge a run against explicit expectations
+= repeat the same cases after code changes
 ```
 
-## Synthetic teaching data
+## Trace model
 
-All bundled V10 evidence is intentionally synthetic. It is used only to teach lineage and must not be interpreted as real macroeconomic data.
-
-```text
-E1
-Teaching Energy Bulletin
-Synthetic Data Lab
-value = 0.4 percentage points
-confidence = 0.92
-
-E2
-Teaching Shelter Bulletin
-Synthetic Data Lab
-value = 0.3 percentage points
-confidence = 0.88
-```
-
-S1 depends on E1 and E2. The synthesis Tool receives the full evidence objects, not only their numeric values, and produces:
-
-```text
-combined value = 0.7 percentage points
-confidence = 0.88
-citations = [E1] [E2]
-```
-
-The confidence is deliberately conservative: the teaching synthesizer uses the lower supporting confidence.
-
-## Evidence model
-
-`evidence.py` introduces:
+`observability.py` adds:
 
 ```python
-SourceRef
-EvidenceRecord
-EvidenceStore
+TraceRecorder
+Span
 ```
 
-An EvidenceRecord carries:
+The Scheduler creates one root span for the whole plan and one child span per Task:
 
 ```text
-evidence_id
-claim
-value
-unit
+plan.run
+├── task.E1
+├── task.E2
+└── task.S1
+```
+
+The trace also records counters without changing business behavior:
+
+```text
+scheduler_ticks
+tasks_started
+tasks_completed
+tool_attempts
+evidence_registered
+citations_verified
+runtime_events
+```
+
+For the default research DAG, the expected shape is:
+
+```text
+4 spans
+3 Tool attempts
+2 Evidence records
+2 verified citations
+3 completed Tasks
+```
+
+Tracing is deliberately side-channel observability. It does not decide which Task is READY, whether Policy allows execution, or what a Tool returns.
+
+## Eval model
+
+`evals.py` adds explicit `EvalCase` and `EvalReport` contracts.
+
+The first scoring dimensions are:
+
+```text
+success
+task_completion_rate
+evidence_coverage
+citation_completeness
+citations_grounded
 confidence
-source_id
-title
-publisher
-uri
 ```
 
-The Scheduler registers evidence as soon as a Task returns it:
+A result passes only if the expectations are satisfied. For example, a polished answer that cites `[E99]` while E99 was never collected fails `citations_grounded`.
 
 ```python
-record = EvidenceRecord.from_dict(result)
-evidence_store.add(record)
-task.evidence_ids = [record.evidence_id]
+report = score_result(case, result)
+
+if not report.passed:
+    # fail the quality gate
 ```
 
-When S1 returns a synthesis, the Scheduler verifies its claimed evidence IDs against the store:
+The default suite contains two deterministic research cases and is designed to be rerun after implementation changes:
 
 ```python
-citations = evidence_store.citations(evidence_ids)
+suite = run_eval_suite()
+# passed / total / pass_rate
 ```
 
-An unknown ID fails instead of producing an unsupported citation.
-
-## Responsibilities remain separate
+## Full V11 architecture
 
 ```text
-Planner          = WHAT research tasks exist
-Scheduler        = WHEN each task is READY
-ExecutionContext = WHO is executing
-Policy           = whether that identity may execute the capability
-Runtime          = HOW one task executes safely
-EvidenceStore    = WHAT evidence/provenance has actually been collected
-Synthesis        = WHAT can be concluded from that evidence
+                           ExecutionContext
+                                  │
+                                  ↓
+Goal → Planner → DAG → Scheduler → Task Runtime
+                                  │
+                                  ├→ Validation / Policy / Tool / State
+                                  │
+                                  ├→ EvidenceStore → Synthesis → Citations
+                                  │
+                                  └→ TraceRecorder
+                                          │
+                                          ↓
+                                     Trace / Metrics
+                                          │
+                                          ↓
+                                       Evals
+                                          │
+                                          ↓
+                              PASS / FAIL + score breakdown
 ```
 
-V10 does not replace the V1–V9 layers. Every evidence and synthesis Task still goes through Tool validation, Policy, AgentState, and the existing Runtime.
+The old responsibilities still remain:
 
-## Compact visual debugger
+```text
+Planner          = WHAT tasks exist
+Scheduler        = WHEN tasks are READY
+ExecutionContext = WHO is executing
+Policy           = MAY this context execute the Tool
+Runtime          = HOW a Task executes safely
+EvidenceStore    = WHAT grounded evidence exists
+Trace            = WHAT happened in this run
+Eval             = DID the run satisfy our expectations
+```
+
+## Visual debugger
 
 Run:
 
@@ -159,27 +161,34 @@ Open:
 http://127.0.0.1:8000
 ```
 
-The UI keeps the compact three-pane layout:
+The main UI remains compact:
 
 ```text
-PLAN            RUN                 CODE
-research tasks  evidence lineage    matching Python
-E1 / E2 / S1    selected events     WHY / NEXT
-status          current progress     citations
+PLAN            RUN              CODE
+Task state      events/trace     matching implementation
+E1/E2/S1        current step     WHY / NEXT
 ```
 
-Raw evidence, plan state, and Runtime details are still available in collapsible sections instead of permanently consuming the screen.
+The top strip adds only two new observability KPIs:
 
-Recommended sequence:
+```text
+Trace → span count + Tool attempts
+Eval  → PASS / FAIL
+```
 
-1. `ResearchPlanner created DAG` — E1/E2 READY, S1 blocked.
-2. E1 executes through Runtime and returns a structured EvidenceRecord.
-3. `E1 provenance registered` — inspect source, claim, confidence.
-4. E2 repeats the same process.
-5. Scheduler now releases S1.
-6. S1 receives the complete E1/E2 evidence objects.
-7. `Synthesis verified` — EvidenceStore validates `[E1]` and `[E2]`.
-8. Final result is returned together with evidence, citations, and confidence.
+Detailed spans, metrics, eval failures, Runtime State, and raw events stay inside collapsible sections.
+
+Two actions are available:
+
+```text
+运行研究
+→ run one interactive research case
+→ produce Trace + interactive EvalReport
+
+运行 Evals
+→ run the fixed default eval suite
+→ report passed / total / pass_rate
+```
 
 ## Tests
 
@@ -187,13 +196,14 @@ Recommended sequence:
 python -m unittest -v
 ```
 
-V10 verifies:
+V11 verifies:
 
-- ResearchPlanner creates E1/E2 → S1 dependencies;
-- S1 cannot start until both evidence Tasks complete;
-- evidence round-trips without losing source or confidence;
-- EvidenceStore rejects unknown citation IDs;
-- final synthesis value is 0.7 with confidence 0.88;
-- citations are exactly `[E1]` and `[E2]` and correspond to stored evidence;
-- Plan State carries evidence/citation IDs;
-- all prior Planner, Scheduler, Runtime, Policy, Retry, Checkpoint, State, and validation tests continue to run.
+- span hierarchy and duration accounting;
+- one root span plus three Task spans for the research DAG;
+- expected scheduler/task/tool/evidence/citation metrics;
+- complete evidence and citations pass the eval;
+- an ungrounded or missing citation fails the eval;
+- the default eval suite passes 2/2;
+- V0–V10 Runtime, Checkpoint, Planner, Evidence, Citation, Policy, Retry, and validation regressions still run.
+
+All bundled research records remain synthetic teaching data. The goal is Agent Engineering, not the macroeconomic conclusion represented by the example numbers.
