@@ -1,9 +1,8 @@
-"""Dependency-aware DAG Scheduler with V10 evidence lineage.
+"""Dependency-aware DAG Scheduler with V10 evidence lineage and V11 tracing.
 
 Planner decides WHAT. Scheduler decides WHEN. The existing Agent Runtime still
-controls HOW each selected Task executes. V10 adds an EvidenceStore beside the
-plan so provenance is registered when evidence enters the system, not invented
-at final-answer time.
+controls HOW each selected Task executes. V10 adds EvidenceStore provenance.
+V11 adds optional TraceRecorder spans and counters without changing task output.
 """
 
 from dataclasses import replace
@@ -12,6 +11,7 @@ from typing import Any
 from agent import run_agent
 from context import ExecutionContext
 from evidence import EvidenceRecord, EvidenceStore
+from observability import TraceRecorder
 from planner import ExecutionPlan, PlanTask, validate_plan
 from state import InMemoryStateStore
 
@@ -62,11 +62,21 @@ class DAGScheduler:
         execution_context: ExecutionContext,
         on_event=None,
         evidence_store: EvidenceStore | None = None,
+        trace_recorder: TraceRecorder | None = None,
     ) -> dict:
         validate_plan(plan)
         plan.status = "running"
         results: dict[str, Any] = {}
         provenance = EvidenceStore() if evidence_store is None else evidence_store
+        trace = trace_recorder
+        root_span = (
+            trace.start_span(
+                "plan.run",
+                attributes={"goal": plan.goal, "task_count": len(plan.tasks)},
+            )
+            if trace is not None
+            else None
+        )
 
         self._emit(on_event, "plan_created", plan=plan.to_dict())
 
@@ -80,6 +90,8 @@ class DAGScheduler:
             self._refresh_statuses(plan)
             ready = [task for task in plan.tasks if task.status == "ready"]
             blocked = [task for task in plan.tasks if task.status == "blocked"]
+            if trace is not None:
+                trace.increment("scheduler_ticks")
             self._emit(
                 on_event,
                 "scheduler_tick",
@@ -95,11 +107,29 @@ class DAGScheduler:
                     "message": "No READY task exists while unfinished tasks remain.",
                 }
                 self._emit(on_event, "plan_failed", error=error, plan=plan.to_dict())
-                return self._failure(plan, results, provenance, error)
+                if trace is not None and root_span is not None:
+                    trace.end_span(root_span, status="error", attributes={"error": error["code"]})
+                return self._failure(plan, results, provenance, error, trace)
 
             task = ready[0]
             task.status = "running"
             resolved_arguments = self._resolve_arguments(task.arguments, results)
+            if trace is not None:
+                trace.increment("tasks_started")
+            task_span = (
+                trace.start_span(
+                    f"task.{task.task_id}",
+                    parent_span_id=root_span,
+                    task_id=task.task_id,
+                    attributes={
+                        "title": task.title,
+                        "tool_name": task.tool_name,
+                        "depends_on": list(task.depends_on),
+                    },
+                )
+                if trace is not None
+                else None
+            )
             self._emit(
                 on_event,
                 "task_started",
@@ -118,6 +148,8 @@ class DAGScheduler:
             task_store = InMemoryStateStore()
 
             def task_event(event: dict) -> None:
+                if trace is not None:
+                    trace.observe_runtime_event(event)
                 self._emit(
                     on_event,
                     "task_runtime_event",
@@ -150,7 +182,11 @@ class DAGScheduler:
                     answer=answer,
                     plan=plan.to_dict(),
                 )
-                return self._failure(plan, results, provenance, task.error)
+                if trace is not None and task_span is not None:
+                    trace.end_span(task_span, status="error", attributes={"error": task.error["code"]})
+                if trace is not None and root_span is not None:
+                    trace.end_span(root_span, status="error", attributes={"error": task.error["code"]})
+                return self._failure(plan, results, provenance, task.error, trace)
 
             result = task_state.last_observation
             if task_state.status != "completed" or (
@@ -171,12 +207,33 @@ class DAGScheduler:
                     answer=answer,
                     plan=plan.to_dict(),
                 )
-                return self._failure(plan, results, provenance, task.error)
+                if trace is not None and task_span is not None:
+                    trace.end_span(task_span, status="error", attributes={"error": task.error["code"]})
+                if trace is not None and root_span is not None:
+                    trace.end_span(root_span, status="error", attributes={"error": task.error["code"]})
+                return self._failure(plan, results, provenance, task.error, trace)
 
             task.result = result
-            self._register_provenance(task, result, provenance, on_event)
+            provenance_kind = self._register_provenance(task, result, provenance, on_event)
+            if trace is not None:
+                if provenance_kind == "evidence":
+                    trace.increment("evidence_registered")
+                elif provenance_kind == "synthesis":
+                    trace.increment("citations_verified", len(task.citation_ids))
             task.status = "completed"
             results[task.task_id] = result
+            if trace is not None:
+                trace.increment("tasks_completed")
+                if task_span is not None:
+                    trace.end_span(
+                        task_span,
+                        status="ok",
+                        attributes={
+                            "result_kind": result.get("kind") if isinstance(result, dict) else "value",
+                            "evidence_ids": list(task.evidence_ids),
+                            "citation_ids": list(task.citation_ids),
+                        },
+                    )
             self._emit(
                 on_event,
                 "task_completed",
@@ -199,6 +256,17 @@ class DAGScheduler:
             if isinstance(final_artifact, dict) and final_artifact.get("kind") == "synthesis"
             else []
         )
+        if trace is not None and root_span is not None:
+            trace.end_span(
+                root_span,
+                status="ok",
+                attributes={
+                    "plan_status": plan.status,
+                    "evidence_count": len(provenance.all()),
+                    "citation_count": len(citations),
+                },
+            )
+        trace_summary = trace.summary() if trace is not None else None
         self._emit(
             on_event,
             "plan_completed",
@@ -206,6 +274,7 @@ class DAGScheduler:
             final_artifact=final_artifact,
             citations=citations,
             evidence=provenance.all(),
+            trace=trace_summary,
             results=dict(results),
             plan=plan.to_dict(),
         )
@@ -217,6 +286,7 @@ class DAGScheduler:
             "final_artifact": final_artifact,
             "evidence": provenance.all(),
             "citations": citations,
+            "trace": trace_summary,
         }
 
     @classmethod
@@ -226,9 +296,9 @@ class DAGScheduler:
         result,
         provenance: EvidenceStore,
         on_event,
-    ) -> None:
+    ) -> str | None:
         if not isinstance(result, dict):
-            return
+            return None
 
         if result.get("kind") == "evidence":
             record = EvidenceRecord.from_dict(result)
@@ -240,7 +310,7 @@ class DAGScheduler:
                 task_id=task.task_id,
                 evidence=record.to_dict(),
             )
-            return
+            return "evidence"
 
         if result.get("kind") == "synthesis":
             evidence_ids = list(result.get("evidence_ids", []))
@@ -256,9 +326,11 @@ class DAGScheduler:
                 evidence_ids=evidence_ids,
                 citations=citations,
             )
+            return "synthesis"
+        return None
 
     @staticmethod
-    def _failure(plan, results, provenance, error):
+    def _failure(plan, results, provenance, error, trace=None):
         return {
             "ok": False,
             "plan": plan.to_dict(),
@@ -266,6 +338,7 @@ class DAGScheduler:
             "results": results,
             "evidence": provenance.all(),
             "citations": [],
+            "trace": trace.summary() if trace is not None else None,
         }
 
     @staticmethod
