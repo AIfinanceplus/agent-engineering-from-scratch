@@ -1,4 +1,4 @@
-"""R10 planner: preserve R9 research/market lanes and add Investment-only I1 decision stage."""
+"""R10 planner: preserve R9 research/market lanes and add T1 -> I1 Investment stages."""
 
 from __future__ import annotations
 
@@ -120,18 +120,32 @@ class R10ResearchPlanner:
             tasks.extend([d1, f1])
             tasks.append(
                 PlanTask(
+                    task_id="T1",
+                    title="Build transparent numerical research target",
+                    tool_name="build_r10_numerical_research_target",
+                    arguments={
+                        "research_synthesis": {"from_task": "S1"},
+                        "forecast_pack": {"from_task": "F1"},
+                        "reference_date": reference_date,
+                    },
+                    depends_on=["S1", "F1"],
+                )
+            )
+            tasks.append(
+                PlanTask(
                     task_id="I1",
-                    title="Compare Research View with Market View and gate EV / position",
+                    title="Compare numerical Research Target with Market View and gate EV / position",
                     tool_name="build_r10_investment_decision",
                     arguments={
                         "question": blueprint.question,
                         "research_synthesis": {"from_task": "S1"},
                         "domain_brief": {"from_task": "D1"},
                         "forecast_pack": {"from_task": "F1"},
+                        "research_target": {"from_task": "T1"},
                         "market_snapshot": {"from_task": "M6"},
                         "reference_date": reference_date,
                     },
-                    depends_on=["S1", "D1", "F1", "M6"],
+                    depends_on=["S1", "D1", "F1", "T1", "M6"],
                 )
             )
 
