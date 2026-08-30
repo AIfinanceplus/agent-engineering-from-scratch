@@ -4,7 +4,8 @@ from http.server import ThreadingHTTPServer
 
 import r12_event_sources as event_sources
 import r12_identity as identity_engine
-from r12_strategy import scan_structural_opportunities, strategy_registry_snapshot
+from r12_registry import current_strategy_registry_snapshot
+from r12_strategy import scan_structural_opportunities
 from r12_tooling import register_r12_tools
 from serve_r11 import R11VisualizerHandler
 
@@ -39,7 +40,7 @@ class R12VisualizerHandler(R11VisualizerHandler):
             {
                 "ok": True,
                 "action": "r12_strategy_registry",
-                "registry": strategy_registry_snapshot(),
+                "registry": current_strategy_registry_snapshot(),
             },
         )
 
