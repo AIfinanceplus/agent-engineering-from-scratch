@@ -35,12 +35,30 @@ class R10UIContractTests(unittest.TestCase):
         ):
             self.assertIn(token, step2)
 
-    def test_r10_server_embeds_eval_and_loads_step2_extension(self):
+    def test_r10_step3_ui_exposes_instrument_sensitivity_risk_ev_and_no_auto_execution(self):
+        step3 = (ROOT / "web" / "r10_step3.js").read_text(encoding="utf-8")
+        for token in (
+            "I2 Instrument Bridge",
+            "P&amp;L per 1bp",
+            "Sensitivity source",
+            "Risk budget",
+            "Loss limit",
+            "EV / Worst Loss",
+            "not_sharpe",
+            "/api/r10/instrument-risk",
+            "eligible for review",
+        ):
+            self.assertIn(token, step3)
+        self.assertNotIn("execute trade", step3.lower())
+
+    def test_r10_server_embeds_eval_and_loads_step2_step3_extensions(self):
         source = (ROOT / "serve_r10.py").read_text(encoding="utf-8")
         self.assertIn('result["embedded_eval_suite"] = suite', source)
         self.assertIn('result["numerical_research_target"] = results.get("T1")', source)
         self.assertIn('"embedded_in_run_v3"', source)
         self.assertIn('"r10_step2.js"', source)
+        self.assertIn('"r10_step3.js"', source)
+        self.assertIn('"/api/r10/instrument-risk"', source)
         self.assertNotIn('extra_scripts = ("r8_ui.js", "r8_eval_current.js"', source)
 
 
