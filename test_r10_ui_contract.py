@@ -44,7 +44,7 @@ class R10UIContractTests(unittest.TestCase):
             "Risk budget",
             "Loss limit",
             "EV / Worst Loss",
-            "not_sharpe",
+            "不是 Sharpe",
             "/api/r10/instrument-risk",
             "eligible for review",
         ):
