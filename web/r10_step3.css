@@ -1,0 +1,12 @@
+.instrument-lab{margin-top:12px;padding:14px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.instrument-lab h3{margin:4px 0 8px}
+.instrument-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:12px 0}
+.instrument-grid label,.instrument-probs label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.instrument-grid input,.instrument-grid select,.instrument-probs input{width:100%;box-sizing:border-box}
+.instrument-probs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+.instrument-probs label{padding:8px;border:1px solid var(--line);border-radius:10px}
+.instrument-result{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.instrument-empty{margin-top:10px;padding:10px;border:1px dashed var(--line);border-radius:10px;color:var(--muted)}
+.instrument-scenarios{display:grid;gap:6px;margin-top:10px}
+.instrument-scenarios>div{display:grid;grid-template-columns:1.4fr .7fr .6fr 1.2fr;gap:8px;padding:8px;border:1px solid var(--line);border-radius:9px;font-size:12px}
+@media(max-width:1050px){.instrument-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.instrument-probs{grid-template-columns:1fr}.instrument-scenarios>div{grid-template-columns:1fr 1fr}}
