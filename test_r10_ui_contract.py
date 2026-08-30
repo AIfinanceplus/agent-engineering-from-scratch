@@ -16,23 +16,32 @@ class R10UIContractTests(unittest.TestCase):
         self.assertNotIn("fetch('/api/r8/eval'", source)
         self.assertIn("r10InspectorEvalTab.style.display = 'none'", source)
 
-    def test_r10_ui_exposes_i1_market_comparison_and_ev_lab(self):
-        source = (ROOT / "web" / "r10_ui.js").read_text(encoding="utf-8")
+    def test_r10_step2_ui_exposes_t1_numeric_gap_and_payoff_bridge(self):
+        base = (ROOT / "web" / "r10_ui.js").read_text(encoding="utf-8")
+        step2 = (ROOT / "web" / "r10_step2.js").read_text(encoding="utf-8")
         for token in (
             "I1 Market vs Research",
-            "Research View",
-            "Observed Market View",
-            "Pricing Hypothesis / Mispricing Gate",
             "EV LAB",
             "/api/r10/ev",
             "support score",
         ):
-            self.assertIn(token, source)
+            self.assertIn(token, base)
+        for token in (
+            "T1 Numerical Research Target",
+            "Numerical Mispricing / Research-Market Gap",
+            "Scenario Payoff Bridge",
+            "NUMERICAL",
+            "Probability 仍故意留空",
+            "security P&L",
+        ):
+            self.assertIn(token, step2)
 
-    def test_r10_server_embeds_eval_in_same_run_result(self):
+    def test_r10_server_embeds_eval_and_loads_step2_extension(self):
         source = (ROOT / "serve_r10.py").read_text(encoding="utf-8")
         self.assertIn('result["embedded_eval_suite"] = suite', source)
+        self.assertIn('result["numerical_research_target"] = results.get("T1")', source)
         self.assertIn('"embedded_in_run_v3"', source)
+        self.assertIn('"r10_step2.js"', source)
         self.assertNotIn('extra_scripts = ("r8_ui.js", "r8_eval_current.js"', source)
 
 
