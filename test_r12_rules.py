@@ -1,4 +1,5 @@
 import copy
+import json
 import unittest
 
 from r12_rules import analyze_settlement_rules, settlement_contract_fingerprint, validate_rules_analysis_binding
@@ -41,6 +42,13 @@ class R12SettlementRulesTests(unittest.TestCase):
         self.assertTrue(binding["fingerprints_current"])
         self.assertFalse(binding["matches_current_parser_output"])
         self.assertFalse(binding["all_pass"])
+
+    def test_analysis_is_stable_across_sorted_json_persistence(self):
+        first = analyze_settlement_rules(self.kalshi, self.poly)
+        persisted_kalshi = json.loads(json.dumps(self.kalshi, sort_keys=True))
+        persisted_poly = json.loads(json.dumps(self.poly, sort_keys=True))
+        second = analyze_settlement_rules(persisted_kalshi, persisted_poly)
+        self.assertEqual(first, second)
 
     def test_missing_rule_text_blocks_identity_review(self):
         incomplete = copy.deepcopy(self.poly)

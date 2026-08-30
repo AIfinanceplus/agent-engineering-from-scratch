@@ -15,8 +15,51 @@ V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, Exe
 - R5 — Evidence quality / freshness / contradiction
 - R6 — Investment & policy synthesis + domain evals
 - R7 — Forecast contracts + scenario tracking + settlement
+- R8 — Decision lenses + current-run evals
+- R9 — Observed market-pricing context
+- R10 — Numerical target + scenario EV + instrument risk
+- R11 — Constraint-based position sizing
+- R12 — Strategy opportunities + live public event markets + HITL Strategy Agent
 
-## Current stage: R7 — forecasting + scenario tracking
+## Current stage: R12 Step 6 — human-in-the-loop Strategy Agent
+
+R12 keeps the earlier Runtime, Evidence, forecasting, EV, risk, and sizing layers,
+then adds a five-strategy opportunity registry. The currently deepest live path is
+same-event Kalshi/Polymarket relative value:
+
+```text
+Exact market identifiers
+      ↓
+R12 Planner DAG
+      ↓
+K1 / P1 public market-contract Tools through the shared Agent Runtime
+      ↓
+R1 fingerprint-bound deterministic settlement-rules analysis
+      ↓
+H1 durable WAITING_HUMAN_IDENTITY_APPROVAL checkpoint
+      ↓ explicit six-check human attestation only
+I1 settlement identity Tool
+      ↓
+V1 top-of-book reciprocal complement scan
+      ↓
+E1 depth-aware paper execution quote
+```
+
+The Strategy Agent persists an append-only checkpoint view after every boundary.
+Resume skips durably completed tasks. No parser or model can check H1 boxes, and no
+R12 component places orders.
+
+Current five-strategy roadmap:
+
+```text
+1. Structural / logic arbitrage        deterministic scanner active
+2. Same-event cross-market RV          live public data + HITL agent active
+3. FOMC probability RV                 planned
+4. CPI / macro-data RV                 research engine ready, calibration pending
+5. Options vs event-market RV          planned
+```
+
+## R7 forecasting foundation retained
 
 ```text
 Research Question
@@ -258,11 +301,11 @@ Checks include:
 
 CI remains network-independent by injecting API-shaped source responses while exercising the same production parser, Runtime, Evidence, synthesis, forecast, and settlement contracts.
 
-## Run the workbench
+## Run the current workbench
 
 ```bash
 python3 -m pip install -r requirements.txt
-python3 serve_visualizer.py
+python3 serve_r12.py
 ```
 
 Open:
@@ -271,20 +314,24 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Suggested flow:
+Suggested R12 Step 6 flow:
 
 ```text
-1. 测试数据源 API
-2. 运行 R7 研究
-3. 查看 F1 Forecast Pack
-4. 运行 R7 Evals
-5. 之后选择 Saved Forecast
-6. 点击 检查 Forecast
+1. 打开 策略机会
+2. 搜索并加载 exact Kalshi / Polymarket pair
+3. 输入 target、explicit fee model 与 latency buffer
+4. Start Exact-pair Agent
+5. 检查 R1 rules artifact；Agent 应停在 H1
+6. 人工勾选六项 settlement identity attestation
+7. Approve H1 and Resume
+8. 检查 I1 / V1 / E1、task traces、checkpoints 与 eval
 ```
 
 Active UI scripts:
 
 ```text
-web/r7_app.js
-web/r4_health.js
+web/r12_ui.js
+web/r12_step2.js
+web/r12_step3.js
+web/r12_step4.js
 ```

@@ -9,15 +9,15 @@ def current_strategy_registry_snapshot() -> dict:
     registry = deepcopy(strategy_registry_snapshot())
     for row in registry.get("strategies") or []:
         if row.get("strategy_id") == "cross_market_event_rv":
-            row["status"] = "LIVE_RULES_ASSISTED_DEPTH_QUOTE_IDENTITY_GATED"
+            row["status"] = "LIVE_HITL_AGENT_DEPTH_QUOTE_IDENTITY_GATED"
             row["next_dependency"] = "paper-fill accounting + realized paper P&L"
         elif row.get("strategy_id") == "structural_logic_rv":
             row["next_dependency"] = "live market-universe normalizer + liquidity/fee/depth model"
-    registry["roadmap_version"] = "R12_STEP5"
+    registry["roadmap_version"] = "R12_STEP6"
     registry["current_boundary"] = (
         "Free-text discovery can find candidate Kalshi and Polymarket markets without raw IDs. Candidate matching is "
-        "lexical and never proves settlement identity; exact contracts still require explicit rules attestation before "
-        "a depth-aware target quote can emit a paper signal."
+        "lexical and never proves settlement identity. An exact-pair Tool DAG now persists a human approval pause; "
+        "only a rules-analysis-bound six-check attestation can resume identity, RV, and depth-aware paper quoting."
     )
     registry["discovery_contract"] = {
         "kalshi": "bounded open-event listing plus local lexical ranking",
@@ -37,5 +37,13 @@ def current_strategy_registry_snapshot() -> dict:
         "required_before_identity_review": True,
         "parser_can_auto_approve_identity": False,
         "human_attestation_still_required": True,
+    }
+    registry["strategy_agent_contract"] = {
+        "shared_agent_runtime_tool_boundary": True,
+        "explicit_plan_dag": True,
+        "durable_human_approval_pause": True,
+        "resume_skips_durably_completed_tasks": True,
+        "task_level_trace_and_eval": True,
+        "automatic_execution": False,
     }
     return registry

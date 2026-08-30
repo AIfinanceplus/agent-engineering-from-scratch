@@ -6,3 +6,4 @@ venv/
 .checkpoints/
 .forecasts/
 .research_checkpoints/
+.r12_agent_runs/

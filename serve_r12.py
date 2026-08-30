@@ -1,12 +1,14 @@
 """R12 preview server: discovery, identity-gated RV, and depth-aware paper quotes."""
 
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import r12_discovery as discovery_engine
 import r12_event_sources as event_sources
 import r12_execution as execution_engine
 import r12_identity as identity_engine
 import r12_rules as rules_engine
+from r12_agent import JsonR12StrategyRunStore, R12StrategyAgent, evaluate_r12_strategy_agent_run
 from r12_registry import current_strategy_registry_snapshot
 from r12_strategy import scan_structural_opportunities
 from r12_tooling import register_r12_tools
@@ -14,12 +16,14 @@ from serve_r11 import R11VisualizerHandler
 
 
 register_r12_tools()
+R12_AGENT_STORE = JsonR12StrategyRunStore(Path(__file__).parent / ".r12_agent_runs")
+R12_STRATEGY_AGENT = R12StrategyAgent(R12_AGENT_STORE)
 
 
 class R12VisualizerHandler(R11VisualizerHandler):
     version_label = "R12"
     page_title = "Agent Research Workbench · R12 Strategy Opportunity Engine"
-    extra_scripts = (*R11VisualizerHandler.extra_scripts, "r12_ui.js", "r12_step2.js", "r12_step3.js")
+    extra_scripts = (*R11VisualizerHandler.extra_scripts, "r12_ui.js", "r12_step2.js", "r12_step3.js", "r12_step4.js")
 
     def do_POST(self):
         if self.path == "/api/r12/registry":
@@ -38,6 +42,14 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return self._handle_cross_market_rv()
         if self.path == "/api/r12/execution-quote":
             return self._handle_execution_quote()
+        if self.path == "/api/r12/agent/start":
+            return self._handle_agent_start()
+        if self.path == "/api/r12/agent/status":
+            return self._handle_agent_status()
+        if self.path == "/api/r12/agent/approve":
+            return self._handle_agent_approve()
+        if self.path == "/api/r12/agent/resume":
+            return self._handle_agent_resume()
         return super().do_POST()
 
     def _handle_registry(self):
@@ -178,6 +190,67 @@ class R12VisualizerHandler(R11VisualizerHandler):
             {"ok": True, "action": "r12_execution_quote", "quote": quote},
         )
 
+    def _handle_agent_start(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            run = R12_STRATEGY_AGENT.start_exact_pair(
+                kalshi_identifier=request_data.get("kalshi_identifier"),
+                polymarket_identifier=request_data.get("polymarket_identifier"),
+                target_contracts=request_data.get("target_contracts"),
+                fee_model=request_data.get("fee_model"),
+                latency_buffer_bps=request_data.get("latency_buffer_bps", 0.0),
+                estimated_total_cost_per_basket=request_data.get("estimated_total_cost_per_basket", 0.0),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_strategy_agent_start", exc)
+        self._send_agent_run("r12_strategy_agent_start", run)
+
+    def _handle_agent_status(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            run = R12_STRATEGY_AGENT.get(request_data.get("run_id"))
+        except Exception as exc:
+            return self._r12_error("r12_strategy_agent_status", exc)
+        self._send_agent_run("r12_strategy_agent_status", run)
+
+    def _handle_agent_approve(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            run = R12_STRATEGY_AGENT.approve_and_resume(
+                request_data.get("run_id"),
+                request_data.get("attestation"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_strategy_agent_approve", exc)
+        self._send_agent_run("r12_strategy_agent_approve", run)
+
+    def _handle_agent_resume(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            run = R12_STRATEGY_AGENT.resume(request_data.get("run_id"))
+        except Exception as exc:
+            return self._r12_error("r12_strategy_agent_resume", exc)
+        self._send_agent_run("r12_strategy_agent_resume", run)
+
+    def _send_agent_run(self, action: str, run: dict):
+        self._send_eval_json(
+            200,
+            {
+                "ok": True,
+                "action": action,
+                "run": run,
+                "eval": evaluate_r12_strategy_agent_run(run),
+            },
+        )
+
     def _r12_error(self, action: str, exc: Exception):
         self._send_eval_json(
             400,
@@ -204,6 +277,7 @@ def main():
     print("Identity gate: explicit rules review remains mandatory before cross-market RV")
     print("Step 4: public order-book depth + explicit fees + target fill + latency buffer")
     print("Step 5: fingerprint-bound deterministic rules analysis -> explicit human identity review")
+    print("Step 6: Tool DAG -> durable pause -> human approval -> resumable paper quote")
     print("No order credentials, wallet, authenticated portfolio API, or order placement")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
     print("Next: paper-fill accounting and realized paper P&L")

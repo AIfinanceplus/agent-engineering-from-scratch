@@ -376,7 +376,13 @@ def _tokens(value: str) -> set[str]:
 
 
 def _non_empty_items(value: dict) -> dict:
-    return {str(key): item for key, item in value.items() if item is not None and item != ""}
+    # Artifact output and analysis_id must not depend on provider dictionary
+    # insertion order. Durable JSON stores commonly sort object keys.
+    return {
+        str(key): item
+        for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        if item is not None and item != ""
+    }
 
 
 def _parse_time(value: Any) -> datetime | None:

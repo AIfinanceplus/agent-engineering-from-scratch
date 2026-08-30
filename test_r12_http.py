@@ -47,14 +47,16 @@ class R12HTTPTests(unittest.TestCase):
         self.assertEqual(payload["action"], "r12_strategy_registry")
         registry = payload["registry"]
         self.assertEqual(len(registry["strategies"]), 5)
-        self.assertEqual(registry["roadmap_version"], "R12_STEP5")
+        self.assertEqual(registry["roadmap_version"], "R12_STEP6")
         cross = next(row for row in registry["strategies"] if row["strategy_id"] == "cross_market_event_rv")
-        self.assertEqual(cross["status"], "LIVE_RULES_ASSISTED_DEPTH_QUOTE_IDENTITY_GATED")
+        self.assertEqual(cross["status"], "LIVE_HITL_AGENT_DEPTH_QUOTE_IDENTITY_GATED")
         self.assertFalse(registry["discovery_contract"]["candidate_match_is_settlement_proof"])
         self.assertTrue(registry["execution_quote_contract"]["target_quantity_must_fill_on_both_legs"])
         self.assertFalse(registry["execution_quote_contract"]["automatic_execution"])
         self.assertTrue(registry["rules_analysis_contract"]["contract_fingerprint_bound"])
         self.assertFalse(registry["rules_analysis_contract"]["parser_can_auto_approve_identity"])
+        self.assertTrue(registry["strategy_agent_contract"]["durable_human_approval_pause"])
+        self.assertFalse(registry["strategy_agent_contract"]["automatic_execution"])
         self.assertIn("application/json", headers.get("Content-Type", ""))
         self.assertEqual(headers.get("Connection"), "close")
 
