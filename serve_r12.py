@@ -414,6 +414,7 @@ def main():
     print("Step 6: Tool DAG -> durable pause -> human approval -> resumable paper quote")
     print("Step 7: explicit paper fills -> append-only replay -> leg risk -> MTM / settlement P&L")
     print("Step 8: Agent Run / Manual Lab / Strategy Roadmap operator workspaces")
+    print("Step 8 fix: default event search entry + content-height Strategy workspace")
     print("No order credentials, wallet, authenticated portfolio API, or order placement")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
     print("Next: paper portfolio aggregation + multi-trade exposure limits")

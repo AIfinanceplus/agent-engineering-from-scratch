@@ -67,7 +67,7 @@ function r12InstallStrategyNav() {
   const button = document.createElement('button');
   button.className = 'nav-btn';
   button.dataset.nav = 'strategy';
-  button.innerHTML = '<span class="nav-ico">⌁</span><span class="nav-label">策略机会</span>';
+  button.innerHTML = '<span class="nav-ico">⌁</span><span class="nav-label">事件市场</span>';
   if (evalNav) nav.insertBefore(button, evalNav);
   else nav.appendChild(button);
   button.addEventListener('click', () => selectNav('strategy'));
@@ -222,6 +222,8 @@ renderAll = function renderR12All() {
   const execution = document.querySelector('.execution');
   const detail = document.querySelector('.detail');
   const detailTabs = document.querySelector('.detail > .tabs');
+  const workspace = document.querySelector('.workspace');
+  if (workspace) workspace.classList.toggle('r12-strategy-workspace-mode', strategyMode);
   if (strategyMode) {
     if (input) input.hidden = true;
     if (execution) execution.hidden = true;

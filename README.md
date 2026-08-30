@@ -340,7 +340,7 @@ http://127.0.0.1:8000
 Suggested R12 Step 8 Agent Run flow:
 
 ```text
-1. 打开 策略机会；保持默认 Agent Run workspace
+1. 启动 R12 后默认打开 事件市场；保持 Event Search & Agent workspace
 2. 搜索并加载 exact Kalshi / Polymarket pair
 3. 输入 target、explicit fee model 与 latency buffer
 4. Start Exact-pair Agent

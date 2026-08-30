@@ -25,12 +25,12 @@ const R12_STEP8_SETUP_FIELDS = {
 function r12Step8Header() {
   const workspace = r12Step8State.workspace;
   const tabs = [
-    ['agent', 'Agent Run', '发现 → 配置 → H1 → 报价 → paper ledger'],
+    ['agent', 'Event Search & Agent', '搜索事件 → 加载配对 → H1 → paper ledger'],
     ['manual', 'Manual Lab', '逐个调用底层工具'],
     ['roadmap', 'Strategy Roadmap', '五组策略与边界'],
   ];
   return `<div class="strategy-center-head r12-step8-head">
-    <div><div class="kicker">R12 · OPERATOR WORKSPACES</div><h2>Strategy Opportunity Center</h2><p>默认只展示端到端 Agent 主线；底层工具和策略路线图分别进入独立工作区。</p></div>
+    <div><div class="kicker">R12 · EVENT MARKET AGENT</div><h2>Search Events First</h2><p>默认从自然语言事件搜索开始；精确 ticker / market ID 只保留为 Advanced fallback。</p></div>
     <span class="pill done">PAPER SIGNAL ONLY</span>
   </div>
   <div class="r12-workspace-tabs" role="tablist" aria-label="Strategy Center workspace">
@@ -96,7 +96,6 @@ function r12Step8ResultsPanel() {
 
 function r12Step8AgentWorkspace() {
   return `<div class="r12-step8-workspace r12-step8-agent">
-    <section class="strategy-section r12-agent-guide"><div class="kicker">AGENT RUN · 1 · DISCOVER</div><h3>Find an Exact Cross-market Pair</h3><p>Search 只生成候选；Load pair 才把精确 ID 送入后续规则与身份验证链。</p></section>
     ${r12Step3DiscoveryPanel()}
     ${r12Step8AgentSetupPanel()}
     <div class="r12-agent-stage"><div class="kicker">AGENT RUN · 3 · START / RESUME</div>${r12Step7BaseRunPanel()}</div>
@@ -201,4 +200,4 @@ document.addEventListener('keydown', (event) => {
   document.querySelector(`[data-r12-workspace="${r12Step8State.workspace}"]`)?.focus();
 });
 
-renderAll();
+openR12StrategyCenter();

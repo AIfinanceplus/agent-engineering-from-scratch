@@ -11,11 +11,12 @@ class R12Step6UIContractTests(unittest.TestCase):
         self.assertIn('"r12_step6.js"', source)
         self.assertLess(source.index('"r12_step5.js"'), source.index('"r12_step6.js"'))
         self.assertIn("Agent Run / Manual Lab / Strategy Roadmap operator workspaces", source)
+        self.assertIn("default event search entry + content-height Strategy workspace", source)
 
     def test_strategy_center_has_three_task_oriented_workspaces(self):
         source = (ROOT / "web" / "r12_step6.js").read_text(encoding="utf-8")
         self.assertIn("workspace:'agent'", source)
-        self.assertIn("Agent Run", source)
+        self.assertIn("Event Search & Agent", source)
         self.assertIn("Manual Lab", source)
         self.assertIn("Strategy Roadmap", source)
         self.assertIn('role="tablist"', source)
@@ -24,6 +25,17 @@ class R12Step6UIContractTests(unittest.TestCase):
         self.assertIn('aria-labelledby="r12-workspace-tab-${r12Step8State.workspace}"', source)
         self.assertIn("['ArrowLeft', 'ArrowRight', 'Home', 'End']", source)
         self.assertIn("data-r12-workspace", source)
+
+    def test_r12_opens_on_event_search_and_collapses_the_old_fixed_grid(self):
+        step8 = (ROOT / "web" / "r12_step6.js").read_text(encoding="utf-8")
+        base = (ROOT / "web" / "r12_ui.js").read_text(encoding="utf-8")
+        css = (ROOT / "web" / "r12.css").read_text(encoding="utf-8")
+        self.assertTrue(step8.rstrip().endswith("openR12StrategyCenter();"))
+        workspace = step8[step8.index("function r12Step8AgentWorkspace"):step8.index("function r12Step8StructuralLab")]
+        self.assertLess(workspace.index("r12Step3DiscoveryPanel()"), workspace.index("r12Step8AgentSetupPanel()"))
+        self.assertIn("事件市场", base)
+        self.assertIn("r12-strategy-workspace-mode", base)
+        self.assertIn(".workspace.r12-strategy-workspace-mode{display:block;overflow:auto}", css)
 
     def test_agent_workspace_is_linear_and_keeps_h1_next_to_manual_checks(self):
         source = (ROOT / "web" / "r12_step6.js").read_text(encoding="utf-8")
