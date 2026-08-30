@@ -20,7 +20,10 @@ class R12UIContractTests(unittest.TestCase):
 
     def test_strategy_center_does_not_hide_execution_guardrails(self):
         source = (ROOT / "web" / "r12_ui.js").read_text(encoding="utf-8")
-        self.assertIn("PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION", source)
+        # The exact enum is owned by the backend opportunity contract and rendered
+        # from row.execution_status, avoiding a duplicated hard-coded UI value.
+        self.assertIn("row.execution_status", source)
+        self.assertIn("PAPER SIGNAL ONLY", source)
         self.assertIn("Structural edge ≠ calibrated macro alpha", source)
         self.assertIn("Settlement", source)
         self.assertIn("Implementation", source)
