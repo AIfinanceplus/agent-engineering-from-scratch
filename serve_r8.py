@@ -37,7 +37,7 @@ class R8VisualizerHandler(base.VisualizerHandler):
         source = source.replace('<strong>R7</strong><span class="status-sep">', '<strong>R8</strong><span class="status-sep">')
         source = source.replace(
             "</body>",
-            '  <script src="r8_ui.js"></script>\n</body>',
+            '  <script src="r8_ui.js"></script>\n  <script src="r8_eval_current.js"></script>\n</body>',
         )
         body = source.encode("utf-8")
         self.send_response(200)
