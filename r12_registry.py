@@ -9,11 +9,11 @@ def current_strategy_registry_snapshot() -> dict:
     registry = deepcopy(strategy_registry_snapshot())
     for row in registry.get("strategies") or []:
         if row.get("strategy_id") == "cross_market_event_rv":
-            row["status"] = "LIVE_DEPTH_EXECUTION_QUOTE_IDENTITY_GATED"
-            row["next_dependency"] = "rules parser + paper-fill accounting + realized paper P&L"
+            row["status"] = "LIVE_RULES_ASSISTED_DEPTH_QUOTE_IDENTITY_GATED"
+            row["next_dependency"] = "paper-fill accounting + realized paper P&L"
         elif row.get("strategy_id") == "structural_logic_rv":
             row["next_dependency"] = "live market-universe normalizer + liquidity/fee/depth model"
-    registry["roadmap_version"] = "R12_STEP4"
+    registry["roadmap_version"] = "R12_STEP5"
     registry["current_boundary"] = (
         "Free-text discovery can find candidate Kalshi and Polymarket markets without raw IDs. Candidate matching is "
         "lexical and never proves settlement identity; exact contracts still require explicit rules attestation before "
@@ -30,5 +30,12 @@ def current_strategy_registry_snapshot() -> dict:
         "explicit_provider_fee_model_required": True,
         "latency_buffer_is_user_supplied_not_calibrated": True,
         "automatic_execution": False,
+    }
+    registry["rules_analysis_contract"] = {
+        "deterministic_extraction": True,
+        "contract_fingerprint_bound": True,
+        "required_before_identity_review": True,
+        "parser_can_auto_approve_identity": False,
+        "human_attestation_still_required": True,
     }
     return registry

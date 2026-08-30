@@ -10,7 +10,7 @@ from r12_event_sources import normalize_kalshi_contract, normalize_polymarket_co
 from r12_identity import validate_event_identity
 from serve_r12 import R12VisualizerHandler
 from test_r12_event_sources import kalshi_event, kalshi_market, kalshi_series, poly_books, polymarket_market
-from test_r12_identity import full_attestation
+from test_r12_identity import full_attestation, rules_analysis
 from test_r12_execution import execution_contracts, explicit_zero_fee_model
 
 
@@ -78,18 +78,38 @@ class R12Step2HTTPTests(unittest.TestCase):
 
     def test_identity_endpoint_never_auto_approves_without_attestation(self):
         kalshi, poly = normalized_contracts()
+        analysis = rules_analysis(kalshi, poly)
         status, _, payload = self.post(
             "/api/r12/identity",
-            {"kalshi_contract": kalshi, "polymarket_contract": poly},
+            {"kalshi_contract": kalshi, "polymarket_contract": poly, "rules_analysis": analysis},
         )
         self.assertEqual(status, 200)
         identity = payload["identity"]
         self.assertEqual(identity["status"], "IDENTITY_UNVERIFIED_MANUAL_REVIEW_REQUIRED")
         self.assertFalse(identity["settlement_compatible_for_rv"])
 
+    def test_rules_analysis_endpoint_returns_fingerprint_bound_non_approval_artifact(self):
+        kalshi, poly = normalized_contracts()
+        status, _, payload = self.post(
+            "/api/r12/rules-analysis",
+            {"kalshi_contract": kalshi, "polymarket_contract": poly},
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["action"], "r12_settlement_rules_analysis")
+        analysis = payload["analysis"]
+        self.assertTrue(analysis["eligible_for_identity_review"])
+        self.assertFalse(analysis["can_auto_approve_identity"])
+        self.assertTrue(analysis["contracts"]["kalshi"]["fingerprint"])
+
     def test_verified_identity_can_run_locked_cross_market_complement_scan(self):
         kalshi, poly = normalized_contracts()
-        identity = validate_event_identity(kalshi, poly, attestation=full_attestation())
+        identity = validate_event_identity(
+            kalshi,
+            poly,
+            rules_analysis=rules_analysis(kalshi, poly),
+            attestation=full_attestation(),
+        )
         status, _, payload = self.post(
             "/api/r12/cross-market-rv",
             {
@@ -107,7 +127,7 @@ class R12Step2HTTPTests(unittest.TestCase):
 
     def test_unverified_identity_cross_market_endpoint_fails_closed(self):
         kalshi, poly = normalized_contracts()
-        identity = validate_event_identity(kalshi, poly)
+        identity = validate_event_identity(kalshi, poly, rules_analysis=rules_analysis(kalshi, poly))
         status, _, payload = self.post(
             "/api/r12/cross-market-rv",
             {"identity": identity, "kalshi_contract": kalshi, "polymarket_contract": poly},
@@ -118,7 +138,12 @@ class R12Step2HTTPTests(unittest.TestCase):
 
     def test_depth_execution_endpoint_requires_full_target_and_explicit_fees(self):
         kalshi, poly = execution_contracts()
-        identity = validate_event_identity(kalshi, poly, attestation=full_attestation())
+        identity = validate_event_identity(
+            kalshi,
+            poly,
+            rules_analysis=rules_analysis(kalshi, poly),
+            attestation=full_attestation(),
+        )
         status, _, payload = self.post(
             "/api/r12/execution-quote",
             {

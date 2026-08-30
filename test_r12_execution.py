@@ -6,7 +6,7 @@ from r12_execution import quote_cross_market_execution
 from r12_identity import validate_event_identity
 from r12_tooling import R12_EXECUTION_QUOTE_TOOL, register_r12_tools
 from test_r12_event_sources import kalshi_event, kalshi_market, kalshi_series, polymarket_market
-from test_r12_identity import full_attestation
+from test_r12_identity import full_attestation, rules_analysis
 
 
 def execution_contracts():
@@ -60,7 +60,12 @@ def explicit_zero_fee_model():
 class R12ExecutionQuoteTests(unittest.TestCase):
     def setUp(self):
         self.kalshi, self.poly = execution_contracts()
-        self.identity = validate_event_identity(self.kalshi, self.poly, attestation=full_attestation())
+        self.identity = validate_event_identity(
+            self.kalshi,
+            self.poly,
+            rules_analysis=rules_analysis(self.kalshi, self.poly),
+            attestation=full_attestation(),
+        )
 
     def test_walks_visible_depth_and_emits_only_fully_matched_paper_signal(self):
         quote = quote_cross_market_execution(
@@ -138,7 +143,11 @@ class R12ExecutionQuoteTests(unittest.TestCase):
         self.assertNotEqual(first["opportunities"][0]["opportunity_id"], second["opportunities"][0]["opportunity_id"])
 
     def test_identity_and_finite_numeric_boundaries_fail_closed(self):
-        unverified = validate_event_identity(self.kalshi, self.poly)
+        unverified = validate_event_identity(
+            self.kalshi,
+            self.poly,
+            rules_analysis=rules_analysis(self.kalshi, self.poly),
+        )
         with self.assertRaisesRegex(ValueError, "SETTLEMENT_COMPATIBLE_FOR_RV"):
             quote_cross_market_execution(
                 unverified,

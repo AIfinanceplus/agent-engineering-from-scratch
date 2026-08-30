@@ -2,8 +2,9 @@
 
 Provider adapters normalize facts. This module decides whether two contracts are
 safe to compare as the same binary event. R12 deliberately does not use title
-similarity or an LLM to auto-approve identity. A human/independent rules parser must
-explicitly attest the semantic and settlement checks.
+similarity, an LLM, or the deterministic rules parser to auto-approve identity.
+The parser prepares fingerprint-bound review material; a human must explicitly
+attest the semantic and settlement checks.
 
 Only a verified identity may enter the locked cross-market complement-basket test:
 
@@ -16,6 +17,8 @@ A positive margin after explicit costs is a paper signal only. No orders are sen
 from __future__ import annotations
 
 from hashlib import sha256
+
+from r12_rules import validate_rules_analysis_binding
 
 
 IDENTITY_CHECKS = (
@@ -32,6 +35,7 @@ def validate_event_identity(
     kalshi_contract: dict,
     polymarket_contract: dict,
     *,
+    rules_analysis: dict | None = None,
     attestation: dict | None = None,
 ) -> dict:
     _validate_contract(kalshi_contract, "kalshi")
@@ -44,15 +48,40 @@ def validate_event_identity(
         "both_have_resolution_metadata": bool(kalshi_contract.get("resolution")) and bool(polymarket_contract.get("resolution")),
         "both_have_time_contract": bool(kalshi_contract.get("time_contract")) and bool(polymarket_contract.get("time_contract")),
     }
-    machine_ready = all(machine_checks.values())
+    base_machine_ready = all(machine_checks.values())
+    rules_binding = validate_rules_analysis_binding(rules_analysis, kalshi_contract, polymarket_contract)
+    machine_checks.update(
+        {
+            "rules_analysis_artifact_valid": rules_binding["artifact_valid"],
+            "rules_analysis_contract_ids_match": rules_binding["contract_ids_match"],
+            "rules_analysis_fingerprints_current": rules_binding["fingerprints_current"],
+            "rules_analysis_matches_current_parser_output": rules_binding["matches_current_parser_output"],
+            "rules_analysis_ready_for_human_review": rules_binding["ready_for_human_review"],
+            "rules_parser_did_not_auto_approve": rules_binding["parser_did_not_auto_approve"],
+        }
+    )
 
     attestation = attestation if isinstance(attestation, dict) else None
     attestation_checks = {key: bool(attestation.get(key)) if attestation else False for key in IDENTITY_CHECKS}
     attestation_source = attestation.get("attestation_source") if attestation else None
     attestation_complete = all(attestation_checks.values()) and isinstance(attestation_source, str) and bool(attestation_source.strip())
 
-    if not machine_ready:
+    if not base_machine_ready:
         status = "IDENTITY_REJECTED_MACHINE_CONTRACT_INCOMPLETE"
+        compatible = False
+    elif rules_analysis is None:
+        status = "IDENTITY_REJECTED_RULES_ANALYSIS_REQUIRED"
+        compatible = False
+    elif (
+        not rules_binding["artifact_valid"]
+        or not rules_binding["contract_ids_match"]
+        or not rules_binding["fingerprints_current"]
+        or not rules_binding["matches_current_parser_output"]
+    ):
+        status = "IDENTITY_REJECTED_RULES_ANALYSIS_STALE_OR_INVALID"
+        compatible = False
+    elif not rules_binding["ready_for_human_review"] or not rules_binding["parser_did_not_auto_approve"]:
+        status = "IDENTITY_REJECTED_RULES_ANALYSIS_BLOCKED"
         compatible = False
     elif attestation is None:
         status = "IDENTITY_UNVERIFIED_MANUAL_REVIEW_REQUIRED"
@@ -76,6 +105,12 @@ def validate_event_identity(
             "polymarket": _contract_summary(polymarket_contract),
         },
         "machine_checks": machine_checks,
+        "rules_analysis_gate": {
+            **rules_binding,
+            "status": rules_analysis.get("status") if isinstance(rules_analysis, dict) else None,
+            "blocking_findings": rules_analysis.get("blocking_findings") if isinstance(rules_analysis, dict) else [],
+            "comparison_checks": rules_analysis.get("comparison_checks") if isinstance(rules_analysis, dict) else [],
+        },
         "manual_attestation": {
             "required_checks": list(IDENTITY_CHECKS),
             "checks": attestation_checks,
@@ -93,6 +128,8 @@ def validate_event_identity(
         "guardrails": {
             "title_similarity_used_as_identity": False,
             "llm_auto_approval_used": False,
+            "rules_parser_auto_approval_used": False,
+            "current_rules_fingerprint_required": True,
             "manual_or_independent_rules_review_required": True,
             "automatic_execution": False,
         },

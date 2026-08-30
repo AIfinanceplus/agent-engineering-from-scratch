@@ -13,6 +13,7 @@ class R12Step2UIContractTests(unittest.TestCase):
         self.assertIn("exact Gamma market ID", source)
         self.assertIn("/api/r12/market-contract", source)
         self.assertIn("/api/r12/identity", source)
+        self.assertIn("/api/r12/rules-analysis", source)
         self.assertIn("/api/r12/cross-market-rv", source)
         self.assertIn("/api/r12/execution-quote", source)
         self.assertIn("same_event_meaning", source)
@@ -21,6 +22,9 @@ class R12Step2UIContractTests(unittest.TestCase):
         self.assertIn("compatible_resolution_source", source)
         self.assertIn("compatible_resolution_horizon", source)
         self.assertIn("edge_cases_reviewed", source)
+        self.assertIn("Deterministic Settlement Rules Analysis", source)
+        self.assertIn("PARSER_NEVER_AUTO_ATTESTS", source)
+        self.assertIn("rules_analysis:r12Step2State.rulesAnalysis", source)
 
     def test_cross_market_rv_is_disabled_until_identity_is_verified(self):
         source = (ROOT / "web" / "r12_step2.js").read_text(encoding="utf-8")
@@ -31,6 +35,9 @@ class R12Step2UIContractTests(unittest.TestCase):
         self.assertIn("Depth-aware Paper Execution Quote", source)
         self.assertIn("完整 depth、explicit fee 和 target-fill gate", source)
         self.assertIn("r12Step2FiniteNonNegative", source)
+        self.assertIn("rulesAnalysis?.eligible_for_identity_review", source)
+        self.assertNotIn("input.checked = true", source)
+        self.assertNotIn(".checked=true", source)
         self.assertNotIn("placeOrder", source)
         self.assertNotIn("create_order", source)
 
@@ -39,10 +46,12 @@ class R12Step2UIContractTests(unittest.TestCase):
         self.assertIn('"r12_step2.js"', source)
         self.assertIn('"/api/r12/market-contract"', source)
         self.assertIn('"/api/r12/identity"', source)
+        self.assertIn('"/api/r12/rules-analysis"', source)
         self.assertIn('"/api/r12/cross-market-rv"', source)
         self.assertIn('"/api/r12/execution-quote"', source)
         self.assertIn("title similarity NEVER auto-approves", source)
         self.assertIn("No order credentials, wallet, authenticated portfolio API, or order placement", source)
+        self.assertIn("fingerprint-bound deterministic rules analysis", source)
 
 
 if __name__ == "__main__":

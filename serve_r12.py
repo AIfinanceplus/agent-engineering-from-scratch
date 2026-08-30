@@ -6,6 +6,7 @@ import r12_discovery as discovery_engine
 import r12_event_sources as event_sources
 import r12_execution as execution_engine
 import r12_identity as identity_engine
+import r12_rules as rules_engine
 from r12_registry import current_strategy_registry_snapshot
 from r12_strategy import scan_structural_opportunities
 from r12_tooling import register_r12_tools
@@ -31,6 +32,8 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return self._handle_market_contract()
         if self.path == "/api/r12/identity":
             return self._handle_identity()
+        if self.path == "/api/r12/rules-analysis":
+            return self._handle_rules_analysis()
         if self.path == "/api/r12/cross-market-rv":
             return self._handle_cross_market_rv()
         if self.path == "/api/r12/execution-quote":
@@ -111,6 +114,7 @@ class R12VisualizerHandler(R11VisualizerHandler):
             identity = identity_engine.validate_event_identity(
                 request_data.get("kalshi_contract"),
                 request_data.get("polymarket_contract"),
+                rules_analysis=request_data.get("rules_analysis"),
                 attestation=request_data.get("attestation"),
             )
         except Exception as exc:
@@ -118,6 +122,22 @@ class R12VisualizerHandler(R11VisualizerHandler):
         self._send_eval_json(
             200,
             {"ok": True, "action": "r12_event_identity", "identity": identity},
+        )
+
+    def _handle_rules_analysis(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            analysis = rules_engine.analyze_settlement_rules(
+                request_data.get("kalshi_contract"),
+                request_data.get("polymarket_contract"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_settlement_rules_analysis", exc)
+        self._send_eval_json(
+            200,
+            {"ok": True, "action": "r12_settlement_rules_analysis", "analysis": analysis},
         )
 
     def _handle_cross_market_rv(self):
@@ -183,9 +203,10 @@ def main():
     print("Identity gate: title similarity NEVER auto-approves same-event settlement compatibility")
     print("Identity gate: explicit rules review remains mandatory before cross-market RV")
     print("Step 4: public order-book depth + explicit fees + target fill + latency buffer")
+    print("Step 5: fingerprint-bound deterministic rules analysis -> explicit human identity review")
     print("No order credentials, wallet, authenticated portfolio API, or order placement")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
-    print("Next: deterministic/assisted rules parser, then paper-fill accounting and realized paper P&L")
+    print("Next: paper-fill accounting and realized paper P&L")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

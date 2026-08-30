@@ -129,6 +129,7 @@ async function r12Step3LoadCandidate(provider, identifier) {
     r12Step3State.error = null;
     const contract = await r12Step3FetchContract(provider, identifier);
     r12Step2State[provider] = contract;
+    r12Step2State.rulesAnalysis = null;
     r12Step2State.identity = null;
     r12Step2State.rv = null;
     r12Step2State.execution = null;
@@ -153,8 +154,10 @@ async function r12Step3LoadPair(kalshiIdentifier, polymarketIdentifier) {
     ]);
     r12Step2State.kalshi = kalshi;
     r12Step2State.polymarket = polymarket;
+    r12Step2State.rulesAnalysis = null;
     r12Step2State.identity = null;
     r12Step2State.rv = null;
+    r12Step2State.execution = null;
     r12Step3State.selected.kalshi = kalshiIdentifier;
     r12Step3State.selected.polymarket = polymarketIdentifier;
     toast('Candidate pair loaded. Settlement identity is still UNVERIFIED.');

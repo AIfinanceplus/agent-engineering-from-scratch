@@ -26,6 +26,7 @@ class R12Step3UIContractTests(unittest.TestCase):
     def test_loading_candidate_pair_does_not_auto_validate_identity(self):
         source = (ROOT / "web" / "r12_step3.js").read_text(encoding="utf-8")
         self.assertIn("r12Step2State.identity = null", source)
+        self.assertIn("r12Step2State.rulesAnalysis = null", source)
         self.assertIn("Settlement identity is still UNVERIFIED", source)
         self.assertNotIn("r12Step2ValidateIdentity()", source)
         self.assertNotIn("r12Step2RunRV()", source)

@@ -6,6 +6,7 @@ from r12_event_sources import fetch_kalshi_market_contract, fetch_polymarket_mar
 from r12_execution import quote_cross_market_execution
 from r12_identity import compare_cross_market_locked_rv, validate_event_identity
 from r12_registry import current_strategy_registry_snapshot
+from r12_rules import analyze_settlement_rules
 from r12_strategy import scan_structural_opportunities
 from tools import TOOL_REGISTRY, Tool
 
@@ -84,20 +85,43 @@ R12_MARKET_CONTRACT_TOOL = Tool(
     risk="low",
 )
 
-R12_IDENTITY_TOOL = Tool(
-    name="validate_r12_event_identity",
+R12_RULES_ANALYSIS_TOOL = Tool(
+    name="analyze_r12_settlement_rules",
     description=(
-        "Validate whether normalized Kalshi and Polymarket contracts may be treated as the same binary settlement event. "
-        "Title similarity never auto-approves identity; explicit semantic/rules attestation is required."
+        "Deterministically extract and compare settlement rules, resolution authorities, time anchors, measurements, "
+        "and edge-case clauses from exact Kalshi and Polymarket contracts. The report is fingerprint-bound review "
+        "material and can never approve event identity or check human attestations."
     ),
     parameters={
         "type": "object",
         "properties": {
             "kalshi_contract": {"type": "object"},
             "polymarket_contract": {"type": "object"},
-            "attestation": {"type": "object"},
         },
         "required": ["kalshi_contract", "polymarket_contract"],
+        "additionalProperties": False,
+    },
+    function=analyze_settlement_rules,
+    max_retries=0,
+    risk="low",
+)
+
+R12_IDENTITY_TOOL = Tool(
+    name="validate_r12_event_identity",
+    description=(
+        "Validate whether normalized Kalshi and Polymarket contracts may be treated as the same binary settlement event. "
+        "A current fingerprint-bound settlement-rules analysis and explicit semantic/rules attestation are required; "
+        "title similarity never auto-approves identity."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "kalshi_contract": {"type": "object"},
+            "polymarket_contract": {"type": "object"},
+            "rules_analysis": {"type": "object"},
+            "attestation": {"type": "object"},
+        },
+        "required": ["kalshi_contract", "polymarket_contract", "rules_analysis"],
         "additionalProperties": False,
     },
     function=validate_event_identity,
@@ -160,6 +184,7 @@ def register_r12_tools() -> tuple[str, ...]:
         R12_STRATEGY_REGISTRY_TOOL,
         R12_DISCOVERY_TOOL,
         R12_MARKET_CONTRACT_TOOL,
+        R12_RULES_ANALYSIS_TOOL,
         R12_IDENTITY_TOOL,
         R12_CROSS_MARKET_RV_TOOL,
         R12_EXECUTION_QUOTE_TOOL,
