@@ -45,7 +45,11 @@ class R12HTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["action"], "r12_strategy_registry")
-        self.assertEqual(len(payload["registry"]["strategies"]), 5)
+        registry = payload["registry"]
+        self.assertEqual(len(registry["strategies"]), 5)
+        self.assertEqual(registry["roadmap_version"], "R12_STEP2")
+        cross = next(row for row in registry["strategies"] if row["strategy_id"] == "cross_market_event_rv")
+        self.assertEqual(cross["status"], "LIVE_EXACT_ID_ADAPTER_IDENTITY_GATED")
         self.assertIn("application/json", headers.get("Content-Type", ""))
         self.assertEqual(headers.get("Connection"), "close")
 
