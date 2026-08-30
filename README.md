@@ -21,7 +21,7 @@ V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, Exe
 - R11 — Constraint-based position sizing
 - R12 — Strategy opportunities + live public event markets + HITL Strategy Agent
 
-## Current stage: R12 Step 6 — human-in-the-loop Strategy Agent
+## Current stage: R12 Step 7 — replayable paper execution ledger
 
 R12 keeps the earlier Runtime, Evidence, forecasting, EV, risk, and sizing layers,
 then adds a five-strategy opportunity registry. The currently deepest live path is
@@ -43,11 +43,22 @@ I1 settlement identity Tool
 V1 top-of-book reciprocal complement scan
       ↓
 E1 depth-aware paper execution quote
+      ↓ explicit user command; quote is never treated as a fill
+Paper intent with zero fills
+      ↓ idempotent simulated fill commands
+Append-only hash-chained event ledger
+      ↓ deterministic replay
+Partial-leg risk / matched quantity / MTM P&L
+      ↓ explicit YES or NO settlement
+Realized paper P&L
 ```
 
 The Strategy Agent persists an append-only checkpoint view after every boundary.
 Resume skips durably completed tasks. No parser or model can check H1 boxes, and no
-R12 component places orders.
+R12 component places orders. Step 7 deliberately separates the read/compute Agent
+DAG from state-changing commands: E1 remains a quote, while every simulated fill,
+mark, cancel/expire, and settlement requires an idempotency key and is recorded as
+an fsync'd JSONL event under `.r12_paper_ledger/`.
 
 Current five-strategy roadmap:
 
@@ -314,7 +325,7 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Suggested R12 Step 6 flow:
+Suggested R12 Step 7 flow:
 
 ```text
 1. 打开 策略机会
@@ -325,6 +336,13 @@ Suggested R12 Step 6 flow:
 6. 人工勾选六项 settlement identity attestation
 7. Approve H1 and Resume
 8. 检查 I1 / V1 / E1、task traces、checkpoints 与 eval
+9. Create Paper Intent；确认初始状态为 PENDING_PAPER_FILL 且 0 fills
+10. 先给一条腿 Record Fill；确认状态为 PARTIALLY_FILLED_LEG_RISK
+11. 给另一条腿记录相同数量；确认 leg risk 回到 0
+12. Update MTM，检查 acquisition cost、marked value 与 MTM P&L
+13. Cancel / Expire 剩余数量，或补齐两腿至 FULLY_MATCHED
+14. Settle YES / NO，检查 settlement payoff 与 realized P&L
+15. 刷新页面并用 Paper trade ID Load Ledger，确认事件回放结果不变
 ```
 
 Active UI scripts:
@@ -334,4 +352,5 @@ web/r12_ui.js
 web/r12_step2.js
 web/r12_step3.js
 web/r12_step4.js
+web/r12_step5.js
 ```

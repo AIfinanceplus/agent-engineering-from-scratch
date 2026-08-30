@@ -7,6 +7,7 @@ import r12_discovery as discovery_engine
 import r12_event_sources as event_sources
 import r12_execution as execution_engine
 import r12_identity as identity_engine
+import r12_paper as paper_engine
 import r12_rules as rules_engine
 from r12_agent import JsonR12StrategyRunStore, R12StrategyAgent, evaluate_r12_strategy_agent_run
 from r12_registry import current_strategy_registry_snapshot
@@ -18,12 +19,21 @@ from serve_r11 import R11VisualizerHandler
 register_r12_tools()
 R12_AGENT_STORE = JsonR12StrategyRunStore(Path(__file__).parent / ".r12_agent_runs")
 R12_STRATEGY_AGENT = R12StrategyAgent(R12_AGENT_STORE)
+R12_PAPER_STORE = paper_engine.JsonlR12PaperLedgerStore(Path(__file__).parent / ".r12_paper_ledger")
+R12_PAPER_LEDGER = paper_engine.R12PaperLedger(R12_PAPER_STORE)
 
 
 class R12VisualizerHandler(R11VisualizerHandler):
     version_label = "R12"
     page_title = "Agent Research Workbench · R12 Strategy Opportunity Engine"
-    extra_scripts = (*R11VisualizerHandler.extra_scripts, "r12_ui.js", "r12_step2.js", "r12_step3.js", "r12_step4.js")
+    extra_scripts = (
+        *R11VisualizerHandler.extra_scripts,
+        "r12_ui.js",
+        "r12_step2.js",
+        "r12_step3.js",
+        "r12_step4.js",
+        "r12_step5.js",
+    )
 
     def do_POST(self):
         if self.path == "/api/r12/registry":
@@ -50,6 +60,20 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return self._handle_agent_approve()
         if self.path == "/api/r12/agent/resume":
             return self._handle_agent_resume()
+        if self.path == "/api/r12/paper/create":
+            return self._handle_paper_create()
+        if self.path == "/api/r12/paper/status":
+            return self._handle_paper_status()
+        if self.path == "/api/r12/paper/fill":
+            return self._handle_paper_fill()
+        if self.path == "/api/r12/paper/mark":
+            return self._handle_paper_mark()
+        if self.path == "/api/r12/paper/cancel":
+            return self._handle_paper_cancel()
+        if self.path == "/api/r12/paper/expire":
+            return self._handle_paper_expire()
+        if self.path == "/api/r12/paper/settle":
+            return self._handle_paper_settle()
         return super().do_POST()
 
     def _handle_registry(self):
@@ -240,6 +264,104 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return self._r12_error("r12_strategy_agent_resume", exc)
         self._send_agent_run("r12_strategy_agent_resume", run)
 
+    def _handle_paper_create(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            run = R12_STRATEGY_AGENT.get(request_data.get("run_id"))
+            trade = R12_PAPER_LEDGER.create_from_agent_run(
+                run,
+                request_data.get("opportunity_id"),
+                request_data.get("idempotency_key"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_paper_create", exc)
+        self._send_paper_trade("r12_paper_create", trade)
+
+    def _handle_paper_status(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            trade = R12_PAPER_LEDGER.get(request_data.get("paper_trade_id"))
+        except Exception as exc:
+            return self._r12_error("r12_paper_status", exc)
+        self._send_paper_trade("r12_paper_status", trade)
+
+    def _handle_paper_fill(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            trade = R12_PAPER_LEDGER.record_fill(
+                request_data.get("paper_trade_id"),
+                leg_id=request_data.get("leg_id"),
+                quantity=request_data.get("quantity"),
+                price=request_data.get("price"),
+                fee=request_data.get("fee", 0.0),
+                idempotency_key=request_data.get("idempotency_key"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_paper_fill", exc)
+        self._send_paper_trade("r12_paper_fill", trade)
+
+    def _handle_paper_mark(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            trade = R12_PAPER_LEDGER.mark_to_market(
+                request_data.get("paper_trade_id"),
+                marks=request_data.get("marks"),
+                idempotency_key=request_data.get("idempotency_key"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_paper_mark", exc)
+        self._send_paper_trade("r12_paper_mark", trade)
+
+    def _handle_paper_cancel(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            trade = R12_PAPER_LEDGER.cancel(
+                request_data.get("paper_trade_id"),
+                reason=request_data.get("reason"),
+                idempotency_key=request_data.get("idempotency_key"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_paper_cancel", exc)
+        self._send_paper_trade("r12_paper_cancel", trade)
+
+    def _handle_paper_expire(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            trade = R12_PAPER_LEDGER.expire(
+                request_data.get("paper_trade_id"),
+                reason=request_data.get("reason"),
+                idempotency_key=request_data.get("idempotency_key"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_paper_expire", exc)
+        self._send_paper_trade("r12_paper_expire", trade)
+
+    def _handle_paper_settle(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            trade = R12_PAPER_LEDGER.settle(
+                request_data.get("paper_trade_id"),
+                winning_outcome=request_data.get("winning_outcome"),
+                idempotency_key=request_data.get("idempotency_key"),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_paper_settle", exc)
+        self._send_paper_trade("r12_paper_settle", trade)
+
     def _send_agent_run(self, action: str, run: dict):
         self._send_eval_json(
             200,
@@ -248,6 +370,17 @@ class R12VisualizerHandler(R11VisualizerHandler):
                 "action": action,
                 "run": run,
                 "eval": evaluate_r12_strategy_agent_run(run),
+            },
+        )
+
+    def _send_paper_trade(self, action: str, trade: dict):
+        self._send_eval_json(
+            200,
+            {
+                "ok": True,
+                "action": action,
+                "trade": trade,
+                "eval": paper_engine.evaluate_r12_paper_trade(trade),
             },
         )
 
@@ -278,9 +411,10 @@ def main():
     print("Step 4: public order-book depth + explicit fees + target fill + latency buffer")
     print("Step 5: fingerprint-bound deterministic rules analysis -> explicit human identity review")
     print("Step 6: Tool DAG -> durable pause -> human approval -> resumable paper quote")
+    print("Step 7: explicit paper fills -> append-only replay -> leg risk -> MTM / settlement P&L")
     print("No order credentials, wallet, authenticated portfolio API, or order placement")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
-    print("Next: paper-fill accounting and realized paper P&L")
+    print("Next version: simplify Strategy Center into Agent Run / Manual Lab / Roadmap views")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

@@ -9,15 +9,17 @@ def current_strategy_registry_snapshot() -> dict:
     registry = deepcopy(strategy_registry_snapshot())
     for row in registry.get("strategies") or []:
         if row.get("strategy_id") == "cross_market_event_rv":
-            row["status"] = "LIVE_HITL_AGENT_DEPTH_QUOTE_IDENTITY_GATED"
-            row["next_dependency"] = "paper-fill accounting + realized paper P&L"
+            row["status"] = "LIVE_HITL_AGENT_WITH_APPEND_ONLY_PAPER_LEDGER"
+            row["next_dependency"] = "Strategy Center Agent Run / Manual Lab / Roadmap information architecture"
         elif row.get("strategy_id") == "structural_logic_rv":
             row["next_dependency"] = "live market-universe normalizer + liquidity/fee/depth model"
-    registry["roadmap_version"] = "R12_STEP6"
+    registry["roadmap_version"] = "R12_STEP7"
     registry["current_boundary"] = (
         "Free-text discovery can find candidate Kalshi and Polymarket markets without raw IDs. Candidate matching is "
         "lexical and never proves settlement identity. An exact-pair Tool DAG now persists a human approval pause; "
-        "only a rules-analysis-bound six-check attestation can resume identity, RV, and depth-aware paper quoting."
+        "only a rules-analysis-bound six-check attestation can resume identity, RV, and depth-aware paper quoting. "
+        "An eligible E1 quote can then create a zero-fill paper intent; explicit idempotent commands append simulated "
+        "fills, marks, cancellation/expiry, and settlement to a replayable hash-chained ledger."
     )
     registry["discovery_contract"] = {
         "kalshi": "bounded open-event listing plus local lexical ranking",
@@ -44,6 +46,16 @@ def current_strategy_registry_snapshot() -> dict:
         "durable_human_approval_pause": True,
         "resume_skips_durably_completed_tasks": True,
         "task_level_trace_and_eval": True,
+        "automatic_execution": False,
+    }
+    registry["paper_ledger_contract"] = {
+        "e1_quote_is_a_fill": False,
+        "paper_intent_starts_with_zero_fills": True,
+        "mutations_require_idempotency_key": True,
+        "append_only_hash_chained_events": True,
+        "partial_leg_risk_is_explicit": True,
+        "mark_to_market_and_settlement_pnl_replayable": True,
+        "exchange_connection_present": False,
         "automatic_execution": False,
     }
     return registry

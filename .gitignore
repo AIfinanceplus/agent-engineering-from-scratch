@@ -7,3 +7,4 @@ venv/
 .forecasts/
 .research_checkpoints/
 .r12_agent_runs/
+.r12_paper_ledger/
