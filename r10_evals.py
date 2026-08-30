@@ -10,13 +10,16 @@ def make_r10_eval_suite(blueprint: dict, result: dict, domain: str) -> dict:
     decision_case = _r10_decision_case(result, domain)
     cases = [*base.get("cases", []), decision_case]
     passed = sum(1 for case in cases if case["report"]["passed"])
-    return {
-        "passed": passed,
-        "total": len(cases),
-        "pass_rate": round(passed / len(cases), 3) if cases else 1.0,
-        "cases": cases,
-        "evaluation_version": "R10",
-    }
+    return _json_safe(
+        {
+            "passed": passed,
+            "total": len(cases),
+            "pass_rate": round(passed / len(cases), 3) if cases else 1.0,
+            "cases": cases,
+            "evaluation_version": "R10",
+            "serialization_contract": "json_safe",
+        }
+    )
 
 
 def _r10_decision_case(result: dict, domain: str) -> dict:
@@ -88,3 +91,14 @@ def _check(check_id: str, label: str, actual, expected) -> dict:
         "expected": expected,
         "failure": "" if passed else f"{label}: expected {expected!r}, got {actual!r}",
     }
+
+
+def _json_safe(value):
+    """Normalize Eval artifacts before they cross the browser/stream boundary."""
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, set):
+        return sorted((_json_safe(item) for item in value), key=lambda item: repr(item))
+    return value
