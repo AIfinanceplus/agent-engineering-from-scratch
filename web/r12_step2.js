@@ -25,6 +25,10 @@ const r12Step2State = {
   execution: null,
   loading: null,
   error: null,
+  agentAttestationDraft: {
+    attestation_source: 'human_rules_review',
+    checks: {},
+  },
 };
 
 function r12Step2ContractCard(provider, contract) {
@@ -67,10 +71,11 @@ function r12Step2IdentityPanel() {
   const both = r12Step2State.kalshi && r12Step2State.polymarket;
   const rulesReady = Boolean(r12Step2State.rulesAnalysis?.eligible_for_identity_review);
   const identity = r12Step2State.identity;
+  const draft = r12Step2State.agentAttestationDraft || {attestation_source:'human_rules_review', checks:{}};
   return `<section class="live-identity-panel">
     <div class="strategy-section-head"><div><h3>3 · Human Event Identity / Settlement Review</h3><p>Parser 没发现 blocker 也不等于相同事件。请阅读报告后逐项人工确认；所有 checkbox 默认保持未勾选。</p></div><span class="pill ${identity?.settlement_compatible_for_rv ? 'done' : 'fail'}">${esc(identity?.status || 'UNVERIFIED')}</span></div>
-    <div class="identity-check-grid">${R12_IDENTITY_CHECKS.map(([key,label]) => `<label><input type="checkbox" data-r12-identity="${esc(key)}"> <span>${esc(label)}</span></label>`).join('')}</div>
-    <label class="identity-source">Review / attestation source<input id="r12-attestation-source" value="human_rules_review" placeholder="human_rules_review / independent_rules_parser"></label>
+    <div class="identity-check-grid">${R12_IDENTITY_CHECKS.map(([key,label]) => `<label><input type="checkbox" data-r12-identity="${esc(key)}" ${draft.checks?.[key] ? 'checked' : ''}> <span>${esc(label)}</span></label>`).join('')}</div>
+    <label class="identity-source">Review / attestation source<input id="r12-attestation-source" value="${esc(draft.attestation_source || 'human_rules_review')}" placeholder="human_rules_review / independent_rules_parser"></label>
     <button id="r12-validate-identity" class="btn primary" ${both && rulesReady ? '' : 'disabled'}>Validate Settlement Identity</button>
     ${identity ? `<details open><summary>Identity Contract</summary><pre class="codebox">${esc(pretty(identity))}</pre></details>` : ''}
   </section>`;

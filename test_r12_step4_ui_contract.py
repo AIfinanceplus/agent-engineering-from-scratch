@@ -27,9 +27,22 @@ class R12Step4UIContractTests(unittest.TestCase):
         self.assertNotIn("input.checked = true", source)
         self.assertNotIn(".checked=true", source)
 
+    def test_approval_click_has_persistent_feedback_and_client_validation(self):
+        source = (ROOT / "web" / "r12_step4.js").read_text(encoding="utf-8")
+        self.assertIn('id="r12-agent-feedback"', source)
+        self.assertIn("Approving H1…", source)
+        self.assertIn("Complete all six identity checks first", source)
+        self.assertIn("event.target?.closest?", source)
+        self.assertIn("aria-live=\"polite\"", source)
+
+    def test_identity_draft_survives_strategy_panel_rerender(self):
+        source = (ROOT / "web" / "r12_step2.js").read_text(encoding="utf-8")
+        self.assertIn("agentAttestationDraft", source)
+        self.assertIn("draft.checks?.[key] ? 'checked'", source)
+
     def test_step6_css_is_loaded_as_extension(self):
         source = (ROOT / "web" / "r12_step4.js").read_text(encoding="utf-8")
-        self.assertIn("r12_step4.css?v=r12-step6-v1", source)
+        self.assertIn("r12_step4.css?v=r12-step6-v2", source)
 
 
 if __name__ == "__main__":
