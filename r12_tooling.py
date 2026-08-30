@@ -1,6 +1,7 @@
-"""R12 Tool pack: strategy registry, structural scanner, and verified cross-market RV."""
+"""R12 Tool pack: discovery, strategy registry, structural scanner, and verified cross-market RV."""
 
 from r11_tooling import register_r11_tools
+from r12_discovery import discover_market_candidates
 from r12_event_sources import fetch_kalshi_market_contract, fetch_polymarket_market_contract
 from r12_identity import compare_cross_market_locked_rv, validate_event_identity
 from r12_registry import current_strategy_registry_snapshot
@@ -42,6 +43,23 @@ R12_STRATEGY_REGISTRY_TOOL = Tool(
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
     function=current_strategy_registry_snapshot,
     max_retries=0,
+    risk="low",
+)
+
+R12_DISCOVERY_TOOL = Tool(
+    name="discover_r12_market_candidates",
+    description=(
+        "Find plausible public Kalshi and Polymarket market candidates from a free-text event query. "
+        "Discovery is bounded and lexical; candidate similarity NEVER approves settlement identity or trade execution."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    },
+    function=discover_market_candidates,
+    max_retries=1,
     risk="low",
 )
 
@@ -114,6 +132,7 @@ def register_r12_tools() -> tuple[str, ...]:
     for tool in (
         R12_STRUCTURAL_SCAN_TOOL,
         R12_STRATEGY_REGISTRY_TOOL,
+        R12_DISCOVERY_TOOL,
         R12_MARKET_CONTRACT_TOOL,
         R12_IDENTITY_TOOL,
         R12_CROSS_MARKET_RV_TOOL,
