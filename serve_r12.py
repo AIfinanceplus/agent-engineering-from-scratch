@@ -33,6 +33,7 @@ class R12VisualizerHandler(R11VisualizerHandler):
         "r12_step3.js",
         "r12_step4.js",
         "r12_step5.js",
+        "r12_step6.js",
     )
 
     def do_POST(self):
@@ -412,9 +413,10 @@ def main():
     print("Step 5: fingerprint-bound deterministic rules analysis -> explicit human identity review")
     print("Step 6: Tool DAG -> durable pause -> human approval -> resumable paper quote")
     print("Step 7: explicit paper fills -> append-only replay -> leg risk -> MTM / settlement P&L")
+    print("Step 8: Agent Run / Manual Lab / Strategy Roadmap operator workspaces")
     print("No order credentials, wallet, authenticated portfolio API, or order placement")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
-    print("Next version: simplify Strategy Center into Agent Run / Manual Lab / Roadmap views")
+    print("Next: paper portfolio aggregation + multi-trade exposure limits")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

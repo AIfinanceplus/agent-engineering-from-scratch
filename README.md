@@ -21,7 +21,7 @@ V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, Exe
 - R11 — Constraint-based position sizing
 - R12 — Strategy opportunities + live public event markets + HITL Strategy Agent
 
-## Current stage: R12 Step 7 — replayable paper execution ledger
+## Current stage: R12 Step 8 — task-oriented Strategy Center
 
 R12 keeps the earlier Runtime, Evidence, forecasting, EV, risk, and sizing layers,
 then adds a five-strategy opportunity registry. The currently deepest live path is
@@ -59,6 +59,18 @@ R12 component places orders. Step 7 deliberately separates the read/compute Agen
 DAG from state-changing commands: E1 remains a quote, while every simulated fill,
 mark, cancel/expire, and settlement requires an idempotency key and is recorded as
 an fsync'd JSONL event under `.r12_paper_ledger/`.
+
+Step 8 reorganizes the operator surface without changing those backend contracts:
+
+```text
+Agent Run          default linear acceptance path
+Manual Lab         structural scan + one-tool-at-a-time diagnostics
+Strategy Roadmap   five strategy families + current implementation boundary
+```
+
+The Agent Run workspace now follows user task order rather than implementation
+history: discover pair → lock exact IDs → configure explicit costs → start/resume
+Agent → review H1 beside the six checkboxes → inspect I1/V1/E1 → paper ledger.
 
 Current five-strategy roadmap:
 
@@ -325,10 +337,10 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Suggested R12 Step 7 flow:
+Suggested R12 Step 8 Agent Run flow:
 
 ```text
-1. 打开 策略机会
+1. 打开 策略机会；保持默认 Agent Run workspace
 2. 搜索并加载 exact Kalshi / Polymarket pair
 3. 输入 target、explicit fee model 与 latency buffer
 4. Start Exact-pair Agent
@@ -353,4 +365,5 @@ web/r12_step2.js
 web/r12_step3.js
 web/r12_step4.js
 web/r12_step5.js
+web/r12_step6.js
 ```

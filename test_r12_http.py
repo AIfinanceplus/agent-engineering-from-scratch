@@ -47,7 +47,7 @@ class R12HTTPTests(unittest.TestCase):
         self.assertEqual(payload["action"], "r12_strategy_registry")
         registry = payload["registry"]
         self.assertEqual(len(registry["strategies"]), 5)
-        self.assertEqual(registry["roadmap_version"], "R12_STEP7")
+        self.assertEqual(registry["roadmap_version"], "R12_STEP8")
         cross = next(row for row in registry["strategies"] if row["strategy_id"] == "cross_market_event_rv")
         self.assertEqual(cross["status"], "LIVE_HITL_AGENT_WITH_APPEND_ONLY_PAPER_LEDGER")
         self.assertFalse(registry["discovery_contract"]["candidate_match_is_settlement_proof"])
@@ -60,6 +60,8 @@ class R12HTTPTests(unittest.TestCase):
         self.assertTrue(registry["paper_ledger_contract"]["append_only_hash_chained_events"])
         self.assertFalse(registry["paper_ledger_contract"]["e1_quote_is_a_fill"])
         self.assertFalse(registry["paper_ledger_contract"]["automatic_execution"])
+        self.assertEqual(registry["operator_workspace_contract"]["default_workspace"], "agent_run")
+        self.assertTrue(registry["operator_workspace_contract"]["manual_tool_controls_are_separate"])
         self.assertIn("application/json", headers.get("Content-Type", ""))
         self.assertEqual(headers.get("Connection"), "close")
 

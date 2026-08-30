@@ -36,11 +36,11 @@ function r12Step6SetBusy(action, message) {
   ui.busy = action;
   ui.message = message;
   ui.error = null;
-  const button = document.querySelector(`#r12-agent-${action}`);
-  if (button) {
+  const buttons = document.querySelectorAll(`#r12-agent-${action}, [data-r12-agent-action="${action}"]`);
+  buttons.forEach((button) => {
     button.disabled = true;
     button.textContent = action === 'approve' ? 'Approving H1…' : action === 'start' ? 'Starting Agent…' : 'Loading Run…';
-  }
+  });
   r12Step6RefreshFeedback();
 }
 
@@ -76,7 +76,7 @@ function r12Step6RunPanel() {
       <button type="button" id="r12-agent-resume" class="btn" ${ui.busy ? 'disabled' : ''}>${ui.busy === 'resume' ? 'Loading Run…' : 'Load / Resume Run'}</button>
       <button type="button" id="r12-agent-approve" class="btn primary" ${waiting && !ui.busy ? '' : 'disabled'}>${ui.busy === 'approve' ? 'Approving H1…' : 'Approve H1 and Resume'}</button>
     </div>
-    <p class="muted">Start 使用下方 exact contract IDs、target、fees 与 latency 输入。H1 等待时，请阅读 Rules Analysis，并手工勾选下方六个 identity checkbox，再点击 Approve H1。</p>
+    <p class="muted">Start 使用 Agent Setup 中的 exact contract IDs、target、fees 与 latency 输入。H1 等待时，请阅读 Rules Analysis，并手工勾选六个 identity checkbox，再点击 Approve H1。</p>
     <div id="r12-agent-feedback" class="r12-agent-feedback ${ui.error ? 'eval-diagnostic' : ''}" role="status" aria-live="polite">${esc(ui.error || `${ui.message} · H1 checks ${r12Step6CheckedCount()}/6`)}</div>
     ${run ? `<div class="strategy-summary"><div><span>Run</span><strong>${esc(run.run_id)}</strong></div><div><span>Next task</span><strong>${esc(run.next_task_id || 'DONE')}</strong></div><div><span>Checkpoints</span><strong>${esc(run.checkpoints?.length || 0)}</strong></div><div><span>Eval</span><strong>${esc(r12Step2State.agentEval?.passed)}</strong></div></div>
       <div class="r12-agent-task-list">${tasks.map((task) => `<div class="r12-agent-task"><strong>${esc(task.task_id)} · ${esc(task.tool_name)}</strong><span>${esc(task.status)}</span></div>`).join('')}</div>

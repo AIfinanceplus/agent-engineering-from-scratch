@@ -10,16 +10,17 @@ def current_strategy_registry_snapshot() -> dict:
     for row in registry.get("strategies") or []:
         if row.get("strategy_id") == "cross_market_event_rv":
             row["status"] = "LIVE_HITL_AGENT_WITH_APPEND_ONLY_PAPER_LEDGER"
-            row["next_dependency"] = "Strategy Center Agent Run / Manual Lab / Roadmap information architecture"
+            row["next_dependency"] = "paper portfolio aggregation + multi-trade exposure limits"
         elif row.get("strategy_id") == "structural_logic_rv":
             row["next_dependency"] = "live market-universe normalizer + liquidity/fee/depth model"
-    registry["roadmap_version"] = "R12_STEP7"
+    registry["roadmap_version"] = "R12_STEP8"
     registry["current_boundary"] = (
         "Free-text discovery can find candidate Kalshi and Polymarket markets without raw IDs. Candidate matching is "
         "lexical and never proves settlement identity. An exact-pair Tool DAG now persists a human approval pause; "
         "only a rules-analysis-bound six-check attestation can resume identity, RV, and depth-aware paper quoting. "
         "An eligible E1 quote can then create a zero-fill paper intent; explicit idempotent commands append simulated "
-        "fills, marks, cancellation/expiry, and settlement to a replayable hash-chained ledger."
+        "fills, marks, cancellation/expiry, and settlement to a replayable hash-chained ledger. The operator UI now "
+        "separates the default end-to-end Agent Run from the step-by-step Manual Lab and the Strategy Roadmap."
     )
     registry["discovery_contract"] = {
         "kalshi": "bounded open-event listing plus local lexical ranking",
@@ -57,5 +58,12 @@ def current_strategy_registry_snapshot() -> dict:
         "mark_to_market_and_settlement_pnl_replayable": True,
         "exchange_connection_present": False,
         "automatic_execution": False,
+    }
+    registry["operator_workspace_contract"] = {
+        "default_workspace": "agent_run",
+        "agent_run_is_linear": True,
+        "manual_tool_controls_are_separate": True,
+        "strategy_roadmap_is_separate": True,
+        "backend_risk_and_ledger_contracts_changed": False,
     }
     return registry
