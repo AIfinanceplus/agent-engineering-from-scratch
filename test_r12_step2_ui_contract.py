@@ -14,6 +14,7 @@ class R12Step2UIContractTests(unittest.TestCase):
         self.assertIn("/api/r12/market-contract", source)
         self.assertIn("/api/r12/identity", source)
         self.assertIn("/api/r12/cross-market-rv", source)
+        self.assertIn("/api/r12/execution-quote", source)
         self.assertIn("same_event_meaning", source)
         self.assertIn("same_yes_outcome", source)
         self.assertIn("same_measurement_definition", source)
@@ -26,8 +27,10 @@ class R12Step2UIContractTests(unittest.TestCase):
         self.assertIn("identity?.settlement_compatible_for_rv", source)
         self.assertIn("Settlement identity must be verified first", source)
         self.assertIn("PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION", source)
-        self.assertIn("TOP-OF-BOOK ONLY", source)
-        self.assertIn("Depth、partial fill、latency", source)
+        self.assertIn("PRELIMINARY TOP-OF-BOOK", source)
+        self.assertIn("Depth-aware Paper Execution Quote", source)
+        self.assertIn("完整 depth、explicit fee 和 target-fill gate", source)
+        self.assertIn("r12Step2FiniteNonNegative", source)
         self.assertNotIn("placeOrder", source)
         self.assertNotIn("create_order", source)
 
@@ -37,8 +40,9 @@ class R12Step2UIContractTests(unittest.TestCase):
         self.assertIn('"/api/r12/market-contract"', source)
         self.assertIn('"/api/r12/identity"', source)
         self.assertIn('"/api/r12/cross-market-rv"', source)
+        self.assertIn('"/api/r12/execution-quote"', source)
         self.assertIn("title similarity NEVER auto-approves", source)
-        self.assertIn("No order credentials or order placement", source)
+        self.assertIn("No order credentials, wallet, authenticated portfolio API, or order placement", source)
 
 
 if __name__ == "__main__":

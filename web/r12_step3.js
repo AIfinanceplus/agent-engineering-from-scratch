@@ -131,6 +131,7 @@ async function r12Step3LoadCandidate(provider, identifier) {
     r12Step2State[provider] = contract;
     r12Step2State.identity = null;
     r12Step2State.rv = null;
+    r12Step2State.execution = null;
     r12Step3State.selected[provider] = identifier;
     toast(`${provider} candidate loaded for rules review`);
   } catch (error) {

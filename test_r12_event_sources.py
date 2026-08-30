@@ -71,12 +71,22 @@ def poly_books():
     }
 
 
+def kalshi_orderbook():
+    return {
+        "orderbook_fp": {
+            "yes_dollars": [["0.4600", "20.00"]],
+            "no_dollars": [["0.5500", "10.00"], ["0.5600", "5.00"]],
+        }
+    }
+
+
 class R12EventSourceTests(unittest.TestCase):
     def test_kalshi_normalizer_preserves_rules_quotes_and_settlement_sources(self):
         contract = normalize_kalshi_contract(
             kalshi_market(),
             event=kalshi_event(),
             series=kalshi_series(),
+            orderbook=kalshi_orderbook(),
             provenance_urls=["market", "event", "series"],
         )
         self.assertEqual(contract["artifact_type"], "r12_market_contract")
@@ -86,6 +96,9 @@ class R12EventSourceTests(unittest.TestCase):
         self.assertEqual(contract["quotes"]["no_ask"], 0.53)
         self.assertEqual(contract["quotes"]["quote_status"], "EXECUTABLE_TOP_OF_BOOK_FIELDS")
         self.assertEqual(contract["resolution"]["settlement_sources"][0]["name"], "Official Source")
+        self.assertEqual(contract["orderbook"]["snapshot_status"], "PUBLIC_DEPTH_AVAILABLE")
+        self.assertEqual(contract["orderbook"]["YES"]["asks"][0], {"price": 0.44, "size": 5.0})
+        self.assertEqual(contract["orderbook"]["NO"]["asks"][0], {"price": 0.54, "size": 20.0})
         self.assertFalse(contract["source_contract"]["authentication_used"])
         self.assertEqual(contract["identity_status"], "NOT_EVALUATED")
 
@@ -103,6 +116,8 @@ class R12EventSourceTests(unittest.TestCase):
         self.assertEqual(contract["quotes"]["quote_status"], "EXECUTABLE_CLOB_TOP_OF_BOOK")
         self.assertEqual(contract["quotes"]["indicative_outcome_prices"]["YES"], 0.50)
         self.assertEqual(contract["token_ids"]["YES"], "YES-TOKEN")
+        self.assertEqual(contract["orderbook"]["YES"]["asks"][0], {"price": 0.5, "size": 10.0})
+        self.assertEqual(contract["orderbook"]["NO"]["asks"][0], {"price": 0.49, "size": 10.0})
         self.assertFalse(contract["source_contract"]["authentication_used"])
 
     def test_kalshi_fetches_exact_market_event_and_series_contract(self):
@@ -115,12 +130,15 @@ class R12EventSourceTests(unittest.TestCase):
                 return {"event": kalshi_event()}
             if url.endswith("/series/KX-SERIES"):
                 return {"series": kalshi_series()}
+            if url.endswith("/markets/KX-DEMO/orderbook"):
+                return kalshi_orderbook()
             raise AssertionError(url)
 
         contract = fetch_kalshi_market_contract("KX-DEMO", fetch_json=fake_fetch)
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
         self.assertTrue(calls[0].endswith("/markets/KX-DEMO"))
         self.assertEqual(contract["provider_series_id"], "KX-SERIES")
+        self.assertEqual(contract["orderbook"]["snapshot_status"], "PUBLIC_DEPTH_AVAILABLE")
 
     def test_polymarket_fetches_exact_market_and_both_binary_books(self):
         calls = []
@@ -137,11 +155,13 @@ class R12EventSourceTests(unittest.TestCase):
         contract = fetch_polymarket_market_contract("703257", fetch_json=fake_fetch)
         self.assertEqual(len(calls), 3)
         self.assertEqual(contract["quotes"]["quote_status"], "EXECUTABLE_CLOB_TOP_OF_BOOK")
+        self.assertEqual(contract["orderbook"]["snapshot_status"], "PUBLIC_DEPTH_AVAILABLE")
 
     def test_polymarket_without_books_stays_indicative_not_executable(self):
         contract = normalize_polymarket_contract(polymarket_market(), books={})
         self.assertEqual(contract["quotes"]["quote_status"], "INDICATIVE_OR_PARTIAL_QUOTES")
         self.assertIsNone(contract["quotes"]["yes_ask"])
+        self.assertEqual(contract["orderbook"]["snapshot_status"], "ORDERBOOK_DEPTH_UNAVAILABLE")
 
 
 if __name__ == "__main__":

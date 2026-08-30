@@ -1,8 +1,9 @@
-"""R12 Tool pack: discovery, strategy registry, structural scanner, and verified cross-market RV."""
+"""R12 Tool pack: discovery, strategy scanning, identity, and paper execution quotes."""
 
 from r11_tooling import register_r11_tools
 from r12_discovery import discover_market_candidates
 from r12_event_sources import fetch_kalshi_market_contract, fetch_polymarket_market_contract
+from r12_execution import quote_cross_market_execution
 from r12_identity import compare_cross_market_locked_rv, validate_event_identity
 from r12_registry import current_strategy_registry_snapshot
 from r12_strategy import scan_structural_opportunities
@@ -126,6 +127,31 @@ R12_CROSS_MARKET_RV_TOOL = Tool(
     risk="low",
 )
 
+R12_EXECUTION_QUOTE_TOOL = Tool(
+    name="quote_r12_cross_market_execution",
+    description=(
+        "After settlement identity is explicitly verified, walk visible public order-book depth for a target matched "
+        "quantity and subtract an explicit provider fee model plus a user-supplied latency buffer. Insufficient depth "
+        "or missing fees fail closed; this emits paper signals only and never places orders."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "identity": {"type": "object"},
+            "kalshi_contract": {"type": "object"},
+            "polymarket_contract": {"type": "object"},
+            "target_contracts": {"type": "number"},
+            "fee_model": {"type": "object"},
+            "latency_buffer_bps": {"type": "number"},
+        },
+        "required": ["identity", "kalshi_contract", "polymarket_contract", "target_contracts"],
+        "additionalProperties": False,
+    },
+    function=quote_cross_market_execution,
+    max_retries=0,
+    risk="low",
+)
+
 
 def register_r12_tools() -> tuple[str, ...]:
     names = list(register_r11_tools())
@@ -136,6 +162,7 @@ def register_r12_tools() -> tuple[str, ...]:
         R12_MARKET_CONTRACT_TOOL,
         R12_IDENTITY_TOOL,
         R12_CROSS_MARKET_RV_TOOL,
+        R12_EXECUTION_QUOTE_TOOL,
     ):
         existing = TOOL_REGISTRY.get(tool.name)
         if existing is not None and existing != tool:

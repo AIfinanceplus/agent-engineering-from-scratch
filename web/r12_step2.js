@@ -1,9 +1,9 @@
-/* R12 Step 2 UI: exact live contracts -> explicit settlement identity -> cross-market RV. */
+/* R12 live path: exact contracts -> identity -> preliminary RV -> depth-aware paper quote. */
 
 (() => {
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = 'r12_step2.css?v=r12-step2-v1';
+  link.href = 'r12_step2.css?v=r12-step4-v1';
   document.head.appendChild(link);
 })();
 
@@ -21,6 +21,7 @@ const r12Step2State = {
   polymarket: null,
   identity: null,
   rv: null,
+  execution: null,
   loading: null,
   error: null,
 };
@@ -58,9 +59,9 @@ function r12Step2RVPanel() {
   const allowed = Boolean(identity?.settlement_compatible_for_rv);
   const scan = r12Step2State.rv;
   return `<section class="live-rv-panel">
-    <div class="strategy-section-head"><div><h3>3 · Same-event Cross-market RV</h3><p>只比较可执行 ask：Kalshi YES + Polymarket NO，以及反向 basket。两条腿结算一致时，每个 basket 到期总 payoff=1。</p></div><span class="pill">TOP-OF-BOOK ONLY</span></div>
+    <div class="strategy-section-head"><div><h3>3 · Same-event Cross-market RV</h3><p>先用 top-of-book 检查是否存在值得继续报价的方向。两条腿结算一致时，每个完整 basket 到期总 payoff=1。</p></div><span class="pill">PRELIMINARY TOP-OF-BOOK</span></div>
     <div class="rv-cost-row"><label>Estimated total cost / basket<input id="r12-rv-cost" value="0" placeholder="probability-price points, e.g. 0.01"></label><button id="r12-run-cross-rv" class="btn primary" ${allowed ? '' : 'disabled'}>Compare Verified Cross-market RV</button></div>
-    <p class="muted">Depth、partial fill、latency、fee schedule 和 settlement basis risk 尚未完整建模；即使出现正 edge，也仍是 PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION。</p>
+    <p class="muted">这里的正 edge 只是 preliminary screen。必须通过下一步完整 depth、explicit fee 和 target-fill gate，才能成为 depth-aware paper signal。</p>
     ${scan ? r12Step2RenderRV(scan) : '<div class="strategy-scan-empty">Identity 通过后才能运行。</div>'}
   </section>`;
 }
@@ -72,6 +73,37 @@ function r12Step2RenderRV(scan) {
     <div class="basket-list">${(scan.baskets_checked || []).map((row) => `<div class="basket-row"><strong>${esc(row.name)}</strong><span>gross cost ${esc(row.gross_cost ?? '—')}</span><span>gross edge ${esc(row.gross_edge ?? '—')}</span><span>net ${esc(row.net_edge ?? '—')}</span><span>${esc(row.status)}</span></div>`).join('')}</div>
     ${opportunities.map(r12RenderOpportunity).join('') || '<div class="empty">No positive locked complement margin after costs.</div>'}
     <details><summary>Raw Cross-market RV JSON</summary><pre class="codebox">${esc(pretty(scan))}</pre></details>
+  </div>`;
+}
+
+function r12Step2ExecutionPanel() {
+  const allowed = Boolean(r12Step2State.identity?.settlement_compatible_for_rv);
+  const quote = r12Step2State.execution;
+  return `<section class="live-rv-panel execution-quote-panel">
+    <div class="strategy-section-head"><div><h3>4 · Depth-aware Paper Execution Quote</h3><p>对两条腿逐级 walk asks；只有目标数量在两边都能完整成交，并扣除明确费用与 latency buffer 后仍有正 edge，才产生 paper signal。</p></div><span class="pill">PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION</span></div>
+    <div class="execution-input-grid">
+      <label>Target contracts<input id="r12-exec-target" value="10"></label>
+      <label>Fee model source<input id="r12-fee-source" value="manual_provider_schedule_review"></label>
+      <label>Latency buffer (bps / leg)<input id="r12-latency-bps" value="0"></label>
+      <label>Kalshi fee / notional<input id="r12-k-fee-rate" value="0"></label>
+      <label>Kalshi fee / contract<input id="r12-k-fee-contract" value="0"></label>
+      <label>Kalshi fixed / order<input id="r12-k-fee-fixed" value="0"></label>
+      <label>Polymarket fee / notional<input id="r12-p-fee-rate" value="0"></label>
+      <label>Polymarket fee / contract<input id="r12-p-fee-contract" value="0"></label>
+      <label>Polymarket fixed / order<input id="r12-p-fee-fixed" value="0"></label>
+    </div>
+    <button id="r12-run-execution-quote" class="btn primary" ${allowed ? '' : 'disabled'}>Quote Target Against Full Visible Depth</button>
+    <p class="muted">费用必须显式输入；零费率也代表你明确核对后的输入，不是系统猜测。Latency buffer 是用户给定的保守缓冲，并非校准后的成交延迟模型。</p>
+    ${quote ? r12Step2RenderExecution(quote) : '<div class="strategy-scan-empty">等待 settlement identity 通过并生成目标报价。</div>'}
+  </section>`;
+}
+
+function r12Step2RenderExecution(quote) {
+  return `<div class="live-rv-result">
+    <div class="strategy-summary"><div><span>Target</span><strong>${esc(quote.target_contracts)}</strong></div><div><span>Fee model</span><strong>${esc(quote.fee_model_status)}</strong></div><div><span>Paper signals</span><strong>${esc(quote.paper_signal_count)}</strong></div><div><span>Policy</span><strong>${esc(quote.execution_policy)}</strong></div></div>
+    <div class="execution-basket-list">${(quote.baskets_checked || []).map((basket) => `<article class="execution-basket"><div class="live-contract-head"><strong>${esc(basket.name)}</strong><span class="pill ${basket.eligible_for_paper_signal ? 'done' : 'fail'}">${esc(basket.status)}</span></div><div class="execution-metrics"><span>max complete ${esc(basket.max_complete_quantity_from_current_depth)}</span><span>gross ${esc(basket.gross_edge_total ?? '—')}</span><span>fees ${esc(basket.fee_total ?? '—')}</span><span>latency ${esc(basket.latency_buffer_cost_total ?? '—')}</span><span>net ${esc(basket.net_edge_total ?? '—')}</span></div>${(basket.legs || []).map((leg) => `<div class="execution-leg"><strong>${esc(leg.provider)} ${esc(leg.outcome)}</strong><span>filled ${esc(leg.filled_quantity)} / ${esc(leg.requested_quantity)}</span><span>VWAP ${esc(leg.vwap ?? '—')}</span><span>worst ${esc(leg.worst_ask ?? '—')}</span><span>slippage ${esc(leg.slippage_vs_best_ask ?? '—')}</span></div>`).join('')}</article>`).join('')}</div>
+    ${(quote.opportunities || []).map(r12RenderOpportunity).join('') || '<div class="empty">No target-sized paper signal after depth, explicit fees, and latency buffer.</div>'}
+    <details><summary>Raw execution quote JSON</summary><pre class="codebox">${esc(pretty(quote))}</pre></details>
   </div>`;
 }
 
@@ -88,6 +120,7 @@ function r12Step2Inspector() {
     <div class="live-contract-grid">${r12Step2ContractCard('kalshi', r12Step2State.kalshi)}${r12Step2ContractCard('polymarket', r12Step2State.polymarket)}</div>
     ${r12Step2IdentityPanel()}
     ${r12Step2RVPanel()}
+    ${r12Step2ExecutionPanel()}
   </section>`;
 }
 
@@ -117,6 +150,7 @@ async function r12Step2LoadContract(provider) {
     r12Step2State[provider] = payload.contract;
     r12Step2State.identity = null;
     r12Step2State.rv = null;
+    r12Step2State.execution = null;
     toast(`${provider} contract loaded`);
   } catch (error) {
     r12Step2State.error = error.message;
@@ -145,10 +179,56 @@ async function r12Step2ValidateIdentity() {
     if (!response.ok || !payload.ok) throw new Error(payload.error?.message || `HTTP ${response.status}`);
     r12Step2State.identity = payload.identity;
     r12Step2State.rv = null;
+    r12Step2State.execution = null;
     toast(`Identity: ${payload.identity.status}`);
   } catch (error) {
     r12Step2State.error = error.message;
     toast(`Identity: ${error.message}`);
+  } finally {
+    if (appState.selectedNav === 'strategy') renderDetail();
+  }
+}
+
+function r12Step2FiniteNonNegative(selector, label) {
+  const value = Number(document.querySelector(selector)?.value?.trim());
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${label} must be finite and non-negative`);
+  return value;
+}
+
+async function r12Step2RunExecutionQuote() {
+  try {
+    if (!r12Step2State.identity?.settlement_compatible_for_rv) throw new Error('Settlement identity must be verified first');
+    const target = r12Step2FiniteNonNegative('#r12-exec-target', 'Target contracts');
+    if (target <= 0) throw new Error('Target contracts must be greater than zero');
+    const source = document.querySelector('#r12-fee-source')?.value?.trim();
+    if (!source) throw new Error('Explicit fee model source is required');
+    const feeModel = {
+      source,
+      kalshi: {
+        fee_rate_on_notional: r12Step2FiniteNonNegative('#r12-k-fee-rate', 'Kalshi notional fee'),
+        fee_per_contract: r12Step2FiniteNonNegative('#r12-k-fee-contract', 'Kalshi contract fee'),
+        fixed_fee_per_order: r12Step2FiniteNonNegative('#r12-k-fee-fixed', 'Kalshi fixed fee'),
+      },
+      polymarket: {
+        fee_rate_on_notional: r12Step2FiniteNonNegative('#r12-p-fee-rate', 'Polymarket notional fee'),
+        fee_per_contract: r12Step2FiniteNonNegative('#r12-p-fee-contract', 'Polymarket contract fee'),
+        fixed_fee_per_order: r12Step2FiniteNonNegative('#r12-p-fee-fixed', 'Polymarket fixed fee'),
+      },
+    };
+    const response = await fetch('/api/r12/execution-quote', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'Accept':'application/json'},
+      cache: 'no-store',
+      body: JSON.stringify({identity:r12Step2State.identity, kalshi_contract:r12Step2State.kalshi, polymarket_contract:r12Step2State.polymarket, target_contracts:target, fee_model:feeModel, latency_buffer_bps:r12Step2FiniteNonNegative('#r12-latency-bps', 'Latency buffer')}),
+    });
+    const raw = await response.text();
+    const payload = JSON.parse(raw);
+    if (!response.ok || !payload.ok) throw new Error(payload.error?.message || `HTTP ${response.status}`);
+    r12Step2State.execution = payload.quote;
+    toast(`Execution quote: ${payload.quote.paper_signal_count} depth-aware paper signal(s)`);
+  } catch (error) {
+    r12Step2State.error = error.message;
+    toast(`Execution quote: ${error.message}`);
   } finally {
     if (appState.selectedNav === 'strategy') renderDetail();
   }
@@ -184,6 +264,7 @@ document.addEventListener('click', (event) => {
   if (event.target?.id === 'r12-load-poly') r12Step2LoadContract('polymarket');
   if (event.target?.id === 'r12-validate-identity') r12Step2ValidateIdentity();
   if (event.target?.id === 'r12-run-cross-rv') r12Step2RunRV();
+  if (event.target?.id === 'r12-run-execution-quote') r12Step2RunExecutionQuote();
 });
 
 renderAll();

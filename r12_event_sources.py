@@ -16,6 +16,7 @@ are used anywhere in this module.
 from __future__ import annotations
 
 import json
+from math import isfinite
 from urllib.parse import quote, urlencode
 
 from native_http import http_get_json
@@ -26,7 +27,12 @@ POLYMARKET_GAMMA_BASE = "https://gamma-api.polymarket.com"
 POLYMARKET_CLOB_BASE = "https://clob.polymarket.com"
 
 
-def fetch_kalshi_market_contract(ticker: str, *, fetch_json=http_get_json) -> dict:
+def fetch_kalshi_market_contract(
+    ticker: str,
+    *,
+    fetch_json=http_get_json,
+    include_book: bool = True,
+) -> dict:
     ticker = _required_text(ticker, "ticker")
     market_url = f"{KALSHI_BASE}/markets/{quote(ticker, safe='')}"
     market_payload = fetch_json(market_url)
@@ -45,11 +51,18 @@ def fetch_kalshi_market_contract(ticker: str, *, fetch_json=http_get_json) -> di
         series_payload = fetch_json(series_url)
         series = _required_object(series_payload.get("series"), "Kalshi series")
 
+    orderbook = {}
+    orderbook_url = None
+    if include_book:
+        orderbook_url = f"{KALSHI_BASE}/markets/{quote(ticker, safe='')}/orderbook"
+        orderbook = _required_object(fetch_json(orderbook_url), "Kalshi orderbook")
+
     return normalize_kalshi_contract(
         market,
         event=event,
         series=series,
-        provenance_urls=[url for url in (market_url, event_url, series_url) if url],
+        orderbook=orderbook,
+        provenance_urls=[url for url in (market_url, event_url, series_url, orderbook_url) if url],
     )
 
 
@@ -58,6 +71,7 @@ def normalize_kalshi_contract(
     *,
     event: dict | None = None,
     series: dict | None = None,
+    orderbook: dict | None = None,
     provenance_urls: list[str] | None = None,
 ) -> dict:
     market = _required_object(market, "Kalshi market")
@@ -120,6 +134,7 @@ def normalize_kalshi_contract(
             "last_price": _optional_float(market.get("last_price_dollars")),
             "quote_status": "EXECUTABLE_TOP_OF_BOOK_FIELDS" if quote_complete else "PARTIAL_TOP_OF_BOOK_FIELDS",
         },
+        "orderbook": _normalize_kalshi_orderbook(orderbook),
         "market_status": market.get("status"),
         "liquidity": {
             "liquidity_dollars": _optional_float(market.get("liquidity_dollars")),
@@ -232,6 +247,7 @@ def normalize_polymarket_contract(
             "indicative_outcome_prices": outcome_prices,
             "quote_status": "EXECUTABLE_CLOB_TOP_OF_BOOK" if complete_book else "INDICATIVE_OR_PARTIAL_QUOTES",
         },
+        "orderbook": _normalize_polymarket_orderbook(books, tokens),
         "token_ids": tokens,
         "market_status": "closed" if market.get("closed") else "active" if market.get("active") else "unknown",
         "liquidity": {
@@ -274,6 +290,91 @@ def _best_book_prices(book: dict) -> tuple[float | None, float | None]:
     return (max(bids) if bids else None, min(asks) if asks else None)
 
 
+def _normalize_kalshi_orderbook(payload: dict | None) -> dict:
+    """Expose full YES/NO books, deriving asks from opposite-side bids.
+
+    Kalshi's public REST book contains YES and NO bids only. A NO bid at p is
+    executable as a YES ask at 1-p, and vice versa. Sizes are preserved.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    raw = payload.get("orderbook_fp")
+    if not isinstance(raw, dict):
+        raw = payload.get("orderbook")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    yes_bids = _normalize_book_levels(
+        raw.get("yes_dollars") or raw.get("yes"),
+        cents=bool(raw.get("yes") and not raw.get("yes_dollars")),
+    )
+    no_bids = _normalize_book_levels(
+        raw.get("no_dollars") or raw.get("no"),
+        cents=bool(raw.get("no") and not raw.get("no_dollars")),
+    )
+    yes_asks = _complement_levels(no_bids)
+    no_asks = _complement_levels(yes_bids)
+    available = bool(yes_bids or no_bids)
+    return {
+        "snapshot_status": "PUBLIC_DEPTH_AVAILABLE" if available else "ORDERBOOK_DEPTH_UNAVAILABLE",
+        "source_format": "KALSHI_BIDS_WITH_DERIVED_COMPLEMENT_ASKS",
+        "YES": {"bids": yes_bids, "asks": yes_asks},
+        "NO": {"bids": no_bids, "asks": no_asks},
+    }
+
+
+def _normalize_polymarket_orderbook(books: dict, token_ids: dict[str, str]) -> dict:
+    outcomes = {}
+    for outcome in ("YES", "NO"):
+        book = books.get(outcome) if isinstance(books, dict) else None
+        book = book if isinstance(book, dict) else {}
+        outcomes[outcome] = {
+            "token_id": token_ids.get(outcome),
+            "snapshot_timestamp": book.get("timestamp"),
+            "snapshot_hash": book.get("hash"),
+            "bids": _normalize_book_levels(book.get("bids")),
+            "asks": _normalize_book_levels(book.get("asks")),
+            "min_order_size": _optional_float(book.get("min_order_size")),
+            "tick_size": _optional_float(book.get("tick_size")),
+        }
+    available = any(outcomes[outcome][side] for outcome in outcomes for side in ("bids", "asks"))
+    return {
+        "snapshot_status": "PUBLIC_DEPTH_AVAILABLE" if available else "ORDERBOOK_DEPTH_UNAVAILABLE",
+        "source_format": "POLYMARKET_CLOB_OUTCOME_BOOKS",
+        **outcomes,
+    }
+
+
+def _normalize_book_levels(levels, *, cents: bool = False) -> list[dict]:
+    normalized = []
+    for row in levels or []:
+        if isinstance(row, dict):
+            price = _optional_float(row.get("price"))
+            size = _optional_float(row.get("size"))
+        elif isinstance(row, (list, tuple)) and len(row) >= 2:
+            price = _optional_float(row[0])
+            size = _optional_float(row[1])
+        else:
+            continue
+        if price is None or size is None:
+            continue
+        if cents:
+            price /= 100.0
+        if not 0 <= price <= 1 or size <= 0:
+            continue
+        normalized.append({"price": round(price, 8), "size": round(size, 8)})
+    normalized.sort(key=lambda level: level["price"])
+    return normalized
+
+
+def _complement_levels(bids: list[dict]) -> list[dict]:
+    asks = [
+        {"price": round(1.0 - float(level["price"]), 8), "size": level["size"]}
+        for level in bids
+    ]
+    asks.sort(key=lambda level: level["price"])
+    return asks
+
+
 def _json_list(value, label: str, *, allow_empty: bool = False) -> list:
     if value is None and allow_empty:
         return []
@@ -307,6 +408,7 @@ def _optional_float(value) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if isfinite(number) else None

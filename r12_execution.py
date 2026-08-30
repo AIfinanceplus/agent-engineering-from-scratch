@@ -11,6 +11,8 @@ without an explicit fee model is NOT eligible for a paper signal.
 from __future__ import annotations
 
 from hashlib import sha256
+from json import dumps
+from math import isfinite
 from typing import Any
 
 
@@ -99,7 +101,9 @@ def _execution_basket(
     leg_quotes = []
     for provider, outcome in legs:
         contract = contracts[provider]
-        levels = (((contract.get("orderbook") or {}).get(outcome) or {}).get("asks") or [])
+        provider_book = contract.get("orderbook") or {}
+        outcome_book = provider_book.get(outcome) or {}
+        levels = outcome_book.get("asks") or []
         walked = _walk_asks(levels, quantity)
         provider_fee = fee_contract["providers"].get(provider)
         fee = _fee_for_leg(walked, provider_fee) if provider_fee is not None else None
@@ -110,6 +114,9 @@ def _execution_basket(
                 **walked,
                 "fee": fee,
                 "fee_model": provider_fee,
+                "book_snapshot_status": provider_book.get("snapshot_status"),
+                "book_snapshot_timestamp": outcome_book.get("snapshot_timestamp"),
+                "book_snapshot_hash": outcome_book.get("snapshot_hash"),
             }
         )
 
@@ -242,7 +249,16 @@ def _fee_for_leg(walked: dict, fee: dict | None) -> float | None:
 
 
 def _execution_opportunity(identity: dict, basket: dict, kalshi: dict, polymarket: dict) -> dict:
-    key = f"{identity.get('identity_id')}|{basket.get('name')}|{basket.get('target_contracts')}|depth"
+    key = dumps(
+        {
+            "identity_id": identity.get("identity_id"),
+            "basket": basket,
+            "kalshi_market_id": kalshi.get("provider_market_id"),
+            "polymarket_market_id": polymarket.get("provider_market_id"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     opportunity_id = "OPP-" + sha256(key.encode("utf-8")).hexdigest()[:16]
     return {
         "artifact_type": "r12_strategy_opportunity",
@@ -286,6 +302,11 @@ def _execution_opportunity(identity: dict, basket: dict, kalshi: dict, polymarke
 
 
 def _validate_identity(identity: dict, kalshi: dict, polymarket: dict) -> None:
+    for provider, contract in (("kalshi", kalshi), ("polymarket", polymarket)):
+        if not isinstance(contract, dict) or contract.get("artifact_type") != "r12_market_contract":
+            raise ValueError(f"{provider}_contract must be an r12_market_contract")
+        if contract.get("provider") != provider:
+            raise ValueError(f"expected provider={provider}")
     if not isinstance(identity, dict) or identity.get("artifact_type") != "r12_event_identity":
         raise ValueError("identity must be an r12_event_identity artifact")
     if identity.get("status") != "SETTLEMENT_COMPATIBLE_FOR_RV" or not identity.get("settlement_compatible_for_rv"):
@@ -308,9 +329,10 @@ def _optional_number(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if isfinite(number) else None
 
 
 def _positive(value: Any, label: str) -> float:
@@ -324,8 +346,8 @@ def _non_negative(value: Any, label: str) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ValueError(f"{label} must be numeric")
     number = float(value)
-    if number < 0:
-        raise ValueError(f"{label} must be >= 0")
+    if not isfinite(number) or number < 0:
+        raise ValueError(f"{label} must be finite and >= 0")
     return number
 
 

@@ -1,9 +1,10 @@
-"""R12 preview server: strategy Opportunity Engine + discovery + verified cross-market RV."""
+"""R12 preview server: discovery, identity-gated RV, and depth-aware paper quotes."""
 
 from http.server import ThreadingHTTPServer
 
 import r12_discovery as discovery_engine
 import r12_event_sources as event_sources
+import r12_execution as execution_engine
 import r12_identity as identity_engine
 from r12_registry import current_strategy_registry_snapshot
 from r12_strategy import scan_structural_opportunities
@@ -32,6 +33,8 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return self._handle_identity()
         if self.path == "/api/r12/cross-market-rv":
             return self._handle_cross_market_rv()
+        if self.path == "/api/r12/execution-quote":
+            return self._handle_execution_quote()
         return super().do_POST()
 
     def _handle_registry(self):
@@ -135,6 +138,26 @@ class R12VisualizerHandler(R11VisualizerHandler):
             {"ok": True, "action": "r12_cross_market_rv", "scan": scan},
         )
 
+    def _handle_execution_quote(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            quote = execution_engine.quote_cross_market_execution(
+                request_data.get("identity"),
+                request_data.get("kalshi_contract"),
+                request_data.get("polymarket_contract"),
+                target_contracts=request_data.get("target_contracts"),
+                fee_model=request_data.get("fee_model"),
+                latency_buffer_bps=request_data.get("latency_buffer_bps", 0.0),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_execution_quote", exc)
+        self._send_eval_json(
+            200,
+            {"ok": True, "action": "r12_execution_quote", "quote": quote},
+        )
+
     def _r12_error(self, action: str, exc: Exception):
         self._send_eval_json(
             400,
@@ -159,9 +182,10 @@ def main():
     print("Polymarket discovery: public-search + bounded event expansion")
     print("Identity gate: title similarity NEVER auto-approves same-event settlement compatibility")
     print("Identity gate: explicit rules review remains mandatory before cross-market RV")
-    print("No order credentials or order placement; depth/fill risk is not modeled yet")
+    print("Step 4: public order-book depth + explicit fees + target fill + latency buffer")
+    print("No order credentials, wallet, authenticated portfolio API, or order placement")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
-    print("Next: rules parser + order-book depth/fee/fill model, then FOMC/CPI calibrated probability RV")
+    print("Next: deterministic/assisted rules parser, then paper-fill accounting and realized paper P&L")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

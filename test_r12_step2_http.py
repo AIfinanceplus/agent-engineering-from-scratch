@@ -11,6 +11,7 @@ from r12_identity import validate_event_identity
 from serve_r12 import R12VisualizerHandler
 from test_r12_event_sources import kalshi_event, kalshi_market, kalshi_series, poly_books, polymarket_market
 from test_r12_identity import full_attestation
+from test_r12_execution import execution_contracts, explicit_zero_fee_model
 
 
 class TestHandler(R12VisualizerHandler):
@@ -114,6 +115,39 @@ class R12Step2HTTPTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertFalse(payload["ok"])
         self.assertIn("SETTLEMENT_COMPATIBLE_FOR_RV", payload["error"]["message"])
+
+    def test_depth_execution_endpoint_requires_full_target_and_explicit_fees(self):
+        kalshi, poly = execution_contracts()
+        identity = validate_event_identity(kalshi, poly, attestation=full_attestation())
+        status, _, payload = self.post(
+            "/api/r12/execution-quote",
+            {
+                "identity": identity,
+                "kalshi_contract": kalshi,
+                "polymarket_contract": poly,
+                "target_contracts": 10,
+                "fee_model": explicit_zero_fee_model(),
+                "latency_buffer_bps": 0,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["action"], "r12_execution_quote")
+        self.assertEqual(payload["quote"]["paper_signal_count"], 1)
+
+        status, _, payload = self.post(
+            "/api/r12/execution-quote",
+            {
+                "identity": identity,
+                "kalshi_contract": kalshi,
+                "polymarket_contract": poly,
+                "target_contracts": 11,
+                "fee_model": explicit_zero_fee_model(),
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["quote"]["paper_signal_count"], 0)
+        self.assertEqual(payload["quote"]["baskets_checked"][0]["status"], "INSUFFICIENT_DEPTH_FOR_TARGET")
 
     def test_invalid_provider_returns_structured_json(self):
         status, _, payload = self.post(
