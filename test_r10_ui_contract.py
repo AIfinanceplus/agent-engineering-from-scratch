@@ -31,7 +31,7 @@ class R10UIContractTests(unittest.TestCase):
             "Numerical Mispricing / Research-Market Gap",
             "Scenario Payoff Bridge",
             "Probability 仍故意留空",
-            "security P&L",
+            "Instrument P&amp;L",
         ):
             self.assertIn(token, step2)
 
