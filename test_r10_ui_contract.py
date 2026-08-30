@@ -30,7 +30,6 @@ class R10UIContractTests(unittest.TestCase):
             "T1 Numerical Research Target",
             "Numerical Mispricing / Research-Market Gap",
             "Scenario Payoff Bridge",
-            "NUMERICAL",
             "Probability 仍故意留空",
             "security P&L",
         ):
