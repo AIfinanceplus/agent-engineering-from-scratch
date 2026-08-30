@@ -5,7 +5,7 @@ from __future__ import annotations
 from r8_evals import make_r8_eval_suite
 
 
-def evaluate_current_run(research_result: dict, eval_factory=make_r8_eval_suite) -> dict:
+def evaluate_current_run(research_result: dict, eval_factory=None) -> dict:
     if not isinstance(research_result, dict):
         raise ValueError("research_result must be an object")
     if not research_result.get("run_id"):
@@ -17,7 +17,8 @@ def evaluate_current_run(research_result: dict, eval_factory=make_r8_eval_suite)
     if domain not in {"investment", "policy"}:
         raise ValueError("research_result domain must be investment or policy")
 
-    suite = eval_factory(blueprint, research_result, domain)
+    factory = eval_factory or make_r8_eval_suite
+    suite = factory(blueprint, research_result, domain)
     return {
         "ok": True,
         "action": "r8_eval_current",
