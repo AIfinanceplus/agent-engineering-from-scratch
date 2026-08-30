@@ -157,6 +157,7 @@ def main():
     print("Discovery candidate similarity NEVER auto-approves same-event settlement compatibility")
     print("Kalshi discovery: bounded OPEN event listing + local lexical ranking")
     print("Polymarket discovery: public-search + bounded event expansion")
+    print("Identity gate: title similarity NEVER auto-approves same-event settlement compatibility")
     print("Identity gate: explicit rules review remains mandatory before cross-market RV")
     print("No order credentials or order placement; depth/fill risk is not modeled yet")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
