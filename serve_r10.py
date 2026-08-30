@@ -22,7 +22,7 @@ class R10VisualizerHandler(r9.R9VisualizerHandler):
     page_title = "Agent Research Workbench · R10 Numerical Pricing + EV"
     # R10 intentionally does NOT load r8_eval_current.js. Eval is embedded in the
     # completed Research result and the Evaluation Center is a local UI projection.
-    extra_scripts = ("r8_ui.js", "r9_ui.js", "r10_ui.js")
+    extra_scripts = ("r8_ui.js", "r9_ui.js", "r10_ui.js", "r10_step2.js")
     eval_factory = staticmethod(make_r10_eval_suite)
 
     def execute_research(self, *args, **kwargs) -> dict:
