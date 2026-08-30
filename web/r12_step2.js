@@ -1,0 +1,189 @@
+/* R12 Step 2 UI: exact live contracts -> explicit settlement identity -> cross-market RV. */
+
+(() => {
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = 'r12_step2.css?v=r12-step2-v1';
+  document.head.appendChild(link);
+})();
+
+const R12_IDENTITY_CHECKS = [
+  ['same_event_meaning', 'Same event meaning'],
+  ['same_yes_outcome', 'Same YES outcome semantics'],
+  ['same_measurement_definition', 'Same measurement / threshold definition'],
+  ['compatible_resolution_source', 'Compatible resolution source'],
+  ['compatible_resolution_horizon', 'Compatible resolution / time horizon'],
+  ['edge_cases_reviewed', 'Edge cases / cancellation rules reviewed'],
+];
+
+const r12Step2State = {
+  kalshi: null,
+  polymarket: null,
+  identity: null,
+  rv: null,
+  loading: null,
+  error: null,
+};
+
+function r12Step2ContractCard(provider, contract) {
+  if (!contract) return `<article class="live-contract-card"><div class="kicker">${esc(provider.toUpperCase())}</div><div class="empty">Not loaded.</div></article>`;
+  const q = contract.quotes || {};
+  const r = contract.resolution || {};
+  const t = contract.time_contract || {};
+  return `<article class="live-contract-card">
+    <div class="live-contract-head"><div><div class="kicker">${esc(provider.toUpperCase())}</div><strong>${esc(contract.provider_market_id)}</strong></div><span class="pill ${q.quote_status?.startsWith('EXECUTABLE') ? 'done' : ''}">${esc(q.quote_status || '—')}</span></div>
+    <h4>${esc(contract.question || '—')}</h4>
+    <div class="live-quote-grid"><div><span>YES bid/ask</span><strong>${esc(q.yes_bid ?? '—')} / ${esc(q.yes_ask ?? '—')}</strong></div><div><span>NO bid/ask</span><strong>${esc(q.no_bid ?? '—')} / ${esc(q.no_ask ?? '—')}</strong></div></div>
+    <p><strong>Time:</strong> ${esc(t.close_time || t.end_time || t.expiration_time || '—')}</p>
+    <details><summary>Resolution / rules</summary><pre class="codebox">${esc(pretty(r))}</pre></details>
+    <details><summary>Normalized contract</summary><pre class="codebox">${esc(pretty(contract))}</pre></details>
+    <div class="paper-only">${esc(contract.execution_status)}</div>
+  </article>`;
+}
+
+function r12Step2IdentityPanel() {
+  const both = r12Step2State.kalshi && r12Step2State.polymarket;
+  const identity = r12Step2State.identity;
+  return `<section class="live-identity-panel">
+    <div class="strategy-section-head"><div><h3>2 · Event Identity / Settlement Review</h3><p>标题相似不算通过。请逐项对照上面的 rules / resolution / time contract。</p></div><span class="pill ${identity?.settlement_compatible_for_rv ? 'done' : 'fail'}">${esc(identity?.status || 'UNVERIFIED')}</span></div>
+    <div class="identity-check-grid">${R12_IDENTITY_CHECKS.map(([key,label]) => `<label><input type="checkbox" data-r12-identity="${esc(key)}"> <span>${esc(label)}</span></label>`).join('')}</div>
+    <label class="identity-source">Review / attestation source<input id="r12-attestation-source" value="human_rules_review" placeholder="human_rules_review / independent_rules_parser"></label>
+    <button id="r12-validate-identity" class="btn primary" ${both ? '' : 'disabled'}>Validate Settlement Identity</button>
+    ${identity ? `<details open><summary>Identity Contract</summary><pre class="codebox">${esc(pretty(identity))}</pre></details>` : ''}
+  </section>`;
+}
+
+function r12Step2RVPanel() {
+  const identity = r12Step2State.identity;
+  const allowed = Boolean(identity?.settlement_compatible_for_rv);
+  const scan = r12Step2State.rv;
+  return `<section class="live-rv-panel">
+    <div class="strategy-section-head"><div><h3>3 · Same-event Cross-market RV</h3><p>只比较可执行 ask：Kalshi YES + Polymarket NO，以及反向 basket。两条腿结算一致时，每个 basket 到期总 payoff=1。</p></div><span class="pill">TOP-OF-BOOK ONLY</span></div>
+    <div class="rv-cost-row"><label>Estimated total cost / basket<input id="r12-rv-cost" value="0" placeholder="probability-price points, e.g. 0.01"></label><button id="r12-run-cross-rv" class="btn primary" ${allowed ? '' : 'disabled'}>Compare Verified Cross-market RV</button></div>
+    <p class="muted">Depth、partial fill、latency、fee schedule 和 settlement basis risk 尚未完整建模；即使出现正 edge，也仍是 PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION。</p>
+    ${scan ? r12Step2RenderRV(scan) : '<div class="strategy-scan-empty">Identity 通过后才能运行。</div>'}
+  </section>`;
+}
+
+function r12Step2RenderRV(scan) {
+  const opportunities = scan.opportunities || [];
+  return `<div class="live-rv-result">
+    <div class="strategy-summary"><div><span>Baskets</span><strong>${esc(scan.baskets_checked?.length || 0)}</strong></div><div><span>Positive</span><strong>${esc(scan.opportunity_count)}</strong></div><div><span>Paper signals</span><strong>${esc(scan.paper_signal_count)}</strong></div><div><span>Quotes</span><strong>${esc(scan.quote_mode)}</strong></div></div>
+    <div class="basket-list">${(scan.baskets_checked || []).map((row) => `<div class="basket-row"><strong>${esc(row.name)}</strong><span>gross cost ${esc(row.gross_cost ?? '—')}</span><span>gross edge ${esc(row.gross_edge ?? '—')}</span><span>net ${esc(row.net_edge ?? '—')}</span><span>${esc(row.status)}</span></div>`).join('')}</div>
+    ${opportunities.map(r12RenderOpportunity).join('') || '<div class="empty">No positive locked complement margin after costs.</div>'}
+    <details><summary>Raw Cross-market RV JSON</summary><pre class="codebox">${esc(pretty(scan))}</pre></details>
+  </div>`;
+}
+
+function r12Step2Inspector() {
+  return `<section class="strategy-section live-contract-inspector">
+    <div class="kicker">R12 · STEP 2 · LIVE PUBLIC MARKET DATA</div>
+    <h3>Live Contract Inspector</h3>
+    <p>输入<strong>精确市场 ID</strong>。Adapter 只取 public market metadata / orderbook，不使用交易凭证；Event Identity 由下一层单独审核。</p>
+    <div class="live-contract-inputs">
+      <label>Kalshi market ticker<input id="r12-kalshi-id" placeholder="exact market ticker"></label><button id="r12-load-kalshi" class="btn">Load Kalshi Contract</button>
+      <label>Polymarket market ID<input id="r12-poly-id" placeholder="exact Gamma market ID"></label><button id="r12-load-poly" class="btn">Load Polymarket Contract</button>
+    </div>
+    ${r12Step2State.error ? `<div class="eval-diagnostic"><strong>Live adapter:</strong> ${esc(r12Step2State.error)}</div>` : ''}
+    <div class="live-contract-grid">${r12Step2ContractCard('kalshi', r12Step2State.kalshi)}${r12Step2ContractCard('polymarket', r12Step2State.polymarket)}</div>
+    ${r12Step2IdentityPanel()}
+    ${r12Step2RVPanel()}
+  </section>`;
+}
+
+const r12Step2BaseCenter = renderR12StrategyCenter;
+renderR12StrategyCenter = function renderR12Step2StrategyCenter() {
+  return `${r12Step2BaseCenter()}${r12Step2Inspector()}`;
+};
+
+async function r12Step2LoadContract(provider) {
+  try {
+    const selector = provider === 'kalshi' ? '#r12-kalshi-id' : '#r12-poly-id';
+    const identifier = document.querySelector(selector)?.value?.trim();
+    if (!identifier) throw new Error(`${provider} exact identifier is required`);
+    r12Step2State.loading = provider;
+    r12Step2State.error = null;
+    const response = await fetch('/api/r12/market-contract', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'Accept':'application/json'},
+      cache: 'no-store',
+      body: JSON.stringify({provider, identifier}),
+    });
+    const raw = await response.text();
+    let payload;
+    try { payload = JSON.parse(raw); }
+    catch (_) { throw new Error(`Market adapter returned non-JSON (HTTP ${response.status})`); }
+    if (!response.ok || !payload.ok) throw new Error(payload.error?.message || `HTTP ${response.status}`);
+    r12Step2State[provider] = payload.contract;
+    r12Step2State.identity = null;
+    r12Step2State.rv = null;
+    toast(`${provider} contract loaded`);
+  } catch (error) {
+    r12Step2State.error = error.message;
+    toast(`Live Contract: ${error.message}`);
+  } finally {
+    r12Step2State.loading = null;
+    if (appState.selectedNav === 'strategy') renderDetail();
+  }
+}
+
+async function r12Step2ValidateIdentity() {
+  try {
+    if (!r12Step2State.kalshi || !r12Step2State.polymarket) throw new Error('Load both market contracts first');
+    const attestation = {attestation_source: document.querySelector('#r12-attestation-source')?.value?.trim()};
+    document.querySelectorAll('[data-r12-identity]').forEach((input) => {
+      attestation[input.dataset.r12Identity] = Boolean(input.checked);
+    });
+    const response = await fetch('/api/r12/identity', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'Accept':'application/json'},
+      cache: 'no-store',
+      body: JSON.stringify({kalshi_contract:r12Step2State.kalshi, polymarket_contract:r12Step2State.polymarket, attestation}),
+    });
+    const raw = await response.text();
+    const payload = JSON.parse(raw);
+    if (!response.ok || !payload.ok) throw new Error(payload.error?.message || `HTTP ${response.status}`);
+    r12Step2State.identity = payload.identity;
+    r12Step2State.rv = null;
+    toast(`Identity: ${payload.identity.status}`);
+  } catch (error) {
+    r12Step2State.error = error.message;
+    toast(`Identity: ${error.message}`);
+  } finally {
+    if (appState.selectedNav === 'strategy') renderDetail();
+  }
+}
+
+async function r12Step2RunRV() {
+  try {
+    if (!r12Step2State.identity?.settlement_compatible_for_rv) throw new Error('Settlement identity must be verified first');
+    const rawCost = document.querySelector('#r12-rv-cost')?.value?.trim() || '0';
+    const cost = Number(rawCost);
+    if (!Number.isFinite(cost) || cost < 0) throw new Error('Estimated basket cost must be non-negative');
+    const response = await fetch('/api/r12/cross-market-rv', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'Accept':'application/json'},
+      cache: 'no-store',
+      body: JSON.stringify({identity:r12Step2State.identity, kalshi_contract:r12Step2State.kalshi, polymarket_contract:r12Step2State.polymarket, estimated_total_cost_per_basket:cost}),
+    });
+    const raw = await response.text();
+    const payload = JSON.parse(raw);
+    if (!response.ok || !payload.ok) throw new Error(payload.error?.message || `HTTP ${response.status}`);
+    r12Step2State.rv = payload.scan;
+    toast(`Cross-market RV: ${payload.scan.paper_signal_count} paper signal(s)`);
+  } catch (error) {
+    r12Step2State.error = error.message;
+    toast(`Cross-market RV: ${error.message}`);
+  } finally {
+    if (appState.selectedNav === 'strategy') renderDetail();
+  }
+}
+
+document.addEventListener('click', (event) => {
+  if (event.target?.id === 'r12-load-kalshi') r12Step2LoadContract('kalshi');
+  if (event.target?.id === 'r12-load-poly') r12Step2LoadContract('polymarket');
+  if (event.target?.id === 'r12-validate-identity') r12Step2ValidateIdentity();
+  if (event.target?.id === 'r12-run-cross-rv') r12Step2RunRV();
+});
+
+renderAll();
