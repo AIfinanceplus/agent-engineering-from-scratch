@@ -25,6 +25,7 @@ def evaluate_current_run(research_result: dict, eval_factory=None) -> dict:
         "run_id": research_result["run_id"],
         "domain": domain,
         "evaluation_mode": "existing_run_no_source_fetch",
+        "research_result": research_result,
         "eval_suite": suite,
         "evaluated_artifact": {
             "plan_status": (research_result.get("plan") or {}).get("status"),
