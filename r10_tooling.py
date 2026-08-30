@@ -1,15 +1,40 @@
-"""R10 Tool pack: R9 market context plus deterministic Investment decision / EV tools."""
+"""R10 Tool pack: R9 market context plus numerical target / Investment decision / EV tools."""
 
-from r10_investment import build_r10_investment_decision, compute_scenario_expected_value
+from r10_investment import (
+    build_numerical_research_target,
+    build_r10_investment_decision,
+    compute_scenario_expected_value,
+)
 from r9_tooling import register_r9_tools
 from tools import TOOL_REGISTRY, Tool
 
 
+R10_TARGET_TOOL = Tool(
+    name="build_r10_numerical_research_target",
+    description=(
+        "Build a transparent numerical 5Y inflation-compensation research target from grounded S1/F1 inputs. "
+        "The target is a mechanical one-step persistence baseline, not a calibrated probability or security fair value."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "research_synthesis": {"type": "object"},
+            "forecast_pack": {"type": "object"},
+            "reference_date": {"type": "string"},
+        },
+        "required": ["research_synthesis", "forecast_pack", "reference_date"],
+        "additionalProperties": False,
+    },
+    function=build_numerical_research_target,
+    max_retries=0,
+    risk="low",
+)
+
 R10_DECISION_TOOL = Tool(
     name="build_r10_investment_decision",
     description=(
-        "Compare grounded Research View with observed Market View, create a pricing-gap hypothesis, "
-        "and gate EV/position without fabricating probabilities or numerical mispricing."
+        "Compare grounded Research View plus T1 numerical target with observed Market View, quantify only "
+        "a truly comparable research-market gap, build a standardized payoff template, and gate EV/position."
     ),
     parameters={
         "type": "object",
@@ -18,6 +43,7 @@ R10_DECISION_TOOL = Tool(
             "research_synthesis": {"type": "object"},
             "domain_brief": {"type": "object"},
             "forecast_pack": {"type": "object"},
+            "research_target": {"type": "object"},
             "market_snapshot": {"type": "object"},
             "reference_date": {"type": "string"},
         },
@@ -26,6 +52,7 @@ R10_DECISION_TOOL = Tool(
             "research_synthesis",
             "domain_brief",
             "forecast_pack",
+            "research_target",
             "market_snapshot",
             "reference_date",
         ],
@@ -61,7 +88,7 @@ R10_EV_TOOL = Tool(
 
 def register_r10_tools() -> tuple[str, ...]:
     names = list(register_r9_tools())
-    for tool in (R10_DECISION_TOOL, R10_EV_TOOL):
+    for tool in (R10_TARGET_TOOL, R10_DECISION_TOOL, R10_EV_TOOL):
         existing = TOOL_REGISTRY.get(tool.name)
         if existing is not None and existing != tool:
             raise ValueError(f"Tool name collision while loading R10 tool: {tool.name}")
