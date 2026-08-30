@@ -3,7 +3,8 @@
 from r11_tooling import register_r11_tools
 from r12_event_sources import fetch_kalshi_market_contract, fetch_polymarket_market_contract
 from r12_identity import compare_cross_market_locked_rv, validate_event_identity
-from r12_strategy import scan_structural_opportunities, strategy_registry_snapshot
+from r12_registry import current_strategy_registry_snapshot
+from r12_strategy import scan_structural_opportunities
 from tools import TOOL_REGISTRY, Tool
 
 
@@ -39,7 +40,7 @@ R12_STRATEGY_REGISTRY_TOOL = Tool(
         "Return the current five-strategy roadmap and implementation status without market fetching or execution."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    function=strategy_registry_snapshot,
+    function=current_strategy_registry_snapshot,
     max_retries=0,
     risk="low",
 )
