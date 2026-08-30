@@ -1,7 +1,8 @@
-"""R12 preview server: strategy Opportunity Engine + verified cross-market RV."""
+"""R12 preview server: strategy Opportunity Engine + discovery + verified cross-market RV."""
 
 from http.server import ThreadingHTTPServer
 
+import r12_discovery as discovery_engine
 import r12_event_sources as event_sources
 import r12_identity as identity_engine
 from r12_registry import current_strategy_registry_snapshot
@@ -16,13 +17,15 @@ register_r12_tools()
 class R12VisualizerHandler(R11VisualizerHandler):
     version_label = "R12"
     page_title = "Agent Research Workbench · R12 Strategy Opportunity Engine"
-    extra_scripts = (*R11VisualizerHandler.extra_scripts, "r12_ui.js", "r12_step2.js")
+    extra_scripts = (*R11VisualizerHandler.extra_scripts, "r12_ui.js", "r12_step2.js", "r12_step3.js")
 
     def do_POST(self):
         if self.path == "/api/r12/registry":
             return self._handle_registry()
         if self.path == "/api/r12/structural-scan":
             return self._handle_structural_scan()
+        if self.path == "/api/r12/discovery":
+            return self._handle_discovery()
         if self.path == "/api/r12/market-contract":
             return self._handle_market_contract()
         if self.path == "/api/r12/identity":
@@ -55,6 +58,19 @@ class R12VisualizerHandler(R11VisualizerHandler):
         self._send_eval_json(
             200,
             {"ok": True, "action": "r12_structural_scan", "scan": scan},
+        )
+
+    def _handle_discovery(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            discovery = discovery_engine.discover_market_candidates(request_data.get("query"))
+        except Exception as exc:
+            return self._r12_error("r12_market_discovery", exc)
+        self._send_eval_json(
+            200,
+            {"ok": True, "action": "r12_market_discovery", "discovery": discovery},
         )
 
     def _handle_market_contract(self):
@@ -137,11 +153,14 @@ def main():
     print("R11 remains intact: research -> mispricing -> instrument EV -> constrained sizing")
     print("R12 Step 1: structural constraints -> unified StrategyOpportunity")
     print("R12 Step 2: exact Kalshi ticker / Polymarket market ID -> normalized market contracts")
-    print("Identity gate: title similarity NEVER auto-approves same-event settlement compatibility")
-    print("Cross-market RV: only verified same-event YES+NO complement baskets at executable asks")
-    print("No order credentials or order placement; top-of-book depth/fill risk is not modeled yet")
+    print("R12 Step 3: free-text discovery -> candidate pairs -> exact-contract review")
+    print("Discovery candidate similarity NEVER auto-approves same-event settlement compatibility")
+    print("Kalshi discovery: bounded OPEN event listing + local lexical ranking")
+    print("Polymarket discovery: public-search + bounded event expansion")
+    print("Identity gate: explicit rules review remains mandatory before cross-market RV")
+    print("No order credentials or order placement; depth/fill risk is not modeled yet")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
-    print("Next: broader event discovery + settlement parser, then FOMC/CPI calibrated probability RV")
+    print("Next: rules parser + order-book depth/fee/fill model, then FOMC/CPI calibrated probability RV")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
