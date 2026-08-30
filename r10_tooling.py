@@ -1,5 +1,6 @@
-"""R10 Tool pack: R9 market context plus numerical target / Investment decision / EV tools."""
+"""R10 Tool pack: market context plus numerical target, decision, EV, and instrument-risk tools."""
 
+from r10_instrument import compute_instrument_risk_ev
 from r10_investment import (
     build_numerical_research_target,
     build_r10_investment_decision,
@@ -85,10 +86,47 @@ R10_EV_TOOL = Tool(
     risk="low",
 )
 
+R10_INSTRUMENT_RISK_TOOL = Tool(
+    name="compute_r10_instrument_risk_ev",
+    description=(
+        "Translate I1 market-move scenarios into instrument P&L using explicit P&L-per-bp sensitivity, "
+        "then compute conditional EV, worst-scenario loss, risk efficiency, and a non-execution position-review gate."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "investment_decision": {"type": "object"},
+            "instrument_name": {"type": "string"},
+            "position_direction": {"type": "string"},
+            "sensitivity_per_bp": {"type": "number"},
+            "sensitivity_source": {"type": "string"},
+            "pnl_unit": {"type": "string"},
+            "scenario_probabilities": {"type": "array"},
+            "transaction_cost": {"type": "number"},
+            "carry": {"type": "number"},
+            "risk_budget": {"type": "number"},
+            "loss_limit": {"type": "number"},
+        },
+        "required": [
+            "investment_decision",
+            "instrument_name",
+            "position_direction",
+            "sensitivity_per_bp",
+            "sensitivity_source",
+            "pnl_unit",
+            "scenario_probabilities",
+        ],
+        "additionalProperties": False,
+    },
+    function=compute_instrument_risk_ev,
+    max_retries=0,
+    risk="low",
+)
+
 
 def register_r10_tools() -> tuple[str, ...]:
     names = list(register_r9_tools())
-    for tool in (R10_TARGET_TOOL, R10_DECISION_TOOL, R10_EV_TOOL):
+    for tool in (R10_TARGET_TOOL, R10_DECISION_TOOL, R10_EV_TOOL, R10_INSTRUMENT_RISK_TOOL):
         existing = TOOL_REGISTRY.get(tool.name)
         if existing is not None and existing != tool:
             raise ValueError(f"Tool name collision while loading R10 tool: {tool.name}")
