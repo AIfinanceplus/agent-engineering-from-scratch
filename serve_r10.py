@@ -1,4 +1,4 @@
-"""R10 preview server: Market Implied View, pricing-gap discipline, EV lab, embedded Eval Center."""
+"""R10 preview server: numerical Research Target, market gap, EV lab, embedded Eval Center."""
 
 from http.server import ThreadingHTTPServer
 import json
@@ -19,7 +19,7 @@ register_r10_tools()
 
 class R10VisualizerHandler(r9.R9VisualizerHandler):
     version_label = "R10"
-    page_title = "Agent Research Workbench · R10 Market Implied View + EV"
+    page_title = "Agent Research Workbench · R10 Numerical Pricing + EV"
     # R10 intentionally does NOT load r8_eval_current.js. Eval is embedded in the
     # completed Research result and the Evaluation Center is a local UI projection.
     extra_scripts = ("r8_ui.js", "r9_ui.js", "r10_ui.js")
@@ -28,6 +28,7 @@ class R10VisualizerHandler(r9.R9VisualizerHandler):
     def execute_research(self, *args, **kwargs) -> dict:
         result = super().execute_research(*args, **kwargs)
         results = result.get("results") or {}
+        result["numerical_research_target"] = results.get("T1")
         result["investment_decision"] = results.get("I1")
 
         blueprint = result.get("blueprint") or {}
@@ -125,12 +126,14 @@ class R10VisualizerHandler(r9.R9VisualizerHandler):
 
 def main():
     server = ThreadingHTTPServer(("127.0.0.1", 8000), R10VisualizerHandler)
-    print("Agent Research Workbench · R10 Market Implied View + EV")
+    print("Agent Research Workbench · R10 Numerical Pricing + EV")
     print("Open http://127.0.0.1:8000")
-    print("Investment: S1/D1/F1 + M6 -> I1 Research View vs Market View -> pricing hypothesis -> EV gate")
-    print("EV Lab: explicit scenario probabilities/payoffs only; support score is never a probability")
+    print("Investment: S1/D1/F1 -> T1 numerical target; M6 market context; T1/M6 -> I1 numerical gap")
+    print("T1: one-step persistence baseline; mechanical and uncalibrated, never a probability or security fair value")
+    print("I1 payoff bridge: standardized bp-on-unit-exposure template; actual security P&L still needs sensitivity")
+    print("EV Lab: explicit scenario probabilities only; support score is never a probability")
     print("Eval Center: suite is embedded in the completed Research result; clicking Eval performs NO HTTP eval fetch")
-    print("Policy: preserves the R8/R9 policy chain and does not run Investment I1")
+    print("Policy: preserves the R8/R9 policy chain and does not run Investment T1/I1")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
