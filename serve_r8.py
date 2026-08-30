@@ -106,8 +106,6 @@ class R8VisualizerHandler(base.VisualizerHandler):
                 )
                 return
         elif isinstance(request_data.get("research_result"), dict):
-            # Compatibility path for a stale pre-v2 browser tab. It returns JSON
-            # rather than dropping the connection, but the active UI never needs it.
             research_result = request_data["research_result"]
             remember_run(research_result)
         else:
@@ -126,6 +124,9 @@ class R8VisualizerHandler(base.VisualizerHandler):
 
         try:
             payload = evaluate_current_run(research_result, eval_factory=type(self).eval_factory)
+            # Preserve the pure evaluator's historical artifact contract, but do
+            # not echo a potentially large Run through the browser transport.
+            payload.pop("research_result", None)
             payload["action"] = "eval_current_run"
             payload["eval_transport"] = "run_registry_v2"
         except Exception as exc:
