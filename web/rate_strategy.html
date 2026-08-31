@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Rate Strategy V1</title>
+  <link rel="stylesheet" href="rate_strategy.css?v=rate-v1">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">AGENT ENGINEERING · FIRST COMPLETE LOOP</div>
+        <h1>2s10s Rate Strategy</h1>
+        <p>两条同源利率数据，一个明确规则，一次完整 paper simulation。</p>
+      </div>
+      <span class="badge">PAPER ONLY</span>
+    </header>
+
+    <section class="logic-strip" aria-label="Agent flow">
+      <article><b>D1</b><span>FRED DGS2 / DGS10</span><small>Public data Tool</small></article>
+      <i>→</i>
+      <article><b>S1</b><span>60-day z-score</span><small>Deterministic rule</small></article>
+      <i>→</i>
+      <article><b>E1</b><span>One closed trade</span><small>DV01 P&amp;L + eval</small></article>
+    </section>
+
+    <section class="card controls">
+      <div class="section-head">
+        <div><div class="eyebrow">CONFIGURATION</div><h2>Run once</h2></div>
+        <button id="run-once" type="button">Run One Paper Simulation</button>
+      </div>
+      <div class="fields">
+        <label>Lookback<input id="lookback" type="number" value="60" min="20" step="1"><small>rolling observations</small></label>
+        <label>Entry threshold<input id="entry-z" type="number" value="1" min="0.1" step="0.1"><small>absolute z-score</small></label>
+        <label>Holding period<input id="holding" type="number" value="20" min="1" step="1"><small>observations</small></label>
+        <label>DV01<input id="dv01" type="number" value="100" min="1" step="10"><small>USD per basis point</small></label>
+        <label>Round-trip cost<input id="cost" type="number" value="1" min="0" step="0.1"><small>basis points</small></label>
+      </div>
+      <p class="rule">规则：利差 = 10Y − 2Y。z ≤ −阈值做 steepener；z ≥ 阈值做 flattener；固定持有后平仓。</p>
+      <div id="error" class="error" hidden></div>
+    </section>
+
+    <section id="empty" class="card empty">
+      <strong>准备运行第一笔模拟</strong>
+      <p>点击上方按钮。Agent 会抓取公开数据、生成信号、找到最近一笔已经完成持有期的历史信号，并计算一次净 P&amp;L。</p>
+    </section>
+
+    <div id="results" hidden>
+      <section class="metric-grid" id="metrics"></section>
+      <section class="result-grid">
+        <article class="card" id="trade"></article>
+        <article class="card" id="context"></article>
+      </section>
+      <section class="card">
+        <div class="section-head"><div><div class="eyebrow">RUNTIME</div><h2>Agent trace</h2></div><span id="eval-badge" class="badge"></span></div>
+        <div id="trace" class="trace"></div>
+      </section>
+      <details class="card raw"><summary>Raw run artifact</summary><pre id="raw"></pre></details>
+    </div>
+
+    <footer>Teaching approximation · No order credentials · No broker connection · Not investment advice</footer>
+  </main>
+  <script src="rate_strategy.js?v=rate-v1"></script>
+</body>
+</html>

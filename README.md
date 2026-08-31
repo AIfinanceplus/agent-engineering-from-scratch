@@ -21,7 +21,28 @@ V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, Exe
 - R11 — Constraint-based position sizing
 - R12 — Strategy opportunities + live public event markets + HITL Strategy Agent
 
-## Current stage: R12 Step 9 — replayed paper portfolio and exposure limits
+## Current stage: Rate Strategy V1 — one complete 2s10s paper simulation
+
+The default learning path is intentionally small. It needs no event search, no
+cross-market identity matching, no human settlement checklist, and no broker
+credentials:
+
+```text
+D1 public FRED DGS2 + DGS10 history
+      ↓ common-date alignment
+S1 60-observation 2s10s spread z-score
+      ↓ explicit steepener / flattener rule
+E1 latest historically completed 20-observation paper trade
+      ↓ DV01 approximation, explicit cost, contract eval, full Tool trace
+```
+
+`RateStrategyAgent` uses a fixed two-Tool DAG. The shared Tool Registry validates
+the public-data and simulation calls before execution. V1 deliberately uses no
+LLM planner: the goal is to make Planner → Runtime → Tool → Observation → Eval
+visible in one click. The output is a teaching approximation, not an executable
+bond-price model or investment recommendation.
+
+## Advanced experiment retained: R12 Step 9 event-market portfolio
 
 R12 keeps the earlier Runtime, Evidence, forecasting, EV, risk, and sizing layers,
 then adds a five-strategy opportunity registry. The currently deepest live path is
@@ -341,7 +362,7 @@ CI remains network-independent by injecting API-shaped source responses while ex
 
 ```bash
 python3 -m pip install -r requirements.txt
-python3 serve_r12.py
+python3 serve_rates.py
 ```
 
 Open:
@@ -350,35 +371,23 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Suggested R12 Step 9 Agent Run flow:
+Suggested Rate Strategy V1 flow:
 
 ```text
-1. 启动 R12 后默认打开 事件市场；保持 Event Search & Agent workspace
-2. 搜索并加载 exact Kalshi / Polymarket pair
-3. 输入 target、explicit fee model 与 latency buffer
-4. Start Exact-pair Agent
-5. 检查 R1 rules artifact；Agent 应停在 H1
-6. 人工勾选六项 settlement identity attestation
-7. Approve H1 and Resume
-8. 检查 I1 / V1 / E1、task traces、checkpoints 与 eval
-9. Create Paper Intent；确认初始状态为 PENDING_PAPER_FILL 且 0 fills
-10. 检查 Multi-trade Portfolio；确认 unsettled trade 从 0 变为 1
-11. 先给一条腿 Record Fill；确认 trade 和 portfolio 都显示 leg risk
-12. 给另一条腿记录相同数量；确认组合 total leg risk 回落
-13. Update MTM；缺少完整 marks 时，portfolio 不把未知 P&L 当作 0
-14. Cancel / Expire 剩余数量，或补齐两腿至 FULLY_MATCHED
-15. Settle YES / NO；确认 cost 离开 unsettled exposure，realized P&L 汇总
-16. Refresh Portfolio 并 Load Ledger；确认多笔聚合和单笔回放结果一致
+1. 保持默认参数：60日 lookback、1.0 z、20日 holding、$100 DV01、1bp cost
+2. 点击 Run One Paper Simulation
+3. 检查 D1 是否返回 FRED DGS2 / DGS10 common-date observations
+4. 检查 S1 的 entry/exit、steepener 或 flattener、gross/cost/net P&L
+5. 检查 E1 显示 EVAL PASSED
+6. 展开 Raw run artifact，对照 plan、Tool trace、Observation 和 guardrails
 ```
 
-Active UI scripts:
+Current UI:
 
 ```text
-web/r12_ui.js
-web/r12_step2.js
-web/r12_step3.js
-web/r12_step4.js
-web/r12_step5.js
-web/r12_step6.js
-web/r12_step7.js
+web/rate_strategy.html
+web/rate_strategy.css
+web/rate_strategy.js
 ```
+
+To revisit the advanced event-market experiment, run `python3 serve_r12.py`.
