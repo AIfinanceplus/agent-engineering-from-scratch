@@ -6,30 +6,42 @@ ROOT = Path(__file__).parent
 
 
 class RateUIContractTests(unittest.TestCase):
-    def test_ui_is_one_strategy_one_button_and_not_event_search(self):
-        html = (ROOT / "web" / "rate_strategy.html").read_text(encoding="utf-8")
-        self.assertIn("2s10s Rate Strategy", html)
-        self.assertIn("Run One Paper Simulation", html)
-        self.assertIn("D1", html)
-        self.assertIn("S1", html)
-        self.assertIn("E1", html)
-        self.assertNotIn("Kalshi", html)
-        self.assertNotIn("Polymarket", html)
-        self.assertNotIn("Event Search", html)
+    def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
+        base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
+        for label in ("Trace", "Logic", "Evidence", "State", "Checkpoint", "Architecture"):
+            self.assertIn(label, base)
+        self.assertIn("Agent 运行过程", base)
+        self.assertIn("Run One Simulation", source)
+        self.assertIn("Planner", source)
+        self.assertIn("Runtime", source)
+        self.assertIn("Tool Registry", source)
+        self.assertIn("D1 FRED Tool", source)
+        self.assertIn("S1 Strategy Tool", source)
+        self.assertIn("E1 Eval", source)
+        self.assertIn("利率策略", source)
 
-    def test_client_calls_only_the_run_once_api_and_keeps_raw_details_collapsed(self):
-        source = (ROOT / "web" / "rate_strategy.js").read_text(encoding="utf-8")
-        html = (ROOT / "web" / "rate_strategy.html").read_text(encoding="utf-8")
+    def test_client_calls_only_rate_api_and_exposes_every_learning_view(self):
+        source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
         self.assertIn("/api/rates/run-once", source)
         self.assertNotIn("place_order", source)
-        self.assertIn('<details class="card raw">', html)
-        self.assertNotIn('<details class="card raw" open>', html)
+        for renderer in (
+            "rateRenderTrace", "rateRenderLogic", "rateRenderEvidence",
+            "rateRenderState", "rateRenderCheckpoint", "rateRenderArchitecture",
+        ):
+            self.assertIn(renderer, source)
+        self.assertIn("none_deterministic_v1", source)
+        self.assertIn("CHECKPOINT · EXPLICITLY NOT WIRED IN V1", source)
+        self.assertIn("rateRestoreOriginalPanels", source)
+        self.assertIn("child.hidden = child !== overlay", source)
+        self.assertNotIn("panel.innerHTML =", source)
 
-    def test_server_makes_simple_rate_page_the_root(self):
+    def test_server_extends_r12_workbench_and_loads_rate_overlay_last(self):
         source = (ROOT / "serve_rates.py").read_text(encoding="utf-8")
-        self.assertIn('self.path = "/rate_strategy.html"', source)
+        self.assertIn("class RateStrategyHandler(R12VisualizerHandler)", source)
+        self.assertIn('(*R12VisualizerHandler.extra_scripts, "rate_workbench.js")', source)
         self.assertIn('"/api/rates/run-once"', source)
-        self.assertIn("No event search", source)
+        self.assertIn("Full Workbench UI retained", source)
 
 
 if __name__ == "__main__":

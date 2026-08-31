@@ -60,46 +60,84 @@ class RateStrategyAgent:
         ]
         observations: dict[str, dict] = {}
         trace = []
+
+        def emit(event: str, **payload) -> None:
+            trace.append({"sequence": len(trace) + 1, "event": event, **payload})
+
+        emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation")
+        emit(
+            "plan_created",
+            task_id="P1",
+            planner="fixed_two_tool_dag",
+            task_ids=[task["task_id"] for task in plan],
+        )
+        emit(
+            "runtime_started",
+            task_id="R1",
+            model="none_deterministic_v1",
+            registry_tools=[task["tool_name"] for task in plan],
+        )
         for task in plan:
             arguments = _resolve_arguments(task["arguments"], observations)
+            emit(
+                "task_started",
+                task_id=task["task_id"],
+                tool_name=task["tool_name"],
+                depends_on=task["depends_on"],
+            )
             tool = resolve_tool(task["tool_name"])
+            emit(
+                "tool_lookup",
+                task_id=task["task_id"],
+                tool_name=task["tool_name"],
+                found=tool is not None,
+            )
             if tool is None:
                 raise RuntimeError(f"Tool Registry missing {task['tool_name']}")
             validation = tool.validate(arguments)
-            trace.append(
-                {
-                    "event": "tool_validation",
-                    "task_id": task["task_id"],
-                    "tool_name": tool.name,
-                    "passed": validation.get("ok") is True,
-                }
+            emit(
+                "tool_validation",
+                task_id=task["task_id"],
+                tool_name=tool.name,
+                passed=validation.get("ok") is True,
             )
             if not validation.get("ok"):
                 raise ValueError(validation["error"]["message"])
             function = self.tool_overrides.get(tool.name, tool.function)
+            emit(
+                "tool_execution_started",
+                task_id=task["task_id"],
+                tool_name=tool.name,
+                risk=tool.risk,
+                max_retries=tool.max_retries,
+            )
             observation = function(**arguments)
             observations[task["task_id"]] = observation
-            trace.append(
-                {
-                    "event": "tool_observation",
-                    "task_id": task["task_id"],
-                    "tool_name": tool.name,
-                    "artifact_type": observation.get("artifact_type"),
-                    "status": "COMPLETED",
-                }
+            emit(
+                "tool_observation",
+                task_id=task["task_id"],
+                tool_name=tool.name,
+                artifact_type=observation.get("artifact_type"),
+                status="COMPLETED",
+            )
+            emit(
+                "task_completed",
+                task_id=task["task_id"],
+                tool_name=tool.name,
+                status="COMPLETED",
             )
 
         history = observations["D1"]
         simulation = observations["S1"]
+        emit("eval_started", task_id="E1", evaluator="evaluate_rate_simulation")
         evaluation = evaluate_rate_simulation(simulation)
-        trace.append(
-            {
-                "event": "eval_completed",
-                "task_id": "E1",
-                "artifact_type": evaluation["artifact_type"],
-                "passed": evaluation["passed"],
-            }
+        emit(
+            "eval_completed",
+            task_id="E1",
+            artifact_type=evaluation["artifact_type"],
+            passed=evaluation["passed"],
         )
+        emit("run_completed", task_id="END", status="COMPLETED_ONE_PAPER_SIMULATION")
         run_fingerprint = hashlib.sha256(
             json.dumps(
                 {
@@ -110,16 +148,49 @@ class RateStrategyAgent:
                 sort_keys=True,
             ).encode("utf-8")
         ).hexdigest()[:16]
+        latest = history["observations"][-1]
+        evidence = [
+            {
+                "kind": "evidence",
+                "evidence_id": f"FRED:{series['series_id']}",
+                "provider": "FRED",
+                "series_id": series["series_id"],
+                "value": latest[series["series_id"].lower()],
+                "unit": series["unit"],
+                "as_of": history["as_of"],
+                "source": {
+                    "title": series["label"],
+                    "publisher": "Federal Reserve Bank of St. Louis",
+                    "uri": series["source_url"],
+                },
+            }
+            for series in history["series"]
+        ]
+        completed_plan = deepcopy(plan)
+        for task in completed_plan:
+            task["status"] = "completed"
         return {
             "artifact_type": "rate_strategy_agent_run",
             "run_id": f"RATE-RUN-{run_fingerprint}",
             "status": "COMPLETED_ONE_PAPER_SIMULATION",
             "goal": "Run one auditable U.S. Treasury 2s10s mean-reversion paper simulation",
-            "plan": deepcopy(plan),
+            "plan": {
+                "artifact_type": "rate_strategy_plan",
+                "status": "completed",
+                "tasks": completed_plan,
+            },
             "data": history,
+            "evidence": evidence,
             "simulation": simulation,
             "eval": evaluation,
             "trace": trace,
+            "state": {
+                "phase": "completed",
+                "current_task": None,
+                "completed_tasks": ["D1", "S1", "E1"],
+                "observation_artifacts": [history["artifact_type"], simulation["artifact_type"]],
+            },
+            "checkpoints": [],
             "architecture": {
                 "planner": "fixed_two_tool_dag",
                 "runtime": "shared_tool_registry_plus_argument_validation",

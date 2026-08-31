@@ -39,8 +39,14 @@ E1 latest historically completed 20-observation paper trade
 `RateStrategyAgent` uses a fixed two-Tool DAG. The shared Tool Registry validates
 the public-data and simulation calls before execution. V1 deliberately uses no
 LLM planner: the goal is to make Planner → Runtime → Tool → Observation → Eval
-visible in one click. The output is a teaching approximation, not an executable
-bond-price model or investment recommendation.
+visible in one click. The full Workbench shell is retained, including the Agent
+flow and Trace / Logic / Evidence / State / Checkpoint / Architecture views; only
+the Strategy workspace is narrowed to the rate strategy. The output is a teaching
+approximation, not an executable bond-price model or investment recommendation.
+
+FRED CSV calls use `native_http.http_get_text`, which keeps certificate verification
+enabled while routing Python TLS through the operating system trust store via
+`truststore`. Do not disable certificate verification to work around local CA errors.
 
 ## Advanced experiment retained: R12 Step 9 event-market portfolio
 
@@ -374,20 +380,23 @@ http://127.0.0.1:8000
 Suggested Rate Strategy V1 flow:
 
 ```text
-1. 保持默认参数：60日 lookback、1.0 z、20日 holding、$100 DV01、1bp cost
-2. 点击 Run One Paper Simulation
-3. 检查 D1 是否返回 FRED DGS2 / DGS10 common-date observations
-4. 检查 S1 的 entry/exit、steepener 或 flattener、gross/cost/net P&L
-5. 检查 E1 显示 EVAL PASSED
-6. 展开 Raw run artifact，对照 plan、Tool trace、Observation 和 guardrails
+1. 默认进入左侧“利率策略”，原 Workbench 和 Agent 运行过程仍在
+2. 保持默认参数：60日 lookback、1.0 z、20日 holding、$100 DV01、1bp cost
+3. 点击 Run One Simulation，观察 Goal → Planner → Runtime → D1 → S1 → E1
+4. 分别点击 Trace / Logic / Evidence / State / Checkpoint / Architecture
+5. 检查 D1 的 FRED common-date observations 与两条 Evidence
+6. 检查 S1 的 entry/exit、steepener 或 flattener、gross/cost/net P&L
+7. 检查 E1 contract checks 全部 PASS；Checkpoint 明确显示 V1 尚未持久化
 ```
 
 Current UI:
 
 ```text
-web/rate_strategy.html
-web/rate_strategy.css
-web/rate_strategy.js
+web/index.html                 shared Workbench shell
+web/r7_v3.js                  shared UI state and learning components
+web/r12_ui.js ... step7.js    retained project evolution layers
+web/rate_workbench.js         rate-only Strategy workspace overlay
+web/rate_workbench.css
 ```
 
 To revisit the advanced event-market experiment, run `python3 serve_r12.py`.

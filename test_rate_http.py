@@ -49,6 +49,14 @@ class RateHTTPTests(unittest.TestCase):
         connection.close()
         return response.status, headers, json.loads(raw)
 
+    def get_root(self):
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=5)
+        connection.request("GET", "/")
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        connection.close()
+        return response.status, raw
+
     def test_run_once_returns_one_closed_trade_trace_and_eval(self):
         status, headers, payload = self.post({})
         self.assertEqual(status, 200)
@@ -59,6 +67,20 @@ class RateHTTPTests(unittest.TestCase):
         self.assertFalse(run["guardrails"]["broker_connection"])
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual(headers["Connection"], "close")
+
+    def test_root_retains_full_workbench_and_loads_rate_overlay_last(self):
+        status, html = self.get_root()
+        self.assertEqual(status, 200)
+        self.assertIn("Agent 运行过程", html)
+        self.assertIn('data-detail-tab="trace"', html)
+        self.assertIn('data-detail-tab="logic"', html)
+        self.assertIn('data-detail-tab="evidence"', html)
+        self.assertIn('data-detail-tab="state"', html)
+        self.assertIn('data-detail-tab="checkpoint"', html)
+        self.assertIn('data-detail-tab="architecture"', html)
+        self.assertIn("rate_workbench.js", html)
+        self.assertLess(html.index("r12_step7.js"), html.index("rate_workbench.js"))
+        self.assertIn("rate_workbench.js?v=rate-v1-eval-v2", html)
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

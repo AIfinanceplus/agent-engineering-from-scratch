@@ -10,9 +10,9 @@ from __future__ import annotations
 import csv
 import io
 from datetime import date, timedelta
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+
+from native_http import http_get_text as native_http_get_text
 
 
 FRED_GRAPH_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
@@ -124,17 +124,7 @@ def _iso_date(value: str, label: str) -> str:
 
 
 def _http_get_text(url: str) -> str:
-    request = Request(
+    return native_http_get_text(
         url,
-        headers={
-            "Accept": "text/csv,text/plain;q=0.9,*/*;q=0.1",
-            "User-Agent": "agent-engineering-from-scratch/1.0",
-        },
+        accept="text/csv,text/plain;q=0.9,*/*;q=0.1",
     )
-    try:
-        with urlopen(request, timeout=20) as response:
-            return response.read().decode("utf-8-sig")
-    except HTTPError as exc:
-        raise RateSourceError(f"FRED HTTP {exc.code}") from exc
-    except (URLError, TimeoutError, OSError) as exc:
-        raise RateSourceError(f"FRED connection failed: {exc}") from exc

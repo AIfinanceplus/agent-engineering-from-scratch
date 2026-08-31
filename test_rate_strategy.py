@@ -29,7 +29,20 @@ def completed_steepener_history() -> dict:
         "artifact_type": "rate_curve_history",
         "provider": "FRED",
         "source_mode": "public_csv",
-        "series": [],
+        "series": [
+            {
+                "series_id": "DGS2",
+                "label": "2-Year Treasury Constant Maturity Rate",
+                "unit": "percent",
+                "source_url": "https://fred.stlouisfed.org/series/DGS2",
+            },
+            {
+                "series_id": "DGS10",
+                "label": "10-Year Treasury Constant Maturity Rate",
+                "unit": "percent",
+                "source_url": "https://fred.stlouisfed.org/series/DGS10",
+            },
+        ],
         "start_date": rows[0]["date"],
         "as_of": rows[-1]["date"],
         "observation_count": len(rows),
