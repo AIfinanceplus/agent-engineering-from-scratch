@@ -89,6 +89,24 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(payload["action"], "rate_strategy_run_once")
         self.assertIn("holding_days", payload["error"]["message"])
 
+    def test_exhausted_fred_retries_return_503_with_partial_agent_trace(self):
+        failing_agent = RateStrategyAgent(
+            {"fetch_public_rate_history": lambda **_kwargs: (_ for _ in ()).throw(
+                ConnectionError("FRED DGS2 connection failed: RemoteDisconnected")
+            )}
+        )
+        with patch.object(serve_rates, "RATE_AGENT", failing_agent), patch(
+            "rate_agent.time.sleep"
+        ):
+            status, _, payload = self.post({})
+
+        self.assertEqual(status, 503)
+        self.assertEqual(payload["error"]["code"], "DATA_SOURCE_UNAVAILABLE")
+        self.assertTrue(payload["error"]["retryable"])
+        self.assertEqual(payload["error"]["task_id"], "D1")
+        self.assertEqual(payload["error"]["attempts"], 3)
+        self.assertEqual(payload["error"]["trace"][-1]["event"], "tool_execution_failed")
+
 
 if __name__ == "__main__":
     unittest.main()

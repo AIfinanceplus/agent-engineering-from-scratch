@@ -47,6 +47,10 @@ approximation, not an executable bond-price model or investment recommendation.
 FRED CSV calls use `native_http.http_get_text`, which keeps certificate verification
 enabled while routing Python TLS through the operating system trust store via
 `truststore`. Do not disable certificate verification to work around local CA errors.
+The D1 public-data Tool declares two retries. The Runtime applies short exponential
+backoff only to connection/time-out failures and records the failed attempt and
+retry in Trace. If FRED remains unavailable after three total attempts, the HTTP
+API returns `503 DATA_SOURCE_UNAVAILABLE` together with the partial Agent trace.
 
 ## Advanced experiment retained: R12 Step 9 event-market portfolio
 

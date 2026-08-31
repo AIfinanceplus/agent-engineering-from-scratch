@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from copy import deepcopy
 from datetime import date, timedelta
 from typing import Callable
@@ -17,6 +18,21 @@ from typing import Callable
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import resolve_tool
+
+
+class RateToolExecutionError(RuntimeError):
+    """A Tool exhausted its declared retries; keep the partial trace inspectable."""
+
+    def __init__(self, *, task_id: str, tool_name: str, attempts: int, cause: Exception, trace: list):
+        super().__init__(
+            f"{task_id} {tool_name} failed after {attempts} attempts: {cause}"
+        )
+        self.task_id = task_id
+        self.tool_name = tool_name
+        self.attempts = attempts
+        self.error_type = cause.__class__.__name__
+        self.transient = isinstance(cause, (ConnectionError, TimeoutError))
+        self.trace = deepcopy(trace)
 
 
 class RateStrategyAgent:
@@ -104,14 +120,53 @@ class RateStrategyAgent:
             if not validation.get("ok"):
                 raise ValueError(validation["error"]["message"])
             function = self.tool_overrides.get(tool.name, tool.function)
-            emit(
-                "tool_execution_started",
-                task_id=task["task_id"],
-                tool_name=tool.name,
-                risk=tool.risk,
-                max_retries=tool.max_retries,
-            )
-            observation = function(**arguments)
+            max_attempts = tool.max_retries + 1
+            attempt = 1
+            while True:
+                emit(
+                    "tool_execution_started",
+                    task_id=task["task_id"],
+                    tool_name=tool.name,
+                    risk=tool.risk,
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    max_retries=tool.max_retries,
+                )
+                try:
+                    observation = function(**arguments)
+                    break
+                except Exception as exc:
+                    transient = isinstance(exc, (ConnectionError, TimeoutError))
+                    will_retry = transient and attempt < max_attempts
+                    emit(
+                        "tool_execution_failed",
+                        task_id=task["task_id"],
+                        tool_name=tool.name,
+                        attempt=attempt,
+                        error_type=exc.__class__.__name__,
+                        error_message=str(exc),
+                        retryable=will_retry,
+                    )
+                    if not will_retry:
+                        if not transient:
+                            raise
+                        raise RateToolExecutionError(
+                            task_id=task["task_id"],
+                            tool_name=tool.name,
+                            attempts=attempt,
+                            cause=exc,
+                            trace=trace,
+                        ) from exc
+                    delay_ms = 250 * (2 ** (attempt - 1))
+                    emit(
+                        "tool_retry_scheduled",
+                        task_id=task["task_id"],
+                        tool_name=tool.name,
+                        next_attempt=attempt + 1,
+                        delay_ms=delay_ms,
+                    )
+                    time.sleep(delay_ms / 1000)
+                    attempt += 1
             observations[task["task_id"]] = observation
             emit(
                 "tool_observation",

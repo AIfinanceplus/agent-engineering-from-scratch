@@ -9,6 +9,7 @@
 
 const rateWorkbenchState = {
   run:null,
+  failureTrace:[],
   busy:false,
   error:null,
   selectedNode:'G1',
@@ -82,8 +83,9 @@ function rateRenderFlow() {
   [...panel.children].forEach((child) => { child.hidden = child !== overlay; });
   overlay.hidden = false;
   const run = rateWorkbenchState.run;
+  const trace = run?.trace || rateWorkbenchState.failureTrace;
   const nodes = Object.entries(RATE_NODE_META);
-  overlay.innerHTML = `<div class="execution-head"><div class="execution-title"><h2>Agent 运行过程</h2><span class="pill ${rateWorkbenchState.busy ? 'running' : run?.eval?.passed ? 'done' : rateWorkbenchState.error ? 'fail' : ''}">${rateWorkbenchState.busy ? 'RUNNING' : run ? 'COMPLETED' : rateWorkbenchState.error ? 'FAILED' : 'IDLE'}</span></div><div class="run-meta"><span>${esc(run?.run_id || 'No active run')}</span><span>${run ? '2/2 Tool tasks' : '0/2 Tool tasks'}</span><span>${run ? `${run.trace.length} trace events` : '0 trace events'}</span></div></div>
+  overlay.innerHTML = `<div class="execution-head"><div class="execution-title"><h2>Agent 运行过程</h2><span class="pill ${rateWorkbenchState.busy ? 'running' : run?.eval?.passed ? 'done' : rateWorkbenchState.error ? 'fail' : ''}">${rateWorkbenchState.busy ? 'RUNNING' : run ? 'COMPLETED' : rateWorkbenchState.error ? 'FAILED' : 'IDLE'}</span></div><div class="run-meta"><span>${esc(run?.run_id || 'No active run')}</span><span>${run ? '2/2 Tool tasks' : rateWorkbenchState.error ? 'D1 failed' : '0/2 Tool tasks'}</span><span>${trace.length} trace events</span></div></div>
     <div class="flow-scroll"><div class="flow rate-agent-flow">${nodes.map(([id,meta],index) => {
       const status = rateNodeStatus(id);
       return `<article class="node ${status} ${rateWorkbenchState.selectedNode === id ? 'selected' : ''}" data-rate-node="${id}" data-node="${id}"><span class="node-index">${index + 1}</span><strong class="node-name">${esc(meta.name)}</strong><span class="node-icon">${meta.icon}</span><span class="node-status">${status}</span><span class="checkpoint-marker">${id === 'E1' && run?.eval?.passed ? 'EVAL PASS' : ''}</span></article>`;
@@ -109,9 +111,15 @@ function rateSelectedPayload() {
 }
 
 function rateRenderTrace() {
-  const trace = rateWorkbenchState.run?.trace || [];
+  const trace = rateWorkbenchState.run?.trace || rateWorkbenchState.failureTrace;
   if (!trace.length) return '<div class="empty">点击 Run One Simulation 后，这里逐步显示 Planner → Runtime → Tool → Observation → Eval。</div>';
-  return `<div class="rate-trace-list">${trace.map((row) => `<article class="rate-trace-row ${row.task_id === rateWorkbenchState.selectedNode ? 'selected' : ''}"><span class="rate-seq">${esc(row.sequence)}</span><div><strong>${esc(row.event)}</strong><small>${esc(row.task_id)}${row.tool_name ? ` · ${esc(row.tool_name)}` : ''}</small></div><span class="pill ${row.passed === false ? 'fail' : row.status === 'COMPLETED' || row.passed === true ? 'done' : ''}">${esc(row.status || (row.passed === true ? 'PASS' : row.passed === false ? 'FAIL' : 'RECORDED'))}</span></article>`).join('')}</div>`;
+  return `<div class="rate-trace-list">${trace.map((row) => {
+    const failed = row.event === 'tool_execution_failed';
+    const retry = row.event === 'tool_retry_scheduled';
+    const status = failed ? (row.retryable ? 'RETRYABLE' : 'FAILED') : retry ? `RETRY ${row.next_attempt}` : row.status || (row.passed === true ? 'PASS' : row.passed === false ? 'FAIL' : 'RECORDED');
+    const detail = `${row.task_id}${row.tool_name ? ` · ${row.tool_name}` : ''}${row.attempt ? ` · attempt ${row.attempt}/${row.max_attempts || '?'}` : ''}${row.delay_ms ? ` · backoff ${row.delay_ms}ms` : ''}${row.error_message ? ` · ${row.error_message}` : ''}`;
+    return `<article class="rate-trace-row ${row.task_id === rateWorkbenchState.selectedNode ? 'selected' : ''}"><span class="rate-seq">${esc(row.sequence)}</span><div><strong>${esc(row.event)}</strong><small>${esc(detail)}</small></div><span class="pill ${failed ? 'fail' : retry ? 'running' : row.passed === false ? 'fail' : row.status === 'COMPLETED' || row.passed === true ? 'done' : ''}">${esc(status)}</span></article>`;
+  }).join('')}</div>`;
 }
 
 function rateRenderLogic() {
@@ -221,6 +229,7 @@ async function rateRunOnce() {
   rateWorkbenchState.busy = true;
   rateWorkbenchState.error = null;
   rateWorkbenchState.run = null;
+  rateWorkbenchState.failureTrace = [];
   rateWorkbenchState.selectedNode = 'D1';
   appState.selectedDetailTab = 'trace';
   appState.selectedInspectorTab = 'output';
@@ -230,13 +239,18 @@ async function rateRunOnce() {
       lookback_days:rateConfigNumber('lookback_days'),entry_z:rateConfigNumber('entry_z'),holding_days:rateConfigNumber('holding_days'),dv01_usd_per_bp:rateConfigNumber('dv01_usd_per_bp'),round_trip_cost_bps:rateConfigNumber('round_trip_cost_bps'),
     })});
     const payload = await response.json();
-    if (!response.ok || !payload.ok) throw new Error(payload.error?.message || `HTTP ${response.status}`);
+    if (!response.ok || !payload.ok) {
+      const runError = new Error(payload.error?.message || `HTTP ${response.status}`);
+      runError.trace = payload.error?.trace || [];
+      throw runError;
+    }
     rateWorkbenchState.run = payload.run;
     rateWorkbenchState.selectedNode = 'E1';
     appState.selectedInspectorTab = 'eval';
     toast(`Rate Agent completed · ${payload.run.eval.passed ? 'EVAL PASS' : 'EVAL FAIL'}`);
   } catch (error) {
     rateWorkbenchState.error = error.message;
+    rateWorkbenchState.failureTrace = error.trace || [];
     rateWorkbenchState.selectedNode = 'D1';
     toast(`Rate Agent: ${error.message}`);
   } finally {

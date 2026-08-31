@@ -24,6 +24,9 @@ class RateUIContractTests(unittest.TestCase):
     def test_client_calls_only_rate_api_and_exposes_every_learning_view(self):
         source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
         self.assertIn("/api/rates/run-once", source)
+        self.assertIn("failureTrace", source)
+        self.assertIn("tool_retry_scheduled", source)
+        self.assertIn("RETRYABLE", source)
         self.assertNotIn("place_order", source)
         for renderer in (
             "rateRenderTrace", "rateRenderLogic", "rateRenderEvidence",

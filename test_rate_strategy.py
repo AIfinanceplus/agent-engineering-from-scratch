@@ -72,6 +72,16 @@ class FredCurveHistorySourceTests(unittest.TestCase):
         with self.assertRaises(RateSourceError):
             FredCurveHistorySource(transport=lambda _url: "DATE,DGS2\n").fetch("2026-01-01")
 
+    def test_connection_failure_identifies_the_fred_series(self):
+        def disconnected(_url):
+            raise ConnectionError("RemoteDisconnected: remote closed")
+
+        with self.assertRaisesRegex(
+            ConnectionError,
+            "FRED DGS2 connection failed: RemoteDisconnected: remote closed",
+        ):
+            FredCurveHistorySource(transport=disconnected).fetch("2026-01-01")
+
 
 class RateStrategyTests(unittest.TestCase):
     def test_runs_exactly_one_completed_steepener_and_reconciles_pnl(self):

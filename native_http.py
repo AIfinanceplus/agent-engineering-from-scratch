@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import ssl
+from http.client import RemoteDisconnected
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -62,6 +63,9 @@ def http_get_text(url: str, *, accept: str = "text/plain,*/*;q=0.1") -> str:
         raise RuntimeError(message) from exc
     except TimeoutError as exc:
         raise TimeoutError("public API request timed out after 20s") from exc
+    except (RemoteDisconnected, ConnectionResetError, ConnectionAbortedError) as exc:
+        detail = str(exc).strip() or repr(exc)
+        raise ConnectionError(f"{type(exc).__name__}: {detail}") from exc
     except URLError as exc:
         reason = getattr(exc, "reason", None)
         reason_type = type(reason).__name__ if reason is not None else type(exc).__name__

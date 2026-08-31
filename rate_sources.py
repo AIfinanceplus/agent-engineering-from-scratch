@@ -33,13 +33,15 @@ class FredCurveHistorySource:
     def fetch(self, start_date: str | None = None) -> dict:
         start_date = start_date or (date.today() - timedelta(days=1_095)).isoformat()
         _iso_date(start_date, "start_date")
-        series_rows = {
-            series_id: _parse_fred_csv(
-                self._transport(_series_url(series_id, start_date)),
-                series_id,
-            )
-            for series_id in RATE_SERIES
-        }
+        series_rows = {}
+        for series_id in RATE_SERIES:
+            try:
+                raw = self._transport(_series_url(series_id, start_date))
+            except (ConnectionError, TimeoutError) as exc:
+                raise ConnectionError(
+                    f"FRED {series_id} connection failed: {exc}"
+                ) from exc
+            series_rows[series_id] = _parse_fred_csv(raw, series_id)
         common_dates = sorted(set(series_rows["DGS2"]) & set(series_rows["DGS10"]))
         observations = [
             {

@@ -33,12 +33,22 @@ class RateStrategyHandler(R12VisualizerHandler):
                 start_date=request_data.get("start_date"),
             )
         except Exception as exc:
+            unavailable = isinstance(exc, (ConnectionError, TimeoutError)) or bool(
+                getattr(exc, "transient", False)
+            )
             return self._send_eval_json(
-                400,
+                503 if unavailable else 400,
                 {
                     "ok": False,
                     "action": "rate_strategy_run_once",
-                    "error": {"code": exc.__class__.__name__, "message": str(exc)},
+                    "error": {
+                        "code": "DATA_SOURCE_UNAVAILABLE" if unavailable else exc.__class__.__name__,
+                        "message": str(exc),
+                        "retryable": unavailable,
+                        "task_id": getattr(exc, "task_id", None),
+                        "attempts": getattr(exc, "attempts", None),
+                        "trace": getattr(exc, "trace", []),
+                    },
                 },
             )
         return self._send_eval_json(

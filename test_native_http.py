@@ -1,5 +1,6 @@
 import ssl
 import unittest
+from http.client import RemoteDisconnected
 from unittest.mock import MagicMock, patch
 
 from native_http import http_get_text, system_ssl_context
@@ -22,6 +23,17 @@ class NativeHTTPTests(unittest.TestCase):
         self.assertTrue(text.startswith("DATE,DGS2"))
         self.assertIs(mocked_open.call_args.kwargs["context"], context)
         self.assertEqual(mocked_open.call_args.kwargs["timeout"], 20)
+
+    def test_text_transport_normalizes_remote_disconnect_for_runtime_retry(self):
+        with patch("native_http.system_ssl_context", return_value=MagicMock()), patch(
+            "native_http.urlopen",
+            side_effect=RemoteDisconnected("Remote end closed connection without response"),
+        ):
+            with self.assertRaisesRegex(
+                ConnectionError,
+                "RemoteDisconnected: Remote end closed connection without response",
+            ):
+                http_get_text("https://fred.example/data.csv", accept="text/csv")
 
 
 if __name__ == "__main__":

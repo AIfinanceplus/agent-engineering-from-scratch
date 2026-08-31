@@ -22,7 +22,7 @@ RATE_HISTORY_TOOL = Tool(
         "additionalProperties": False,
     },
     function=fetch_public_rate_history,
-    max_retries=1,
+    max_retries=2,
     risk="low",
 )
 
