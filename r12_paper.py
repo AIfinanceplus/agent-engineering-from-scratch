@@ -76,6 +76,14 @@ class JsonlR12PaperLedgerStore:
             os.close(descriptor)
         return path
 
+    def list_trade_ids(self) -> list[str]:
+        """Return only filenames that satisfy the paper-trade ID contract."""
+        return sorted(
+            path.stem
+            for path in self.directory.glob("R12P-*.jsonl")
+            if TRADE_ID_RE.fullmatch(path.stem)
+        )
+
     def _path(self, paper_trade_id: str) -> Path:
         if not isinstance(paper_trade_id, str) or not TRADE_ID_RE.fullmatch(paper_trade_id):
             raise ValueError("paper_trade_id must match R12P-<16 lowercase hex chars>")
@@ -93,9 +101,7 @@ class R12PaperLedger:
     def create_from_agent_run(self, run: dict, opportunity_id: str, idempotency_key: str) -> dict:
         key = _required_text(idempotency_key, "idempotency_key")
         payload = _paper_intent_payload(run, opportunity_id)
-        paper_trade_id = "R12P-" + _fingerprint(
-            {"run_id": payload["source_run_id"], "opportunity_id": opportunity_id, "idempotency_key": key}
-        )[:16]
+        paper_trade_id = paper_trade_id_for_intent(payload, key)
         events = self.store.load_events(paper_trade_id)
         replayed = _idempotent_replay(events, "paper_intent_created", payload, key)
         if replayed is not None:
@@ -173,6 +179,10 @@ class R12PaperLedger:
         if not events:
             raise KeyError(f"R12 paper trade not found: {paper_trade_id}")
         return replay_paper_events(events)
+
+    @_serialized
+    def list_trades(self) -> list[dict]:
+        return [self.get(paper_trade_id) for paper_trade_id in self.store.list_trade_ids()]
 
     def _mutate(self, paper_trade_id: str, event_type: str, payload: dict, idempotency_key: str) -> dict:
         key = _required_text(idempotency_key, "idempotency_key")
@@ -271,6 +281,22 @@ def evaluate_r12_paper_trade(trade: dict) -> dict:
         "checks": checks,
         "passed": all(checks.values()),
     }
+
+
+def paper_trade_id_for_agent_run(run: dict, opportunity_id: str, idempotency_key: str) -> str:
+    """Derive the deterministic trade ID without mutating the ledger."""
+    payload = _paper_intent_payload(run, opportunity_id)
+    return paper_trade_id_for_intent(payload, _required_text(idempotency_key, "idempotency_key"))
+
+
+def paper_trade_id_for_intent(payload: dict, idempotency_key: str) -> str:
+    return "R12P-" + _fingerprint(
+        {
+            "run_id": payload["source_run_id"],
+            "opportunity_id": payload["opportunity_id"],
+            "idempotency_key": idempotency_key,
+        }
+    )[:16]
 
 
 def _paper_intent_payload(run: dict, opportunity_id: str) -> dict:

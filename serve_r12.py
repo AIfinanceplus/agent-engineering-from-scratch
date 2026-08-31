@@ -8,6 +8,7 @@ import r12_event_sources as event_sources
 import r12_execution as execution_engine
 import r12_identity as identity_engine
 import r12_paper as paper_engine
+import r12_portfolio as portfolio_engine
 import r12_rules as rules_engine
 from r12_agent import JsonR12StrategyRunStore, R12StrategyAgent, evaluate_r12_strategy_agent_run
 from r12_registry import current_strategy_registry_snapshot
@@ -21,6 +22,7 @@ R12_AGENT_STORE = JsonR12StrategyRunStore(Path(__file__).parent / ".r12_agent_ru
 R12_STRATEGY_AGENT = R12StrategyAgent(R12_AGENT_STORE)
 R12_PAPER_STORE = paper_engine.JsonlR12PaperLedgerStore(Path(__file__).parent / ".r12_paper_ledger")
 R12_PAPER_LEDGER = paper_engine.R12PaperLedger(R12_PAPER_STORE)
+R12_PAPER_PORTFOLIO = portfolio_engine.R12PaperPortfolio(R12_PAPER_LEDGER)
 
 
 class R12VisualizerHandler(R11VisualizerHandler):
@@ -34,6 +36,7 @@ class R12VisualizerHandler(R11VisualizerHandler):
         "r12_step4.js",
         "r12_step5.js",
         "r12_step6.js",
+        "r12_step7.js",
     )
 
     def do_POST(self):
@@ -65,6 +68,10 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return self._handle_paper_create()
         if self.path == "/api/r12/paper/status":
             return self._handle_paper_status()
+        if self.path == "/api/r12/paper/portfolio":
+            return self._handle_paper_portfolio()
+        if self.path == "/api/r12/paper/preflight-fill":
+            return self._handle_paper_preflight_fill()
         if self.path == "/api/r12/paper/fill":
             return self._handle_paper_fill()
         if self.path == "/api/r12/paper/mark":
@@ -271,7 +278,7 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return
         try:
             run = R12_STRATEGY_AGENT.get(request_data.get("run_id"))
-            trade = R12_PAPER_LEDGER.create_from_agent_run(
+            trade = R12_PAPER_PORTFOLIO.create_from_agent_run(
                 run,
                 request_data.get("opportunity_id"),
                 request_data.get("idempotency_key"),
@@ -290,12 +297,46 @@ class R12VisualizerHandler(R11VisualizerHandler):
             return self._r12_error("r12_paper_status", exc)
         self._send_paper_trade("r12_paper_status", trade)
 
+    def _handle_paper_portfolio(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            portfolio = R12_PAPER_PORTFOLIO.status()
+        except Exception as exc:
+            return self._r12_error("r12_paper_portfolio", exc)
+        self._send_eval_json(
+            200,
+            {
+                "ok": True,
+                "action": "r12_paper_portfolio",
+                "portfolio": portfolio,
+                "eval": portfolio_engine.evaluate_r12_paper_portfolio(portfolio),
+            },
+        )
+
+    def _handle_paper_preflight_fill(self):
+        request_data = self._read_eval_request()
+        if request_data is None:
+            return
+        try:
+            preflight = R12_PAPER_PORTFOLIO.preflight_fill(
+                request_data.get("paper_trade_id"),
+                leg_id=request_data.get("leg_id"),
+                quantity=request_data.get("quantity"),
+                price=request_data.get("price"),
+                fee=request_data.get("fee", 0.0),
+            )
+        except Exception as exc:
+            return self._r12_error("r12_paper_preflight_fill", exc)
+        self._send_eval_json(200, {"ok": True, "action": "r12_paper_preflight_fill", "preflight": preflight})
+
     def _handle_paper_fill(self):
         request_data = self._read_eval_request()
         if request_data is None:
             return
         try:
-            trade = R12_PAPER_LEDGER.record_fill(
+            trade = R12_PAPER_PORTFOLIO.record_fill(
                 request_data.get("paper_trade_id"),
                 leg_id=request_data.get("leg_id"),
                 quantity=request_data.get("quantity"),
@@ -375,6 +416,7 @@ class R12VisualizerHandler(R11VisualizerHandler):
         )
 
     def _send_paper_trade(self, action: str, trade: dict):
+        portfolio = R12_PAPER_PORTFOLIO.status()
         self._send_eval_json(
             200,
             {
@@ -382,6 +424,8 @@ class R12VisualizerHandler(R11VisualizerHandler):
                 "action": action,
                 "trade": trade,
                 "eval": paper_engine.evaluate_r12_paper_trade(trade),
+                "portfolio": portfolio,
+                "portfolio_eval": portfolio_engine.evaluate_r12_paper_portfolio(portfolio),
             },
         )
 
@@ -415,9 +459,10 @@ def main():
     print("Step 7: explicit paper fills -> append-only replay -> leg risk -> MTM / settlement P&L")
     print("Step 8: Agent Run / Manual Lab / Strategy Roadmap operator workspaces")
     print("Step 8 fix: default event search entry + content-height Strategy workspace")
+    print("Step 9: replayed paper portfolio -> atomic fill preflight -> multi-trade exposure limits")
     print("No order credentials, wallet, authenticated portfolio API, or order placement")
     print("All strategy output is PAPER_SIGNAL_ONLY_NO_AUTO_EXECUTION")
-    print("Next: paper portfolio aggregation + multi-trade exposure limits")
+    print("Next: portfolio stress scenarios + durable per-strategy policy configuration")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()

@@ -11,6 +11,7 @@ from unittest.mock import patch
 import serve_r12
 from r12_agent import JsonR12StrategyRunStore, R12StrategyAgent
 from r12_paper import JsonlR12PaperLedgerStore, R12PaperLedger
+from r12_portfolio import R12PaperPortfolio, R12PaperPortfolioLimits
 from r12_tooling import R12_MARKET_CONTRACT_TOOL, register_r12_tools
 from serve_r12 import R12VisualizerHandler
 from test_r12_execution import execution_contracts, explicit_zero_fee_model
@@ -30,12 +31,16 @@ class R12Step5HTTPTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.agent = R12StrategyAgent(JsonR12StrategyRunStore(f"{self.temp.name}/agent"))
         self.ledger = R12PaperLedger(JsonlR12PaperLedgerStore(f"{self.temp.name}/paper"))
+        self.portfolio = R12PaperPortfolio(self.ledger)
         self.agent_patch = patch.object(serve_r12, "R12_STRATEGY_AGENT", self.agent)
         self.ledger_patch = patch.object(serve_r12, "R12_PAPER_LEDGER", self.ledger)
+        self.portfolio_patch = patch.object(serve_r12, "R12_PAPER_PORTFOLIO", self.portfolio)
         self.agent_patch.start()
         self.ledger_patch.start()
+        self.portfolio_patch.start()
         self.addCleanup(self.agent_patch.stop)
         self.addCleanup(self.ledger_patch.stop)
+        self.addCleanup(self.portfolio_patch.stop)
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), TestHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -181,6 +186,68 @@ class R12Step5HTTPTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertIn("exceeds remaining", payload["error"]["message"])
+
+    def test_portfolio_status_preflight_and_fill_return_aggregate_projection(self):
+        status, empty = self.post("/api/r12/paper/portfolio", {})
+        self.assertEqual(status, 200)
+        self.assertEqual(empty["portfolio"]["summary"]["trade_count"], 0)
+
+        _, created = self.create_trade()
+        trade = created["trade"]
+        leg = trade["legs"][0]
+        status, preflight = self.post(
+            "/api/r12/paper/preflight-fill",
+            {
+                "paper_trade_id": trade["paper_trade_id"],
+                "leg_id": leg["leg_id"],
+                "quantity": 2,
+                "price": 0.45,
+                "fee": 0,
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(preflight["preflight"]["allowed"])
+        self.assertFalse(preflight["preflight"]["guardrails"]["ledger_mutated"])
+
+        status, filled = self.post(
+            "/api/r12/paper/fill",
+            {
+                "paper_trade_id": trade["paper_trade_id"],
+                "leg_id": leg["leg_id"],
+                "quantity": 2,
+                "price": 0.45,
+                "fee": 0,
+                "idempotency_key": "portfolio-http-fill",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(filled["portfolio"]["summary"]["total_leg_risk_quantity"], 2)
+        self.assertEqual(filled["portfolio"]["summary"]["unsettled_acquisition_cost"], 0.9)
+
+    def test_portfolio_limit_blocks_http_fill_without_appending_event(self):
+        _, created = self.create_trade()
+        trade = created["trade"]
+        leg = trade["legs"][0]
+        limited = R12PaperPortfolio(
+            self.ledger,
+            R12PaperPortfolioLimits(max_total_leg_risk_quantity=1),
+        )
+        with patch.object(serve_r12, "R12_PAPER_PORTFOLIO", limited):
+            status, blocked = self.post(
+                "/api/r12/paper/fill",
+                {
+                    "paper_trade_id": trade["paper_trade_id"],
+                    "leg_id": leg["leg_id"],
+                    "quantity": 2,
+                    "price": 0.45,
+                    "fee": 0,
+                    "idempotency_key": "blocked-http-fill",
+                },
+            )
+        self.assertEqual(status, 400)
+        self.assertEqual(blocked["error"]["code"], "R12PortfolioLimitExceeded")
+        self.assertIn("max_total_leg_risk_quantity", blocked["error"]["message"])
+        self.assertEqual(self.ledger.get(trade["paper_trade_id"])["event_count"], 1)
 
 
 if __name__ == "__main__":

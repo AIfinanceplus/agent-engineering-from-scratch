@@ -47,9 +47,9 @@ class R12HTTPTests(unittest.TestCase):
         self.assertEqual(payload["action"], "r12_strategy_registry")
         registry = payload["registry"]
         self.assertEqual(len(registry["strategies"]), 5)
-        self.assertEqual(registry["roadmap_version"], "R12_STEP8")
+        self.assertEqual(registry["roadmap_version"], "R12_STEP9")
         cross = next(row for row in registry["strategies"] if row["strategy_id"] == "cross_market_event_rv")
-        self.assertEqual(cross["status"], "LIVE_HITL_AGENT_WITH_APPEND_ONLY_PAPER_LEDGER")
+        self.assertEqual(cross["status"], "LIVE_HITL_AGENT_WITH_LIMITED_PAPER_PORTFOLIO")
         self.assertFalse(registry["discovery_contract"]["candidate_match_is_settlement_proof"])
         self.assertTrue(registry["execution_quote_contract"]["target_quantity_must_fill_on_both_legs"])
         self.assertFalse(registry["execution_quote_contract"]["automatic_execution"])
@@ -62,6 +62,10 @@ class R12HTTPTests(unittest.TestCase):
         self.assertFalse(registry["paper_ledger_contract"]["automatic_execution"])
         self.assertEqual(registry["operator_workspace_contract"]["default_workspace"], "agent_run")
         self.assertTrue(registry["operator_workspace_contract"]["manual_tool_controls_are_separate"])
+        self.assertTrue(registry["paper_portfolio_contract"]["new_intents_and_fills_require_atomic_preflight"])
+        self.assertTrue(registry["paper_portfolio_contract"]["aggregate_leg_risk_limit"])
+        self.assertFalse(registry["paper_portfolio_contract"]["unknown_marks_are_zero_pnl"])
+        self.assertFalse(registry["paper_portfolio_contract"]["automatic_execution"])
         self.assertIn("application/json", headers.get("Content-Type", ""))
         self.assertEqual(headers.get("Connection"), "close")
 

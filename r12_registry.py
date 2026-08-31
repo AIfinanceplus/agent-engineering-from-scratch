@@ -9,18 +9,20 @@ def current_strategy_registry_snapshot() -> dict:
     registry = deepcopy(strategy_registry_snapshot())
     for row in registry.get("strategies") or []:
         if row.get("strategy_id") == "cross_market_event_rv":
-            row["status"] = "LIVE_HITL_AGENT_WITH_APPEND_ONLY_PAPER_LEDGER"
-            row["next_dependency"] = "paper portfolio aggregation + multi-trade exposure limits"
+            row["status"] = "LIVE_HITL_AGENT_WITH_LIMITED_PAPER_PORTFOLIO"
+            row["next_dependency"] = "portfolio stress scenarios + durable per-strategy policy configuration"
         elif row.get("strategy_id") == "structural_logic_rv":
             row["next_dependency"] = "live market-universe normalizer + liquidity/fee/depth model"
-    registry["roadmap_version"] = "R12_STEP8"
+    registry["roadmap_version"] = "R12_STEP9"
     registry["current_boundary"] = (
         "Free-text discovery can find candidate Kalshi and Polymarket markets without raw IDs. Candidate matching is "
         "lexical and never proves settlement identity. An exact-pair Tool DAG now persists a human approval pause; "
         "only a rules-analysis-bound six-check attestation can resume identity, RV, and depth-aware paper quoting. "
         "An eligible E1 quote can then create a zero-fill paper intent; explicit idempotent commands append simulated "
-        "fills, marks, cancellation/expiry, and settlement to a replayable hash-chained ledger. The operator UI now "
-        "separates the default end-to-end Agent Run from the step-by-step Manual Lab and the Strategy Roadmap."
+        "fills, marks, cancellation/expiry, and settlement to a replayable hash-chained ledger. All ledgers are now "
+        "replayed into a paper portfolio; new intents and fills cross atomic multi-trade exposure limits before any "
+        "risk-increasing event is appended. The operator UI separates the default end-to-end Agent Run from the "
+        "step-by-step Manual Lab and the Strategy Roadmap."
     )
     registry["discovery_contract"] = {
         "kalshi": "bounded open-event listing plus local lexical ranking",
@@ -65,5 +67,17 @@ def current_strategy_registry_snapshot() -> dict:
         "manual_tool_controls_are_separate": True,
         "strategy_roadmap_is_separate": True,
         "backend_risk_and_ledger_contracts_changed": False,
+    }
+    registry["paper_portfolio_contract"] = {
+        "source_of_truth_is_replayed_trade_ledgers": True,
+        "new_intents_and_fills_require_atomic_preflight": True,
+        "unsettled_trade_limit": True,
+        "aggregate_acquisition_cost_limit": True,
+        "aggregate_leg_risk_limit": True,
+        "provider_concentration_limit": True,
+        "settlement_identity_concentration_limit": True,
+        "unknown_marks_are_zero_pnl": False,
+        "exchange_connection_present": False,
+        "automatic_execution": False,
     }
     return registry

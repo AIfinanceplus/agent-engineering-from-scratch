@@ -21,7 +21,7 @@ V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, Exe
 - R11 — Constraint-based position sizing
 - R12 — Strategy opportunities + live public event markets + HITL Strategy Agent
 
-## Current stage: R12 Step 8 — task-oriented Strategy Center
+## Current stage: R12 Step 9 — replayed paper portfolio and exposure limits
 
 R12 keeps the earlier Runtime, Evidence, forecasting, EV, risk, and sizing layers,
 then adds a five-strategy opportunity registry. The currently deepest live path is
@@ -49,6 +49,10 @@ Paper intent with zero fills
 Append-only hash-chained event ledger
       ↓ deterministic replay
 Partial-leg risk / matched quantity / MTM P&L
+      ↓ replay every trade ledger
+Paper portfolio aggregation
+      ↓ atomic preflight before every new intent / fill
+Unsettled trade / acquisition cost / leg risk / provider / identity limits
       ↓ explicit YES or NO settlement
 Realized paper P&L
 ```
@@ -71,6 +75,15 @@ Strategy Roadmap   five strategy families + current implementation boundary
 The Agent Run workspace now follows user task order rather than implementation
 history: discover pair → lock exact IDs → configure explicit costs → start/resume
 Agent → review H1 beside the six checkboxes → inspect I1/V1/E1 → paper ledger.
+
+Step 9 keeps each ledger immutable and adds a separate portfolio read model. It
+replays every `.r12_paper_ledger/*.jsonl` stream, aggregates unsettled cost,
+unmatched leg quantity, provider notional, same-settlement-identity concentration,
+MTM completeness, and realized P&L. New intents and fills are serialized through
+an atomic preflight; a rejected command appends no event. The current teaching
+limits are explicit code configuration, not calibrated investment advice.
+Exposure is conservatively added across trades; Step 9 gives no correlation,
+diversification, or cross-trade netting credit.
 
 Current five-strategy roadmap:
 
@@ -337,7 +350,7 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Suggested R12 Step 8 Agent Run flow:
+Suggested R12 Step 9 Agent Run flow:
 
 ```text
 1. 启动 R12 后默认打开 事件市场；保持 Event Search & Agent workspace
@@ -349,12 +362,13 @@ Suggested R12 Step 8 Agent Run flow:
 7. Approve H1 and Resume
 8. 检查 I1 / V1 / E1、task traces、checkpoints 与 eval
 9. Create Paper Intent；确认初始状态为 PENDING_PAPER_FILL 且 0 fills
-10. 先给一条腿 Record Fill；确认状态为 PARTIALLY_FILLED_LEG_RISK
-11. 给另一条腿记录相同数量；确认 leg risk 回到 0
-12. Update MTM，检查 acquisition cost、marked value 与 MTM P&L
-13. Cancel / Expire 剩余数量，或补齐两腿至 FULLY_MATCHED
-14. Settle YES / NO，检查 settlement payoff 与 realized P&L
-15. 刷新页面并用 Paper trade ID Load Ledger，确认事件回放结果不变
+10. 检查 Multi-trade Portfolio；确认 unsettled trade 从 0 变为 1
+11. 先给一条腿 Record Fill；确认 trade 和 portfolio 都显示 leg risk
+12. 给另一条腿记录相同数量；确认组合 total leg risk 回落
+13. Update MTM；缺少完整 marks 时，portfolio 不把未知 P&L 当作 0
+14. Cancel / Expire 剩余数量，或补齐两腿至 FULLY_MATCHED
+15. Settle YES / NO；确认 cost 离开 unsettled exposure，realized P&L 汇总
+16. Refresh Portfolio 并 Load Ledger；确认多笔聚合和单笔回放结果一致
 ```
 
 Active UI scripts:
@@ -366,4 +380,5 @@ web/r12_step3.js
 web/r12_step4.js
 web/r12_step5.js
 web/r12_step6.js
+web/r12_step7.js
 ```
