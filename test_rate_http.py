@@ -156,6 +156,11 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(idem["attempts"], ["APPLIED", "DEDUPLICATED"])
         self.assertEqual(idem["applied_attempts"], 1)
         self.assertEqual(idem["ledger_event_count"], 1)
+        self.assertEqual(idem["boundary"], "Command Gateway")
+        self.assertEqual(
+            [idem["ledger_before"], idem["ledger_after_first"], idem["ledger_after_retry"]],
+            [0, 1, 1],
+        )
 
 
 if __name__ == "__main__":

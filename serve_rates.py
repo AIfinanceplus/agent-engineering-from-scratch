@@ -133,8 +133,13 @@ class RateStrategyHandler(R12VisualizerHandler):
             run["idempotency"] = {
                 "demo": True,
                 "idempotency_key": key,
+                "command": command,
+                "boundary": "Command Gateway",
                 "attempts": [first["status"], second["status"]],
                 "applied_attempts": int(first["applied"]) + int(second["applied"]),
+                "ledger_before": 0,
+                "ledger_after_first": first["record"]["effect_count"],
+                "ledger_after_retry": second["record"]["effect_count"],
                 "ledger_event_count": second["record"]["effect_count"],
                 "same_command": True,
             }

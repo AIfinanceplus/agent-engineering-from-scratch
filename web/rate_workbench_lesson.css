@@ -1,1 +1,13 @@
 .rate-lesson-actions{display:flex;gap:7px;flex-wrap:wrap;justify-content:flex-end}
+.rate-idempotency-audit{display:grid;gap:9px;margin:4px 0 12px;padding:14px;border:1px solid var(--purple);border-radius:11px;background:var(--purple-soft)}
+.rate-idempotency-audit h3{margin:0;font-size:13px}
+.rate-command-key{display:grid;gap:3px;padding:8px 10px;border-radius:8px;background:#fff}
+.rate-command-key span,.rate-ledger-diff span,.rate-ledger-diff small{font-size:8px;color:var(--muted)}
+.rate-command-key strong{font:10px ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.rate-attempt-lane{display:grid;gap:6px}
+.rate-attempt{display:grid;grid-template-columns:24px 1fr auto;gap:8px;align-items:center;padding:8px 9px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.rate-attempt-num{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--line);font-size:10px;font-weight:800}
+.rate-attempt div{display:grid;gap:2px}.rate-attempt strong{font-size:9px}.rate-attempt small{font-size:8px;color:var(--muted)}
+.rate-attempt.applied{border-color:var(--green)}.rate-attempt.applied .rate-attempt-num{background:var(--green);color:#fff}.rate-attempt.dedup{border-color:var(--amber)}.rate-attempt.dedup .rate-attempt-num{background:var(--amber);color:#fff}
+.rate-effect{font:9px ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:800}.rate-ledger-diff{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding-top:4px}.rate-ledger-diff strong{font:18px ui-monospace,SFMono-Regular,Menlo,monospace}.rate-ledger-diff b{color:var(--muted);font-weight:400}.rate-ledger-diff small{width:100%}
+@media(max-width:680px){.rate-lesson-actions{justify-content:stretch}.rate-lesson-actions .btn{flex:1}.rate-attempt{grid-template-columns:24px 1fr}.rate-effect{grid-column:2}}
