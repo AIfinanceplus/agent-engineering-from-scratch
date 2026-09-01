@@ -41,7 +41,16 @@ function rateNodeStatus(nodeId) {
     return 'completed';
   }
   if (rateWorkbenchState.error) return nodeId === 'D1' ? 'failed' : ['G1','P1','R1'].includes(nodeId) ? 'completed' : 'waiting';
-  if (rateWorkbenchState.busy) return nodeId === 'D1' ? 'running' : ['G1','P1','R1'].includes(nodeId) ? 'completed' : 'waiting';
+  if (rateWorkbenchState.busy) {
+    const stream = rateWorkbenchState.streamTrace || [];
+    if (!stream.length) return nodeId === 'D1' ? 'running' : ['G1','P1','R1'].includes(nodeId) ? 'completed' : 'waiting';
+    const completed = new Set(stream.filter((row) => row.event === 'task_completed').map((row) => row.task_id));
+    const active = [...stream].reverse().find((row) => ['task_started','tool_execution_started','eval_started'].includes(row.event))?.task_id;
+    if (completed.has(nodeId)) return 'completed';
+    if (nodeId === active) return 'running';
+    if (['G1','P1','R1'].includes(nodeId) && stream.some((row) => row.task_id === nodeId)) return 'completed';
+    return 'waiting';
+  }
   return nodeId === 'G1' ? 'ready' : 'waiting';
 }
 
