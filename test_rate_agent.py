@@ -55,6 +55,31 @@ class RateStrategyAgentTests(unittest.TestCase):
         self.assertIn("simulate_one_curve_trade", TOOL_REGISTRY)
         self.assertFalse(run["guardrails"]["automatic_execution"])
 
+    def test_source_ladder_fallback_is_visible_in_agent_trace(self):
+        history = completed_steepener_history()
+        history.update(
+            provider="U.S. Treasury",
+            source_mode="bundled_snapshot",
+            source_freshness="SNAPSHOT",
+            fallback_used=True,
+            source_attempts=[
+                {"provider": "FRED", "source_mode": "live_bulk_csv", "status": "FAILED",
+                 "error_type": "ConnectionError", "error_message": "RemoteDisconnected"},
+                {"provider": "U.S. Treasury", "source_mode": "bundled_snapshot",
+                 "status": "SELECTED"},
+            ],
+        )
+        run = RateStrategyAgent(
+            {"fetch_public_rate_history": lambda **_kwargs: history}
+        ).run_once()
+        events = [row["event"] for row in run["trace"]]
+        self.assertEqual(events.count("data_source_attempt"), 2)
+        self.assertIn("data_source_fallback_selected", events)
+        fallback = next(row for row in run["trace"]
+                        if row["event"] == "data_source_fallback_selected")
+        self.assertEqual(fallback["source_mode"], "bundled_snapshot")
+        self.assertEqual(fallback["source_freshness"], "SNAPSHOT")
+
     def test_exhausted_retries_preserve_the_failure_trace(self):
         attempts = 0
 

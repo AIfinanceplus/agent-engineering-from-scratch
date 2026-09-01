@@ -16,7 +16,8 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn("Planner", source)
         self.assertIn("Runtime", source)
         self.assertIn("Tool Registry", source)
-        self.assertIn("D1 FRED Tool", source)
+        self.assertIn("D1 Rate Data Tool", source)
+        self.assertIn("FRED live → Treasury live → disclosed snapshot", source)
         self.assertIn("S1 Strategy Tool", source)
         self.assertIn("E1 Eval", source)
         self.assertIn("利率策略", source)
@@ -26,6 +27,8 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn("/api/rates/run-once", source)
         self.assertIn("failureTrace", source)
         self.assertIn("tool_retry_scheduled", source)
+        self.assertIn("data_source_fallback_selected", source)
+        self.assertIn("Offline snapshot", source)
         self.assertIn("RETRYABLE", source)
         self.assertNotIn("place_order", source)
         for renderer in (

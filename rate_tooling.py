@@ -12,8 +12,8 @@ def fetch_public_rate_history(start_date: str) -> dict:
 RATE_HISTORY_TOOL = Tool(
     name="fetch_public_rate_history",
     description=(
-        "Fetch credential-free FRED DGS2 and DGS10 history, align common dates, "
-        "and return grounded 2s10s curve observations."
+        "Fetch credential-free DGS2 and DGS10 history through the FRED -> official "
+        "U.S. Treasury -> disclosed snapshot source ladder."
     ),
     parameters={
         "type": "object",

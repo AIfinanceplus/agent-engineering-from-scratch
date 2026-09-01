@@ -6,6 +6,7 @@ from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
 from rate_agent import RateStrategyAgent
+from rate_sources import FredCurveHistorySource
 import serve_rates
 from serve_rates import RateStrategyHandler
 from test_rate_strategy import completed_steepener_history
@@ -80,7 +81,7 @@ class RateHTTPTests(unittest.TestCase):
         self.assertIn('data-detail-tab="architecture"', html)
         self.assertIn("rate_workbench.js", html)
         self.assertLess(html.index("r12_step7.js"), html.index("rate_workbench.js"))
-        self.assertIn("rate_workbench.js?v=rate-v1-eval-v2", html)
+        self.assertIn("rate_workbench.js?v=rate-v1-fallback-eval-v2", html)
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})
@@ -106,6 +107,28 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(payload["error"]["task_id"], "D1")
         self.assertEqual(payload["error"]["attempts"], 3)
         self.assertEqual(payload["error"]["trace"][-1]["event"], "tool_execution_failed")
+
+    def test_fred_disconnect_returns_200_via_disclosed_snapshot_fallback(self):
+        source = FredCurveHistorySource(
+            transport=lambda _url: (_ for _ in ()).throw(
+                ConnectionError("RemoteDisconnected: remote closed")
+            )
+        )
+        fallback_agent = RateStrategyAgent(
+            {"fetch_public_rate_history": source.fetch}
+        )
+        with patch.object(serve_rates, "RATE_AGENT", fallback_agent):
+            status, _, payload = self.post({})
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["run"]["data"]["source_mode"], "bundled_snapshot")
+        self.assertEqual(payload["run"]["data"]["source_freshness"], "SNAPSHOT")
+        self.assertTrue(payload["run"]["eval"]["passed"])
+        self.assertIn(
+            "data_source_fallback_selected",
+            [row["event"] for row in payload["run"]["trace"]],
+        )
 
 
 if __name__ == "__main__":

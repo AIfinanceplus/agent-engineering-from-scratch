@@ -168,6 +168,26 @@ class RateStrategyAgent:
                     time.sleep(delay_ms / 1000)
                     attempt += 1
             observations[task["task_id"]] = observation
+            if task["task_id"] == "D1":
+                for source_attempt in observation.get("source_attempts", []):
+                    emit(
+                        "data_source_attempt",
+                        task_id="D1",
+                        provider=source_attempt.get("provider"),
+                        source_mode=source_attempt.get("source_mode"),
+                        status=source_attempt.get("status"),
+                        error_type=source_attempt.get("error_type"),
+                        error_message=source_attempt.get("error_message"),
+                    )
+                if observation.get("fallback_used"):
+                    emit(
+                        "data_source_fallback_selected",
+                        task_id="D1",
+                        provider=observation.get("provider"),
+                        source_mode=observation.get("source_mode"),
+                        source_freshness=observation.get("source_freshness"),
+                        as_of=observation.get("as_of"),
+                    )
             emit(
                 "tool_observation",
                 task_id=task["task_id"],
@@ -207,15 +227,15 @@ class RateStrategyAgent:
         evidence = [
             {
                 "kind": "evidence",
-                "evidence_id": f"FRED:{series['series_id']}",
-                "provider": "FRED",
+                "evidence_id": series.get("evidence_id", f"FRED:{series['series_id']}"),
+                "provider": series.get("provider", history.get("provider", "FRED")),
                 "series_id": series["series_id"],
                 "value": latest[series["series_id"].lower()],
                 "unit": series["unit"],
                 "as_of": history["as_of"],
                 "source": {
                     "title": series["label"],
-                    "publisher": "Federal Reserve Bank of St. Louis",
+                    "publisher": series.get("publisher", "Federal Reserve Bank of St. Louis"),
                     "uri": series["source_url"],
                 },
             }

@@ -20,7 +20,7 @@ const RATE_NODE_META = {
   G1:{name:'Goal',icon:'◎',why:'操作者提出一个明确目标：用公开利率数据完成一次可审计的 paper simulation。',input:['One strategy','Explicit parameters'],output:['Agent goal'],code:'web/rate_workbench.js'},
   P1:{name:'Planner',icon:'✣',why:'固定 Planner 只生成 D1 → S1 两个任务，避免第一次学习被自由规划和事件匹配干扰。',input:['Goal','Strategy configuration'],output:['Two-Tool DAG'],code:'rate_agent.py'},
   R1:{name:'Runtime',icon:'⌘',why:'Runtime 从共享 Tool Registry 查找能力、验证参数，然后才允许函数执行。',input:['PlanTask','Tool arguments'],output:['Validated Tool call','Trace events'],code:'rate_agent.py / tools.py'},
-  D1:{name:'D1 FRED Tool',icon:'◉',why:'数据 Tool 通过系统证书库读取 FRED DGS2/DGS10 CSV，只保留共同日期。',input:['start_date'],output:['rate_curve_history','FRED Evidence'],code:'rate_sources.py / native_http.py'},
+  D1:{name:'D1 Rate Data Tool',icon:'◉',why:'数据 Tool 依次尝试 FRED 实时批量 CSV、美国财政部实时 CSV、带日期的本地官方数据快照；每次选择都会写入 Trace。',input:['start_date'],output:['rate_curve_history','Grounded rate Evidence','Source provenance'],code:'rate_sources.py / native_http.py'},
   S1:{name:'S1 Strategy Tool',icon:'⌁',why:'纯函数计算滚动 z-score，并寻找最近一笔已完成持有期的历史信号。',input:['rate_curve_history','lookback','threshold','holding','DV01','cost'],output:['One closed paper trade','P&L'],code:'rate_strategy.py'},
   E1:{name:'E1 Eval',icon:'✓',why:'Eval 独立重算 P&L，并检查无 lookahead、paper-only、无真实订单。',input:['rate_strategy_simulation'],output:['Contract checks','PASS / FAIL'],code:'rate_strategy.py'},
 };
@@ -60,7 +60,7 @@ function rateRenderInput() {
       <label>Holding<input data-rate-field="holding_days" value="${esc(c.holding_days)}" inputmode="numeric"><small>observations</small></label>
       <label>DV01<input data-rate-field="dv01_usd_per_bp" value="${esc(c.dv01_usd_per_bp)}" inputmode="decimal"><small>USD / bp</small></label>
       <label>Round-trip cost<input data-rate-field="round_trip_cost_bps" value="${esc(c.round_trip_cost_bps)}" inputmode="decimal"><small>basis points</small></label>
-      <div class="rate-run-actions"><button id="rate-run-once" class="btn primary" ${rateWorkbenchState.busy ? 'disabled' : ''}>${rateWorkbenchState.busy ? 'D1 Fetching FRED…' : '▶ Run One Simulation'}</button><button id="rate-export" class="btn" ${rateWorkbenchState.run ? '' : 'disabled'}>⇩ JSON</button></div>
+      <div class="rate-run-actions"><button id="rate-run-once" class="btn primary" ${rateWorkbenchState.busy ? 'disabled' : ''}>${rateWorkbenchState.busy ? 'D1 Resolving rate source…' : '▶ Run One Simulation'}</button><button id="rate-export" class="btn" ${rateWorkbenchState.run ? '' : 'disabled'}>⇩ JSON</button></div>
     </div>
     <p class="rate-rule">利差 = 10Y − 2Y；z ≤ −阈值做 steepener，z ≥ 阈值做 flattener；固定持有后按 DV01 近似平仓。</p>
     ${rateWorkbenchState.error ? `<div class="eval-diagnostic"><strong>Run failed:</strong> ${esc(rateWorkbenchState.error)}</div>` : ''}`;
@@ -114,11 +114,12 @@ function rateRenderTrace() {
   const trace = rateWorkbenchState.run?.trace || rateWorkbenchState.failureTrace;
   if (!trace.length) return '<div class="empty">点击 Run One Simulation 后，这里逐步显示 Planner → Runtime → Tool → Observation → Eval。</div>';
   return `<div class="rate-trace-list">${trace.map((row) => {
-    const failed = row.event === 'tool_execution_failed';
+    const failed = row.event === 'tool_execution_failed' || (row.event === 'data_source_attempt' && row.status === 'FAILED');
     const retry = row.event === 'tool_retry_scheduled';
-    const status = failed ? (row.retryable ? 'RETRYABLE' : 'FAILED') : retry ? `RETRY ${row.next_attempt}` : row.status || (row.passed === true ? 'PASS' : row.passed === false ? 'FAIL' : 'RECORDED');
-    const detail = `${row.task_id}${row.tool_name ? ` · ${row.tool_name}` : ''}${row.attempt ? ` · attempt ${row.attempt}/${row.max_attempts || '?'}` : ''}${row.delay_ms ? ` · backoff ${row.delay_ms}ms` : ''}${row.error_message ? ` · ${row.error_message}` : ''}`;
-    return `<article class="rate-trace-row ${row.task_id === rateWorkbenchState.selectedNode ? 'selected' : ''}"><span class="rate-seq">${esc(row.sequence)}</span><div><strong>${esc(row.event)}</strong><small>${esc(detail)}</small></div><span class="pill ${failed ? 'fail' : retry ? 'running' : row.passed === false ? 'fail' : row.status === 'COMPLETED' || row.passed === true ? 'done' : ''}">${esc(status)}</span></article>`;
+    const fallback = row.event === 'data_source_fallback_selected';
+    const status = failed ? (row.retryable ? 'RETRYABLE' : 'FAILED') : retry ? `RETRY ${row.next_attempt}` : fallback ? 'FALLBACK' : row.status || (row.passed === true ? 'PASS' : row.passed === false ? 'FAIL' : 'RECORDED');
+    const detail = `${row.task_id}${row.tool_name ? ` · ${row.tool_name}` : ''}${row.provider ? ` · ${row.provider}` : ''}${row.source_mode ? ` · ${row.source_mode}` : ''}${row.source_freshness ? ` · ${row.source_freshness}` : ''}${row.as_of ? ` · as_of ${row.as_of}` : ''}${row.attempt ? ` · attempt ${row.attempt}/${row.max_attempts || '?'}` : ''}${row.delay_ms ? ` · backoff ${row.delay_ms}ms` : ''}${row.error_message ? ` · ${row.error_message}` : ''}`;
+    return `<article class="rate-trace-row ${row.task_id === rateWorkbenchState.selectedNode ? 'selected' : ''}"><span class="rate-seq">${esc(row.sequence)}</span><div><strong>${esc(row.event)}</strong><small>${esc(detail)}</small></div><span class="pill ${failed ? 'fail' : retry ? 'running' : row.passed === false ? 'fail' : ['COMPLETED','SELECTED'].includes(row.status) || row.passed === true ? 'done' : ''}">${esc(status)}</span></article>`;
   }).join('')}</div>`;
 }
 
@@ -129,9 +130,10 @@ function rateRenderLogic() {
 
 function rateRenderEvidence() {
   const run = rateWorkbenchState.run;
-  if (!run) return '<div class="empty">D1 完成后显示 FRED Evidence。</div>';
+  if (!run) return '<div class="empty">D1 完成后显示数据来源、LIVE/SNAPSHOT 状态及 Evidence。</div>';
   const latest = run.data.observations[run.data.observations.length - 1];
-  return `<div class="rate-evidence-summary"><div><span>Common observations</span><strong>${esc(run.data.observation_count)}</strong></div><div><span>As of</span><strong>${esc(run.data.as_of)}</strong></div><div><span>Latest 2s10s</span><strong>${esc(latest.spread_bps)} bp</strong></div></div><div class="evidence-list">${run.evidence.map((row) => `<article class="evidence-card"><h4>${esc(row.evidence_id)} · ${esc(row.source.title)}</h4><div class="card-meta"><span>${esc(row.source.publisher)}</span><span>as_of ${esc(row.as_of)}</span><span>${esc(row.value)} ${esc(row.unit)}</span><span>common-date aligned</span></div></article>`).join('')}</div>`;
+  const sourceAttempts = run.data.source_attempts || [];
+  return `<div class="rate-evidence-summary"><div><span>Selected source</span><strong>${esc(run.data.provider)}</strong></div><div><span>Mode</span><strong>${esc(run.data.source_freshness)} · ${esc(run.data.source_mode)}</strong></div><div><span>Common observations</span><strong>${esc(run.data.observation_count)}</strong></div><div><span>As of</span><strong>${esc(run.data.as_of)}</strong></div><div><span>Latest 2s10s</span><strong>${esc(latest.spread_bps)} bp</strong></div></div>${run.data.source_freshness === 'SNAPSHOT' ? `<div class="eval-diagnostic"><strong>Offline snapshot:</strong> captured ${esc(run.data.snapshot_captured_at)}; data as of ${esc(run.data.as_of)}. This is not a live quote.</div>` : ''}<div class="evidence-list">${sourceAttempts.map((row) => `<article class="evidence-card"><h4>${esc(row.provider)} · ${esc(row.status)}</h4><div class="card-meta"><span>${esc(row.source_mode)}</span>${row.error_message ? `<span>${esc(row.error_message)}</span>` : ''}</div></article>`).join('')}${run.evidence.map((row) => `<article class="evidence-card"><h4>${esc(row.evidence_id)} · ${esc(row.source.title)}</h4><div class="card-meta"><span>${esc(row.source.publisher)}</span><span>as_of ${esc(row.as_of)}</span><span>${esc(row.value)} ${esc(row.unit)}</span><span>common-date aligned</span></div></article>`).join('')}</div>`;
 }
 
 function rateRenderState() {
@@ -145,7 +147,7 @@ function rateRenderCheckpoint() {
 }
 
 function rateRenderArchitecture() {
-  return `<div class="kicker">RATE AGENT ARCHITECTURE</div><h3>固定 Planner，完整 Runtime 边界</h3><div class="architecture-flow rate-architecture"><span class="arch-node">Goal</span><span class="arch-arrow">→</span><span class="arch-node">Planner</span><span class="arch-arrow">→</span><span class="arch-node">Runtime</span><span class="arch-arrow">→</span><span class="arch-node">Tool Registry</span><span class="arch-arrow">→</span><span class="arch-node">D1 Source</span><span class="arch-arrow">→</span><span class="arch-node">S1 Simulation</span><span class="arch-arrow">→</span><span class="arch-node">E1 Eval</span></div><div class="design-list"><div class="design-item"><strong>Planner</strong><p>固定 D1 → S1 DAG；第一次学习不引入自由规划噪声。</p></div><div class="design-item"><strong>Runtime</strong><p>查 Registry、验证 schema、记录每个边界的 trace。</p></div><div class="design-item"><strong>Tools</strong><p>函数实际做事；D1 读数据，S1 运行纯计算。</p></div><div class="design-item"><strong>Evidence</strong><p>DGS2/DGS10 保留 provider、series、as_of 和 source URI。</p></div><div class="design-item"><strong>Eval</strong><p>重算 P&L，检查 paper-only、无 lookahead、无真实订单。</p></div><div class="design-item"><strong>Model</strong><p>V1 为 none_deterministic_v1；Agent 不等于必须使用 LLM。</p></div></div>`;
+  return `<div class="kicker">RATE AGENT ARCHITECTURE</div><h3>固定 Planner，完整 Runtime 边界</h3><div class="architecture-flow rate-architecture"><span class="arch-node">Goal</span><span class="arch-arrow">→</span><span class="arch-node">Planner</span><span class="arch-arrow">→</span><span class="arch-node">Runtime</span><span class="arch-arrow">→</span><span class="arch-node">Tool Registry</span><span class="arch-arrow">→</span><span class="arch-node">D1 Source Ladder</span><span class="arch-arrow">→</span><span class="arch-node">S1 Simulation</span><span class="arch-arrow">→</span><span class="arch-node">E1 Eval</span></div><div class="design-list"><div class="design-item"><strong>Planner</strong><p>固定 D1 → S1 DAG；第一次学习不引入自由规划噪声。</p></div><div class="design-item"><strong>Runtime</strong><p>查 Registry、验证 schema、记录每个边界的 trace。</p></div><div class="design-item"><strong>Source ladder</strong><p>FRED live → Treasury live → disclosed snapshot；失败不会伪装成实时成功。</p></div><div class="design-item"><strong>Tools</strong><p>函数实际做事；D1 读数据，S1 运行纯计算。</p></div><div class="design-item"><strong>Evidence</strong><p>DGS2/DGS10 保留 provider、series、as_of 和 source URI。</p></div><div class="design-item"><strong>Eval</strong><p>重算 P&L，检查 paper-only、无 lookahead、无真实订单。</p></div><div class="design-item"><strong>Model</strong><p>V1 为 none_deterministic_v1；Agent 不等于必须使用 LLM。</p></div></div>`;
 }
 
 function rateRenderDetail() {

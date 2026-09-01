@@ -53,34 +53,62 @@ def completed_steepener_history() -> dict:
 
 class FredCurveHistorySourceTests(unittest.TestCase):
     def test_aligns_common_dates_and_drops_missing_values(self):
-        responses = {
-            "DGS2": "DATE,DGS2\n2026-01-02,4.00\n2026-01-03,.\n2026-01-04,4.10\n",
-            "DGS10": "observation_date,DGS10\n2026-01-02,4.30\n2026-01-03,4.40\n2026-01-04,4.35\n",
-        }
-
-        def transport(url):
-            return responses["DGS2" if "id=DGS2&" in url else "DGS10"]
-
-        result = FredCurveHistorySource(transport=transport).fetch("2026-01-01")
+        response = (
+            "observation_date,DGS2,DGS10\n"
+            "2026-01-02,4.00,4.30\n2026-01-03,.,4.40\n2026-01-04,4.10,4.35\n"
+        )
+        result = FredCurveHistorySource(transport=lambda _url: response).fetch("2026-01-01")
         self.assertEqual(result["observation_count"], 2)
         self.assertEqual(result["as_of"], "2026-01-04")
         self.assertAlmostEqual(result["observations"][0]["spread_bps"], 30)
         self.assertTrue(result["guardrails"]["common_dates_only"])
         self.assertFalse(result["guardrails"]["api_key_required"])
+        self.assertEqual(result["source_mode"], "live_bulk_csv")
+        self.assertFalse(result["fallback_used"])
 
     def test_empty_series_fails_closed(self):
-        with self.assertRaises(RateSourceError):
-            FredCurveHistorySource(transport=lambda _url: "DATE,DGS2\n").fetch("2026-01-01")
+        source = FredCurveHistorySource(
+            transport=lambda _url: "bad,data\n",
+            snapshot_path="/definitely/missing/rate-snapshot.csv",
+        )
+        with self.assertRaises(ConnectionError):
+            source.fetch("2026-01-01")
 
-    def test_connection_failure_identifies_the_fred_series(self):
+    def test_connection_failure_uses_disclosed_bundled_snapshot(self):
         def disconnected(_url):
             raise ConnectionError("RemoteDisconnected: remote closed")
 
-        with self.assertRaisesRegex(
-            ConnectionError,
-            "FRED DGS2 connection failed: RemoteDisconnected: remote closed",
-        ):
-            FredCurveHistorySource(transport=disconnected).fetch("2026-01-01")
+        result = FredCurveHistorySource(transport=disconnected).fetch("2026-01-01")
+        self.assertEqual(result["source_mode"], "bundled_snapshot")
+        self.assertEqual(result["source_freshness"], "SNAPSHOT")
+        self.assertTrue(result["fallback_used"])
+        self.assertTrue(result["guardrails"]["snapshot_disclosed"])
+        self.assertEqual([row["status"] for row in result["source_attempts"]],
+                         ["FAILED", "FAILED", "SELECTED"])
+        self.assertGreaterEqual(result["observation_count"], 80)
+
+    def test_fred_failure_uses_live_treasury_before_snapshot(self):
+        rows = ["Date,2 Yr,10 Yr"]
+        start = date(2026, 1, 1)
+        for index in range(90):
+            day = start + timedelta(days=index)
+            rows.append(f"{day.strftime('%m/%d/%Y')},4.00,4.30")
+        treasury_csv = "\n".join(rows)
+
+        def transport(url):
+            if "fred.stlouisfed.org" in url:
+                raise ConnectionError("RemoteDisconnected")
+            return treasury_csv
+
+        result = FredCurveHistorySource(
+            transport=transport,
+            today=lambda: date(2026, 3, 31),
+        ).fetch("2026-01-01")
+        self.assertEqual(result["provider"], "U.S. Treasury")
+        self.assertEqual(result["source_mode"], "live_official_csv")
+        self.assertEqual(result["source_freshness"], "LIVE")
+        self.assertEqual([row["status"] for row in result["source_attempts"]],
+                         ["FAILED", "SELECTED"])
 
 
 class RateStrategyTests(unittest.TestCase):
