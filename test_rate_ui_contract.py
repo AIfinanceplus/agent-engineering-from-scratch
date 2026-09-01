@@ -13,6 +13,7 @@ class RateUIContractTests(unittest.TestCase):
             self.assertIn(label, base)
         self.assertIn("Agent 运行过程", base)
         self.assertIn("Run One Simulation", source)
+        self.assertIn("/api/rates/recovery-demo", source)
         self.assertIn("Planner", source)
         self.assertIn("Runtime", source)
         self.assertIn("Tool Registry", source)
@@ -37,8 +38,10 @@ class RateUIContractTests(unittest.TestCase):
         ):
             self.assertIn(renderer, source)
         self.assertIn("none_deterministic_v1", source)
-        self.assertIn("CHECKPOINT · EXPLICITLY NOT WIRED IN V1", source)
+        self.assertIn("CHECKPOINT · RECOVERY DEMO", source)
+        self.assertIn("Crash + Resume Demo", source)
         self.assertIn("rateRestoreOriginalPanels", source)
+        self.assertIn("DURABLE", source)
         self.assertIn("child.hidden = child !== overlay", source)
         self.assertNotIn("panel.innerHTML =", source)
 

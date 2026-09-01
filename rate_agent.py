@@ -35,6 +35,16 @@ class RateToolExecutionError(RuntimeError):
         self.trace = deepcopy(trace)
 
 
+class RateSimulatedCrash(RuntimeError):
+    """Teaching-only crash raised after a durable checkpoint has been written."""
+
+    def __init__(self, *, run_id: str, task_id: str, trace: list):
+        super().__init__(f"simulated process crash after checkpoint at {task_id}")
+        self.run_id = run_id
+        self.task_id = task_id
+        self.trace = deepcopy(trace)
+
+
 class RateStrategyAgent:
     def __init__(self, tool_overrides: dict[str, Callable] | None = None):
         register_rate_tools()
@@ -49,8 +59,21 @@ class RateStrategyAgent:
         dv01_usd_per_bp: float = 100.0,
         round_trip_cost_bps: float = 1.0,
         start_date: str | None = None,
+        run_id: str | None = None,
+        checkpoint_store=None,
+        resume: bool = False,
+        crash_after_task: str | None = None,
     ) -> dict:
         start_date = start_date or (date.today() - timedelta(days=1_095)).isoformat()
+        configuration = {
+            "lookback_days": lookback_days,
+            "entry_z": entry_z,
+            "holding_days": holding_days,
+            "dv01_usd_per_bp": dv01_usd_per_bp,
+            "round_trip_cost_bps": round_trip_cost_bps,
+            "start_date": start_date,
+        }
+        run_id = run_id or _stable_rate_run_id(configuration)
         plan = [
             {
                 "task_id": "D1",
@@ -76,24 +99,102 @@ class RateStrategyAgent:
         ]
         observations: dict[str, dict] = {}
         trace = []
+        checkpoints: list[dict] = []
+        completed_task_ids: set[str] = set()
 
         def emit(event: str, **payload) -> None:
             trace.append({"sequence": len(trace) + 1, "event": event, **payload})
 
-        emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation")
-        emit(
-            "plan_created",
-            task_id="P1",
-            planner="fixed_two_tool_dag",
-            task_ids=[task["task_id"] for task in plan],
-        )
-        emit(
-            "runtime_started",
-            task_id="R1",
-            model="none_deterministic_v1",
-            registry_tools=[task["tool_name"] for task in plan],
-        )
+        def persist_checkpoint(boundary: str, next_task: str | None) -> None:
+            if checkpoint_store is None:
+                return
+            checkpoint_id = f"CP-{len(checkpoints) + 1:03d}"
+            emit(
+                "checkpoint_saved",
+                task_id=next_task or "END",
+                checkpoint_id=checkpoint_id,
+                boundary=boundary,
+                next_task=next_task,
+            )
+            checkpoint_plan = deepcopy(plan)
+            for checkpoint_task in checkpoint_plan:
+                task_id = checkpoint_task["task_id"]
+                checkpoint_task["status"] = (
+                    "completed" if task_id in completed_task_ids
+                    else "ready" if task_id == next_task
+                    else "pending"
+                )
+            checkpoint = {
+                "checkpoint_id": checkpoint_id,
+                "run_id": run_id,
+                "boundary": boundary,
+                "durable": True,
+                "restore_enabled": True,
+                "configuration": deepcopy(configuration),
+                "next_task": next_task,
+                "completed_task_ids": sorted(completed_task_ids),
+                "plan": checkpoint_plan,
+                "observations": deepcopy(observations),
+                "trace": deepcopy(trace),
+            }
+            checkpoint_store.save(checkpoint)
+            checkpoints.append(checkpoint)
+
+        if resume:
+            if checkpoint_store is None:
+                raise RuntimeError("resume requires a checkpoint_store")
+            loaded = checkpoint_store.load(run_id)
+            if loaded is None:
+                raise RuntimeError(f"no checkpoint found for {run_id}")
+            if loaded.get("configuration") != configuration:
+                raise RuntimeError("checkpoint configuration does not match resume request")
+            observations = deepcopy(loaded.get("observations") or {})
+            trace = deepcopy(loaded.get("trace") or [])
+            checkpoints = deepcopy(checkpoint_store.history(run_id))
+            completed_task_ids = set(loaded.get("completed_task_ids") or [])
+            emit(
+                "checkpoint_loaded",
+                task_id=loaded.get("next_task") or "END",
+                checkpoint_id=loaded.get("checkpoint_id"),
+                boundary=loaded.get("boundary"),
+                completed_tasks=sorted(completed_task_ids),
+            )
+            emit(
+                "resume_boundary",
+                task_id=loaded.get("next_task") or "END",
+                resume_candidate=loaded.get("next_task"),
+                skipped_tasks=sorted(completed_task_ids),
+            )
+            emit(
+                "process_restarted",
+                task_id=loaded.get("next_task") or "END",
+                previous_checkpoint=loaded.get("checkpoint_id"),
+            )
+
+        if not resume:
+            emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation")
+            emit(
+                "plan_created",
+                task_id="P1",
+                planner="fixed_two_tool_dag",
+                task_ids=[task["task_id"] for task in plan],
+            )
+            emit(
+                "runtime_started",
+                task_id="R1",
+                model="none_deterministic_v1",
+                registry_tools=[task["tool_name"] for task in plan],
+            )
+            persist_checkpoint("after_plan_created", "D1")
         for task in plan:
+            if task["task_id"] in completed_task_ids:
+                emit(
+                    "task_skipped_from_checkpoint",
+                    task_id=task["task_id"],
+                    tool_name=task["tool_name"],
+                    reason="durably_completed",
+                )
+                continue
             arguments = _resolve_arguments(task["arguments"], observations)
             emit(
                 "task_started",
@@ -201,6 +302,19 @@ class RateStrategyAgent:
                 tool_name=tool.name,
                 status="COMPLETED",
             )
+            completed_task_ids.add(task["task_id"])
+            next_task = next(
+                (candidate["task_id"] for candidate in plan
+                 if candidate["task_id"] not in completed_task_ids),
+                None,
+            )
+            persist_checkpoint(f"after_{task['task_id']}", next_task)
+            if crash_after_task == task["task_id"]:
+                raise RateSimulatedCrash(
+                    run_id=run_id,
+                    task_id=task["task_id"],
+                    trace=trace,
+                )
 
         history = observations["D1"]
         simulation = observations["S1"]
@@ -213,16 +327,7 @@ class RateStrategyAgent:
             passed=evaluation["passed"],
         )
         emit("run_completed", task_id="END", status="COMPLETED_ONE_PAPER_SIMULATION")
-        run_fingerprint = hashlib.sha256(
-            json.dumps(
-                {
-                    "config": simulation["configuration"],
-                    "data_as_of": history["as_of"],
-                    "trade": simulation["completed_trade"]["paper_trade_id"],
-                },
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()[:16]
+        persist_checkpoint("after_E1", None)
         latest = history["observations"][-1]
         evidence = [
             {
@@ -246,7 +351,7 @@ class RateStrategyAgent:
             task["status"] = "completed"
         return {
             "artifact_type": "rate_strategy_agent_run",
-            "run_id": f"RATE-RUN-{run_fingerprint}",
+            "run_id": run_id,
             "status": "COMPLETED_ONE_PAPER_SIMULATION",
             "goal": "Run one auditable U.S. Treasury 2s10s mean-reversion paper simulation",
             "plan": {
@@ -265,7 +370,13 @@ class RateStrategyAgent:
                 "completed_tasks": ["D1", "S1", "E1"],
                 "observation_artifacts": [history["artifact_type"], simulation["artifact_type"]],
             },
-            "checkpoints": [],
+            "checkpoints": checkpoints,
+            "recovery": {
+                "resumed": resume,
+                "checkpoint_count": len(checkpoints),
+                "d1_executions": 0 if resume else 1,
+                "durable": checkpoint_store is not None,
+            },
             "architecture": {
                 "planner": "fixed_two_tool_dag",
                 "runtime": "shared_tool_registry_plus_argument_validation",
@@ -291,3 +402,10 @@ def _resolve_arguments(arguments: dict, observations: dict[str, dict]) -> dict:
         else:
             resolved[key] = value
     return resolved
+
+
+def _stable_rate_run_id(configuration: dict) -> str:
+    fingerprint = hashlib.sha256(
+        json.dumps(configuration, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"RATE-RUN-{fingerprint}"

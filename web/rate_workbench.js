@@ -60,7 +60,7 @@ function rateRenderInput() {
       <label>Holding<input data-rate-field="holding_days" value="${esc(c.holding_days)}" inputmode="numeric"><small>observations</small></label>
       <label>DV01<input data-rate-field="dv01_usd_per_bp" value="${esc(c.dv01_usd_per_bp)}" inputmode="decimal"><small>USD / bp</small></label>
       <label>Round-trip cost<input data-rate-field="round_trip_cost_bps" value="${esc(c.round_trip_cost_bps)}" inputmode="decimal"><small>basis points</small></label>
-      <div class="rate-run-actions"><button id="rate-run-once" class="btn primary" ${rateWorkbenchState.busy ? 'disabled' : ''}>${rateWorkbenchState.busy ? 'D1 Resolving rate source…' : '▶ Run One Simulation'}</button><button id="rate-export" class="btn" ${rateWorkbenchState.run ? '' : 'disabled'}>⇩ JSON</button></div>
+      <div class="rate-run-actions"><button id="rate-run-once" class="btn primary" ${rateWorkbenchState.busy ? 'disabled' : ''}>${rateWorkbenchState.busy ? 'D1 Resolving rate source…' : '▶ Run One Simulation'}</button><button id="rate-recovery-demo" class="btn" ${rateWorkbenchState.busy ? 'disabled' : ''}>↻ Crash + Resume Demo</button><button id="rate-export" class="btn" ${rateWorkbenchState.run ? '' : 'disabled'}>⇩ JSON</button></div>
     </div>
     <p class="rate-rule">利差 = 10Y − 2Y；z ≤ −阈值做 steepener，z ≥ 阈值做 flattener；固定持有后按 DV01 近似平仓。</p>
     ${rateWorkbenchState.error ? `<div class="eval-diagnostic"><strong>Run failed:</strong> ${esc(rateWorkbenchState.error)}</div>` : ''}`;
@@ -68,6 +68,7 @@ function rateRenderInput() {
     rateWorkbenchState.config[input.dataset.rateField] = input.value;
   }));
   overlay.querySelector('#rate-run-once')?.addEventListener('click', rateRunOnce);
+  overlay.querySelector('#rate-recovery-demo')?.addEventListener('click', () => rateRunOnce('/api/rates/recovery-demo', true));
   overlay.querySelector('#rate-export')?.addEventListener('click', rateExportRun);
 }
 
@@ -143,7 +144,12 @@ function rateRenderState() {
 }
 
 function rateRenderCheckpoint() {
-  return `<div class="rate-checkpoint-empty"><div class="kicker">CHECKPOINT · EXPLICITLY NOT WIRED IN V1</div><h3>本次同步 Run 没有 durable checkpoint</h3><p>组件保留，用来学习 State 与 Checkpoint 的差别：当前 run artifact 只存在于浏览器和本次 HTTP 响应；刷新后不会恢复。等这条最小策略稳定后，再增加“D1 数据完成后落盘并可 resume”。</p><pre class="codebox">${esc(pretty({checkpoints:rateWorkbenchState.run?.checkpoints || [],restore_enabled:false,next_learning_boundary:'persist D1 observation then resume S1'}))}</pre></div>`;
+  const run = rateWorkbenchState.run;
+  if (run?.recovery?.demo) {
+    const rows = (run.checkpoints || []).map((checkpoint) => `<article class="evidence-card"><h4>${esc(checkpoint.checkpoint_id)} · ${esc(checkpoint.boundary)}</h4><div class="card-meta"><span>next: ${esc(checkpoint.next_task || 'END')}</span><span>completed: ${esc((checkpoint.completed_task_ids || []).join(', ') || 'none')}</span><span>durable: ${esc(checkpoint.durable)}</span></div></article>`).join('');
+    return `<div class="rate-checkpoint-empty"><div class="kicker">CHECKPOINT · RECOVERY DEMO</div><h3>D1 崩溃后从 S1 恢复</h3><p>这次实验先在 D1 完成后写入持久化快照，再模拟进程崩溃。重启时读取 checkpoint，跳过已完成的 D1，从 S1 继续。</p><div class="rate-evidence-summary"><div><span>Crash boundary</span><strong>${esc(run.recovery.crashed_after)}</strong></div><div><span>D1 executions</span><strong>${esc(run.recovery.d1_executions)}</strong></div><div><span>Checkpoints</span><strong>${esc(run.recovery.checkpoint_count)}</strong></div></div><div class="evidence-list">${rows}</div></div>`;
+  }
+  return `<div class="rate-checkpoint-empty"><div class="kicker">CHECKPOINT · RUN ONE SIMULATION</div><h3>普通运行不启用持久化恢复</h3><p>点击 <strong>Crash + Resume Demo</strong>，观察 D1 完成后写入 checkpoint、进程重启、跳过 D1 并从 S1 继续。</p><pre class="codebox">${esc(pretty({checkpoints:run?.checkpoints || [],restore_enabled:false,next_learning_boundary:'run the crash + resume demo'}))}</pre></div>`;
 }
 
 function rateRenderArchitecture() {
@@ -192,7 +198,7 @@ function rateRenderStatusBar() {
   document.querySelector('#status-tasks').textContent = run ? '2/2' : '—';
   document.querySelector('#status-evidence').textContent = run?.evidence?.length || 0;
   document.querySelector('#status-trace').textContent = run?.trace?.length || 0;
-  document.querySelector('#status-checkpoint').textContent = 'NOT WIRED V1';
+  document.querySelector('#status-checkpoint').textContent = run?.recovery?.durable ? `${run.recovery.checkpoint_count} DURABLE` : 'NOT WIRED V1';
   document.querySelector('#status-save').textContent = '—';
 }
 
@@ -227,7 +233,7 @@ function rateRestoreOriginalPanels() {
   if (tabs) tabs.hidden = false;
 }
 
-async function rateRunOnce() {
+async function rateRunOnce(endpoint='/api/rates/run-once', recoveryDemo=false) {
   rateWorkbenchState.busy = true;
   rateWorkbenchState.error = null;
   rateWorkbenchState.run = null;
@@ -237,7 +243,7 @@ async function rateRunOnce() {
   appState.selectedInspectorTab = 'output';
   rateRenderAll();
   try {
-    const response = await fetch('/api/rates/run-once', {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},cache:'no-store',body:JSON.stringify({
+    const response = await fetch(endpoint, {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},cache:'no-store',body:JSON.stringify({
       lookback_days:rateConfigNumber('lookback_days'),entry_z:rateConfigNumber('entry_z'),holding_days:rateConfigNumber('holding_days'),dv01_usd_per_bp:rateConfigNumber('dv01_usd_per_bp'),round_trip_cost_bps:rateConfigNumber('round_trip_cost_bps'),
     })});
     const payload = await response.json();
@@ -249,7 +255,7 @@ async function rateRunOnce() {
     rateWorkbenchState.run = payload.run;
     rateWorkbenchState.selectedNode = 'E1';
     appState.selectedInspectorTab = 'eval';
-    toast(`Rate Agent completed · ${payload.run.eval.passed ? 'EVAL PASS' : 'EVAL FAIL'}`);
+    toast(`${recoveryDemo ? 'Recovery demo completed' : 'Rate Agent completed'} · ${payload.run.eval.passed ? 'EVAL PASS' : 'EVAL FAIL'}`);
   } catch (error) {
     rateWorkbenchState.error = error.message;
     rateWorkbenchState.failureTrace = error.trace || [];

@@ -35,12 +35,12 @@ class RateHTTPTests(unittest.TestCase):
         self.thread.join(timeout=2)
         self.patch.stop()
 
-    def post(self, payload):
+    def post(self, payload, path="/api/rates/run-once"):
         connection = http.client.HTTPConnection(self.host, self.port, timeout=5)
         body = json.dumps(payload).encode("utf-8")
         connection.request(
             "POST",
-            "/api/rates/run-once",
+            path,
             body=body,
             headers={"Content-Type": "application/json", "Accept": "application/json"},
         )
@@ -129,6 +129,24 @@ class RateHTTPTests(unittest.TestCase):
             "data_source_fallback_selected",
             [row["event"] for row in payload["run"]["trace"]],
         )
+
+    def test_recovery_demo_returns_resumed_run_and_durable_boundaries(self):
+        status, _, payload = self.post({}, "/api/rates/recovery-demo")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        run = payload["run"]
+        self.assertTrue(run["recovery"]["demo"])
+        self.assertTrue(run["recovery"]["resumed"])
+        self.assertEqual(run["recovery"]["crashed_after"], "D1")
+        self.assertEqual(run["recovery"]["d1_executions"], 0)
+        self.assertEqual(
+            [row["boundary"] for row in run["checkpoints"]],
+            ["after_plan_created", "after_D1", "after_S1", "after_E1"],
+        )
+        events = [row["event"] for row in run["trace"]]
+        self.assertIn("process_restarted", events)
+        self.assertIn("task_skipped_from_checkpoint", events)
+        self.assertTrue(run["eval"]["passed"])
 
 
 if __name__ == "__main__":
