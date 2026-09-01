@@ -128,3 +128,41 @@ test('branch failure does not falsely complete or fail its still-running sibling
   assert.equal(state.nodes.J1, 'blocked');
   assert.equal(state.nodes.S1, 'blocked');
 });
+
+test('stop request is not a terminal state; only acknowledged stop can finalize', () => {
+  const { state, emit, message } = setup();
+  state.nodes.A2 = 'waiting';
+  emit('task_started', 'A2');
+  emit('cancellation_requested', 'R1', { reason: 'deadline', active_tasks: ['A2'] });
+  assert.equal(state.phase, 'cancelling');
+  assert.equal(state.nodes.A2, 'cancelling');
+  assert.equal(state.terminal, false);
+  assert.throws(() => applyMessage(state, message('error', { error: { code: 'RUN_DEADLINE_EXCEEDED' } })));
+  emit('task_cancelled', 'A2', { reason: 'deadline', worker_stopped: true });
+  emit('run_stopped', 'R1', { reason: 'deadline', status: 'timed_out', workers_stopped: true });
+  applyMessage(state, message('error', { error: { code: 'RUN_DEADLINE_EXCEEDED' } }));
+  assert.equal(state.phase, 'timed_out');
+  assert.equal(state.nodes.A2, 'timed_out');
+  assert.equal(state.terminal, true);
+  finishStream(state);
+});
+
+test('a lost stream during cancellation is unknown, not acknowledged cancellation', () => {
+  const { state, emit } = setup();
+  emit('task_started', 'D1');
+  emit('cancellation_requested', 'R1', { reason: 'user', active_tasks: ['D1'] });
+  assert.throws(() => finishStream(state));
+  failState(state, { message: 'connection lost' });
+  assert.equal(state.nodes.D1, 'unknown');
+  assert.equal(state.nodes.R1, 'unknown');
+  assert.equal(state.stopConfirmed, false);
+});
+
+test('late success cannot overwrite a stop request', () => {
+  const { state, emit, message } = setup();
+  emit('cancellation_requested', 'R1', { reason: 'user', active_tasks: [] });
+  assert.throws(() => applyMessage(state, message('result', { result: { run_id: state.runId, trace: state.events, eval: { passed: true } } })), /停止请求/);
+  const view = describe({ event: 'tool_output_discarded', output: { value: 123 } });
+  assert.equal(view.label, 'DISCARDED');
+  assert.equal(view.payload.value, 123);
+});

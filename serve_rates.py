@@ -11,17 +11,19 @@ from uuid import uuid4
 from rate_agent import RateSimulatedCrash, RateStrategyAgent
 from rate_checkpoint import RateCheckpointStore
 from rate_commands import RateIdempotencyStore
-from rate_parallel import RateParallelAgent
+from rate_parallel import RateParallelAgent, SCENARIOS
+from rate_control import RunControl, RunControlRegistry
 from r7_streaming import encode_stream_message
 from serve_r12 import R12VisualizerHandler
 
 
 RATE_AGENT = RateStrategyAgent()
 PARALLEL_RATE_AGENT = RateParallelAgent()
+RUN_CONTROLS = RunControlRegistry()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V2-PARALLEL"
+    version_label = "RATE-CONSOLE-V3-CONTROL"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -35,11 +37,20 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/cancel"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
             return
+        if self.path == "/api/rates/cancel":
+            run_id = request_data.get("run_id")
+            if not isinstance(run_id, str) or not run_id:
+                return self._send_eval_json(400, {"ok": False, "error": {"message": "run_id is required"}})
+            outcome = RUN_CONTROLS.cancel(run_id)
+            if outcome is None:
+                return self._send_eval_json(404, {"ok": False, "error": {"message": "run_id not found in this server process"}})
+            return self._send_eval_json(202 if outcome["accepted"] else 409,
+                                        {"ok": outcome["accepted"], "control": outcome})
         if self.path == "/api/rates/stream":
             return self._stream_run(request_data)
         if self.path != "/api/rates/run-once":
@@ -174,12 +185,31 @@ class RateStrategyHandler(R12VisualizerHandler):
         """Stream each real Rate Agent event as newline-delimited JSON."""
         run_id = f"RATE-RUN-{uuid4().hex[:16]}"
         streamed_events = []
-        self.send_response(200)
-        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
-        self.send_header("Cache-Control", "no-cache, no-transform")
-        self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "close")
-        self.end_headers()
+        mode = request_data.get("execution_mode", "serial")
+        scenario = request_data.get("demo_scenario", "live")
+        if mode not in ("serial", "parallel") or not isinstance(scenario, str) or scenario not in SCENARIOS:
+            return self._send_eval_json(400, {"ok": False, "error": {"message": "invalid execution_mode or demo_scenario"}})
+        parallel = mode == "parallel"
+        default_budget = 1000 if scenario in {"deadline", "late_result"} else 120000 if scenario == "live" else 30000
+        control = None
+        if parallel:
+            try:
+                control = RunControl(request_data.get("budget_ms", default_budget))
+                RUN_CONTROLS.register(run_id, control)
+            except (ValueError, RuntimeError) as exc:
+                return self._send_eval_json(400, {"ok": False, "error": {"message": str(exc)}})
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            if control:
+                control.request_stop("disconnect")
+                control.finish("disconnected")
+            return
         self.close_connection = True
 
         def send(message_type, **payload):
@@ -193,10 +223,10 @@ class RateStrategyHandler(R12VisualizerHandler):
             send("event", event=event)
 
         try:
-            parallel = request_data.get("execution_mode", "serial") == "parallel"
-            send("start", strategy="2s10s", execution_mode="parallel" if parallel else "serial")
+            send("start", strategy="2s10s", execution_mode="parallel" if parallel else "serial",
+                 cancel_supported=parallel, budget_ms=control.budget_ms if control else None)
             agent = PARALLEL_RATE_AGENT if parallel else RATE_AGENT
-            options = {"demo_scenario": request_data.get("demo_scenario", "live")} if parallel else {}
+            options = {"demo_scenario": scenario, "control": control} if parallel else {}
             run = agent.run_once(
                 run_id=run_id,
                 lookback_days=request_data.get("lookback_days", 60),
@@ -210,11 +240,14 @@ class RateStrategyHandler(R12VisualizerHandler):
             )
             send("result", result=run)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            if control:
+                control.request_stop("disconnect")
             return
         except Exception as exc:
             try:
                 send("error", error={
-                    "code": exc.__class__.__name__, "message": str(exc),
+                    "code": getattr(exc, "code", exc.__class__.__name__), "message": str(exc),
+                    "status": getattr(exc, "status", "failed"),
                     "task_id": getattr(exc, "task_id", None) or (
                         streamed_events[-1].get("task_id") if streamed_events else None
                     ),
@@ -223,17 +256,21 @@ class RateStrategyHandler(R12VisualizerHandler):
                 })
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
+        finally:
+            if control and not control.snapshot()["terminal"]:
+                control.finish("failed")
 
 
 def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V2-PARALLEL")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V3-CONTROL")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Lesson: D1 bulk data -> A2 / A10 concurrent branches -> J1 all-success Join -> S1 -> E1")
     print("Default UI mode is an explicitly disclosed snapshot + timing/failure teaching demo")
+    print("New lesson: run budget -> stop request -> Tool acknowledgment; never pretend threads were killed")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

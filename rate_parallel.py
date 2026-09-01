@@ -12,17 +12,18 @@ from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 from math import isfinite
-from queue import Queue
+from queue import Empty, Queue
 import time
 from uuid import uuid4
 
 from rate_sources import load_bundled_rate_history
+from rate_control import RunControl, RunStopped, check_run_control
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
 
 
-SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail"}
+SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
 GRAPH_ROWS = [["G1"], ["P1"], ["R1"], ["D1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
 GRAPH_EDGES = [["G1", "P1"], ["P1", "R1"], ["R1", "D1"],
                ["D1", "A2"], ["D1", "A10"], ["A2", "J1"],
@@ -40,6 +41,7 @@ def prepare_rate_series(history: dict, series_id: str, batch_id: str) -> dict:
     values = []
     previous = None
     for row in history.get("observations", []):
+        check_run_control()
         period = row["date"]
         if date.fromisoformat(period).isoformat() != period or (previous and period <= previous):
             raise ValueError("series dates must be unique and strictly increasing")
@@ -63,6 +65,7 @@ def prepare_rate_series(history: dict, series_id: str, batch_id: str) -> dict:
 
 def join_rate_series(two_year: dict, ten_year: dict) -> dict:
     """All-success Join: do not fabricate a missing branch or mix source batches."""
+    check_run_control()
     for part, series_id in ((two_year, "DGS2"), (ten_year, "DGS10")):
         if part.get("artifact_type") != "prepared_rate_series" or part.get("series_id") != series_id:
             raise ValueError(f"join requires the completed {series_id} branch")
@@ -104,6 +107,14 @@ class ParallelRunError(RuntimeError):
         self.failures = dict(failures or {})
 
 
+class RateRunStopped(RunStopped):
+    def __init__(self, reason, trace):
+        super().__init__(reason)
+        self.task_id = "R1"
+        self.trace = deepcopy(trace)
+        self.code = "RUN_DEADLINE_EXCEEDED" if reason == "deadline" else "RUN_CANCELLED"
+
+
 class RateParallelAgent:
     def __init__(self, tool_overrides=None, *, sleeper=time.sleep):
         register_rate_tools()
@@ -116,9 +127,10 @@ class RateParallelAgent:
 
     def run_once(self, *, lookback_days=60, entry_z=1.0, holding_days=20,
                  dv01_usd_per_bp=100.0, round_trip_cost_bps=1.0, start_date=None,
-                 run_id=None, event_sink=None, demo_scenario="live"):
+                 run_id=None, event_sink=None, demo_scenario="live", control=None):
         if demo_scenario not in SCENARIOS:
             raise ValueError("unknown parallel demo_scenario")
+        control = control or RunControl()
         run_id = run_id or f"RATE-RUN-{uuid4().hex[:16]}"
         start_date = start_date or (date.today() - timedelta(days=1095)).isoformat()
         configuration = dict(lookback_days=lookback_days, entry_z=entry_z,
@@ -134,6 +146,9 @@ class RateParallelAgent:
             {"task_id": "S1", "tool_name": "simulate_one_curve_trade", "depends_on": ["J1"]},
         ]
         by_id = {task["task_id"]: task for task in plan}
+        completed = set()
+        inflight = set()
+        stop_announced = False
 
         def emit(event, **payload):
             row = deepcopy({"sequence": len(trace) + 1, "run_id": run_id,
@@ -143,7 +158,21 @@ class RateParallelAgent:
             if event_sink:
                 event_sink(deepcopy(row))
 
+        def announce_stop():
+            nonlocal stop_announced
+            info = control.snapshot()
+            if not info["stop_requested"] or stop_announced:
+                return
+            stop_announced = True
+            if info["reason"] == "deadline":
+                emit("deadline_exceeded", task_id="R1", **info)
+            emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
+            for task_id in [*by_id, "E1"]:
+                if task_id not in completed and task_id not in inflight:
+                    emit("task_blocked", task_id=task_id, reason="run stop requested")
+
         def call(task_id, arguments, publish=emit):
+            control.check()
             task = by_id[task_id]
             name = task["tool_name"]
             publish("task_started", task_id=task_id, tool_name=name, depends_on=task["depends_on"])
@@ -160,6 +189,7 @@ class RateParallelAgent:
             if task_id == "D1" and demo_scenario != "live":
                 function = load_bundled_rate_history
             for attempt in range(1, tool.max_retries + 2):
+                control.check()
                 publish("tool_execution_started", task_id=task_id, tool_name=name,
                         arguments=arguments, attempt=attempt, max_attempts=tool.max_retries + 1,
                         max_retries=tool.max_retries, risk=tool.risk)
@@ -167,13 +197,32 @@ class RateParallelAgent:
                     if task_id in {"A2", "A10"} and demo_scenario != "live":
                         slow = "A10" if demo_scenario == "ten_year_slow" else "A2"
                         delay_ms = 2000 if task_id == slow else 400
+                        if demo_scenario == "manual_cancel":
+                            delay_ms = 8000
+                        if demo_scenario == "late_result":
+                            delay_ms = 2400 if task_id == "A2" else 400
                         publish("demo_delay_started", task_id=task_id, delay_ms=delay_ms,
                                 demo=True, reason="教学延时；不是网络耗时")
-                        self.sleep(delay_ms / 1000)
+                        if demo_scenario == "late_result" and task_id == "A2":
+                            # Explicit non-cooperative adapter demo: no stop checks
+                            # during this bounded wait. Its output must be discarded.
+                            publish("non_cooperative_wait", task_id=task_id, demo=True,
+                                    delay_ms=delay_ms, reason="教学模拟：此等待不响应停止信号")
+                            self.sleep(delay_ms / 1000)
+                            return prepare_rate_series(arguments["history"], arguments["series_id"], arguments["batch_id"])
+                        if self.sleep is time.sleep:
+                            control.wait(delay_ms / 1000)
+                        else:
+                            self.sleep(delay_ms / 1000)
+                            control.check()
                         if demo_scenario == "ten_year_fail" and task_id == "A10":
                             raise ValueError("教学故障注入：10Y 分支失败；未伪造数据")
-                    output = function(**arguments)
+                    with control.bind():
+                        output = function(**arguments)
+                except RunStopped:
+                    raise
                 except Exception as exc:
+                    control.check()  # A stop request is not a retryable Tool failure.
                     retryable = isinstance(exc, tool.retryable_errors) and attempt <= tool.max_retries
                     publish("tool_execution_failed", task_id=task_id, tool_name=name,
                             attempt=attempt, error_type=type(exc).__name__, error_message=str(exc), retryable=retryable)
@@ -182,15 +231,87 @@ class RateParallelAgent:
                     delay_ms = 250 * 2 ** (attempt - 1)
                     publish("tool_retry_scheduled", task_id=task_id, tool_name=name,
                             next_attempt=attempt + 1, delay_ms=delay_ms)
-                    self.sleep(delay_ms / 1000)
+                    if self.sleep is time.sleep:
+                        control.wait(delay_ms / 1000)
+                    else:
+                        self.sleep(delay_ms / 1000)
+                        control.check()
                     continue
-                if task_id == "D1":
-                    for source in output.get("source_attempts", []):
-                        publish("data_source_attempt", task_id="D1", **source)
-                publish("tool_observation", task_id=task_id, tool_name=name,
-                        artifact_type=output.get("artifact_type"), output=output, status="COMPLETED")
-                publish("task_completed", task_id=task_id, tool_name=name, status="COMPLETED")
                 return output
+
+        def run_batch(arguments_by_id, *, fan_in=False):
+            """The owner stays responsive while Tools work; only it accepts results."""
+            control.check()
+            queue = Queue()
+            finished, failures = set(), {}
+
+            def worker(task_id, arguments):
+                def publish(event, **payload):
+                    queue.put(("event", event, deepcopy({"timestamp": datetime.now(timezone.utc).isoformat(), **payload})))
+                try:
+                    output = call(task_id, arguments, publish)
+                    queue.put(("done", task_id, (output, None)))
+                except BaseException as exc:
+                    # Even a callable that exits abruptly must release the owner
+                    # from its wait; never leave a missing "done" handshake.
+                    queue.put(("done", task_id, (None, exc)))
+
+            pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="rate-tool")
+            inflight.update(arguments_by_id)
+            try:
+                for task_id, arguments in arguments_by_id.items():
+                    pool.submit(worker, task_id, deepcopy(arguments))
+                while len(finished) < len(arguments_by_id):
+                    announce_stop()
+                    try:
+                        kind, key, payload = queue.get(timeout=0.025)
+                    except Empty:
+                        continue
+                    if kind == "event":
+                        emit(key, **payload)
+                        continue
+                    finished.add(key)
+                    output, error = payload
+                    # Linearization point: outputs not accepted before the stop
+                    # boundary are audit-only, never downstream observations.
+                    if control.snapshot()["stop_requested"] or isinstance(error, RunStopped):
+                        announce_stop()
+                        if error is None:
+                            emit("tool_output_discarded", task_id=key, tool_name=by_id[key]["tool_name"],
+                                 output=output, reason=control.snapshot()["reason"], accepted=False)
+                        emit("task_cancelled", task_id=key, reason=control.snapshot()["reason"],
+                             worker_stopped=True)
+                    elif error:
+                        failures[key] = str(error)
+                        emit("task_failed", task_id=key, error_type=type(error).__name__, error_message=str(error))
+                        if fan_in:
+                            emit("join_blocked", task_id="J1", failed_dependencies=list(failures),
+                                 reason="all_success requires both branches; no partial strategy run")
+                            for downstream in ("S1", "E1"):
+                                emit("task_blocked", task_id=downstream, reason="J1 cannot complete")
+                    else:
+                        observations[key] = output
+                        completed.add(key)
+                        if key == "D1":
+                            for source in output.get("source_attempts", []):
+                                emit("data_source_attempt", task_id="D1", **source)
+                        emit("tool_observation", task_id=key, tool_name=by_id[key]["tool_name"],
+                             artifact_type=output.get("artifact_type"), output=output, status="COMPLETED")
+                        emit("task_completed", task_id=key, tool_name=by_id[key]["tool_name"], status="COMPLETED")
+                        if fan_in and not failures:
+                            emit("join_waiting", task_id="J1", required=2,
+                                 completed_dependencies=[k for k in ("A2", "A10") if k in observations],
+                                 waiting_for=[k for k in ("A2", "A10") if k not in observations])
+                    inflight.discard(key)
+            except BaseException:
+                control.request_stop("disconnect")
+                raise
+            finally:
+                # No "stopped" event until every submitted callable has exited.
+                pool.shutdown(wait=True)
+            control.check()
+            if failures:
+                raise ParallelRunError("Tool 失败；依赖它的下游未执行。", next(iter(failures)), trace, failures)
 
         try:
             emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation",
@@ -199,70 +320,53 @@ class RateParallelAgent:
                  task_ids=list(by_id), tasks=plan, graph={"rows": GRAPH_ROWS, "edges": GRAPH_EDGES})
             emit("runtime_started", task_id="R1", model="none_deterministic_v1", max_workers=2,
                  registry_tools=list(dict.fromkeys(t["tool_name"] for t in plan)))
+            emit("run_budget_started", task_id="R1", budget_ms=control.budget_ms,
+                 scope="whole_run", policy="cooperative_stop_then_drain")
             if demo_scenario != "live":
                 emit("demo_scenario_selected", task_id="R1", scenario=demo_scenario,
                      source_freshness="SNAPSHOT", teaching_delay=True,
                      message="明确的离线教学演示；Tool 真正执行，延时/故障由教学模式注入。")
             current_task = "D1"
-            observations["D1"] = call("D1", {"start_date": start_date})
+            run_batch({"D1": {"start_date": start_date}})
             emit("parallel_group_started", task_id="R1", task_ids=["A2", "A10"], max_workers=2)
             emit("join_waiting", task_id="J1", completed_dependencies=[], waiting_for=["A2", "A10"], required=2)
-            queue = Queue()
-
-            def worker(task_id, series_id):
-                def publish(event, **payload):
-                    queue.put(("event", event, deepcopy({"timestamp": datetime.now(timezone.utc).isoformat(), **payload})))
-                try:
-                    output = call(task_id, {"history": deepcopy(observations["D1"]),
-                                           "series_id": series_id, "batch_id": run_id}, publish)
-                    queue.put(("done", task_id, (output, None)))
-                except Exception as exc:
-                    publish("task_failed", task_id=task_id, error_type=type(exc).__name__, error_message=str(exc))
-                    queue.put(("done", task_id, (None, exc)))
-
-            failures, finished = {}, set()
-            # Workers are read-only; let any in-flight sibling finish after failure.
-            # Only this owner loop updates observations or writes the event stream.
-            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="rate-branch") as pool:
-                pool.submit(worker, "A2", "DGS2")
-                pool.submit(worker, "A10", "DGS10")
-                while len(finished) < 2:
-                    kind, key, payload = queue.get()
-                    if kind == "event":
-                        emit(key, **payload)
-                        continue
-                    finished.add(key)
-                    output, error = payload
-                    if error:
-                        failures[key] = str(error)
-                        emit("join_blocked", task_id="J1", failed_dependencies=list(failures),
-                             reason="all_success requires both branches; no partial strategy run")
-                        for downstream in ("S1", "E1"):
-                            emit("task_blocked", task_id=downstream, reason="J1 cannot complete")
-                    else:
-                        observations[key] = output
-                        if not failures:
-                            emit("join_waiting", task_id="J1",
-                                 completed_dependencies=[key for key in ("A2", "A10") if key in observations],
-                                 waiting_for=[key for key in ("A2", "A10") if key not in observations], required=2)
-            if failures:
-                raise ParallelRunError("并行分支失败；Join、S1 和 E1 未执行。", next(iter(failures)), trace, failures)
+            run_batch({task_id: {"history": observations["D1"], "series_id": series_id, "batch_id": run_id}
+                       for task_id, series_id in (("A2", "DGS2"), ("A10", "DGS10"))}, fan_in=True)
             emit("join_released", task_id="J1", completed_dependencies=["A2", "A10"], required=2)
             current_task = "J1"
-            observations["J1"] = call("J1", {"two_year": observations["A2"], "ten_year": observations["A10"]})
+            run_batch({"J1": {"two_year": observations["A2"], "ten_year": observations["A10"]}})
             current_task = "S1"
-            observations["S1"] = call("S1", {"history": observations["J1"], **configuration})
+            run_batch({"S1": {"history": observations["J1"], **configuration}})
             current_task = "E1"
+            control.check()
+            inflight.add("E1")
             emit("eval_started", task_id="E1", evaluator="evaluate_rate_simulation", arguments={"simulation": observations["S1"]})
             evaluation = evaluate_rate_simulation(observations["S1"])
+            control.check()
             emit("eval_completed", task_id="E1", passed=evaluation["passed"], output=evaluation,
                  artifact_type=evaluation["artifact_type"])
+            completed.add("E1")
+            inflight.discard("E1")
+            control.finish("completed")
             emit("run_completed", task_id="END", status="COMPLETED_ONE_PAPER_SIMULATION")
+        except RunStopped as exc:
+            announce_stop()
+            if "E1" in inflight:
+                emit("task_cancelled", task_id="E1", reason=exc.reason, worker_stopped=True)
+                inflight.discard("E1")
+            control.finish(exc.status)
+            emit("run_stopped", task_id="R1", reason=exc.reason, status=exc.status,
+                 workers_stopped=True, completed_tasks=sorted(completed))
+            raise RateRunStopped(exc.reason, trace) from exc
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            control.request_stop("disconnect")
+            control.finish("disconnected")
             raise
         except ParallelRunError:
+            control.finish("failed")
             raise
         except Exception as exc:
+            control.finish("failed")
             emit("task_failed", task_id=current_task, error_type=type(exc).__name__, error_message=str(exc))
             raise ParallelRunError(str(exc), current_task, trace) from exc
         return {
@@ -275,8 +379,9 @@ class RateParallelAgent:
             "state": {"phase": "completed", "completed_tasks": [*by_id, "E1"]},
             "architecture": {"planner": "bounded_fanout_all_success_join", "model": "none_deterministic_v1",
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread"},
-            "lesson": {"topic": "fan_out_fan_in", "demo_scenario": demo_scenario,
+            "lesson": {"topic": "cooperative_cancellation", "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,
                            "partial_join_allowed": False, "concurrent_external_writes": False},
+            "run_control": control.snapshot(),
         }

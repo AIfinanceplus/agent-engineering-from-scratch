@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=2">
-  <script defer src="/rate_console_core.js?v=2"></script>
-  <script defer src="/rate_console.js?v=2"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=3">
+  <script defer src="/rate_console_core.js?v=3"></script>
+  <script defer src="/rate_console.js?v=3"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>并发与汇合 <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>超时与协作取消 <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
     <div class="controls">
-      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></select></label>
+      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><optgroup label="本课：协作取消"><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option></optgroup><optgroup label="上一课：并发汇合"><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></optgroup></select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
         <form id="parameters" class="parameter-panel">
@@ -26,11 +26,12 @@
         </form>
       </details>
       <button class="run-button" id="run-button" type="button"><span aria-hidden="true">▶</span> Run Agent</button>
+      <button class="stop-button" id="stop-button" type="button" hidden>Stop</button>
     </div>
   </header>
 
   <main>
-    <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="run-id" id="run-id">等待开始一次运行</span></div>
+    <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">预算 1s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
     <div class="workspace">
       <section class="graph-panel" aria-labelledby="graph-title">
         <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">9 nodes</span></div>
@@ -42,7 +43,7 @@
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
         <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
         <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
-          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>看见两个分支同时运行</h3><p>观察 A2 / A10 并发执行、Join 从 0/2 走到 2/2。<br>默认使用公开历史快照和明确的教学延时。</p><span>Fan-out. Wait. Fan-in.</span></div>
+          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>请求停止，不等于已经停止</h3><p>观察预算到期、停止请求、Tool 确认与晚到结果。<br>默认使用公开历史快照与明确的教学延时。</p><span>Request. Acknowledge. Stop.</span></div>
           <ol id="event-list" class="event-list" aria-label="运行事件"></ol>
           <p id="filter-empty" class="filter-empty" hidden>此节点尚未产生事件。</p>
         </div>

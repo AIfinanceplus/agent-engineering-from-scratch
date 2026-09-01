@@ -110,15 +110,43 @@ server.serve_forever()
     assert.equal(await page.locator('.graph-node[data-node="A2"]').getAttribute('data-status'), 'completed');
     assert.equal(await page.locator('.graph-node[data-node="J1"]').getAttribute('data-status'), 'blocked');
 
+    // Stop does not abort the stream: wait for the actual Tool acknowledgment.
+    await page.locator('#scenario').selectOption('manual_cancel');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('.graph-node[data-node="A2"][data-status="running"]');
+    await page.locator('#stop-button').click();
+    await page.waitForSelector('#run-status[data-phase="cancelled"]');
+    assert.ok((await page.locator('.event-kind').allTextContents()).includes('STOP ACK'));
+    assert.equal(await page.locator('.graph-node[data-node="D1"]').getAttribute('data-status'), 'completed');
+    assert.equal(await page.locator('.graph-node[data-node="J1"]').getAttribute('data-status'), 'blocked');
+
+    await page.locator('#scenario').selectOption('late_result');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="cancelling"]');
+    assert.equal(await page.locator('.graph-node[data-node="A2"]').getAttribute('data-status'), 'cancelling');
+    assert.equal(await page.locator('#run-button').isDisabled(), true);
+    if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-control-stopping.png`, fullPage: true });
+    await page.waitForSelector('#run-status[data-phase="timed_out"]');
+    assert.ok((await page.locator('.event-kind').allTextContents()).includes('DISCARDED'));
+    assert.equal(await page.locator('.graph-node[data-node="A10"]').getAttribute('data-status'), 'completed');
+    assert.equal(await page.locator('.graph-node[data-node="S1"]').getAttribute('data-status'), 'blocked');
+    if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-control-timed-out.png`, fullPage: true });
+
+    await page.locator('#scenario').selectOption('deadline');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="timed_out"]');
+    assert.equal(await page.locator('#run-button').isDisabled(), false);
+
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(url);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.locator('#scenario').selectOption('two_year_slow');
     await page.locator('#run-button').click();
     await page.waitForSelector('#run-status[data-phase="completed"]');
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-mobile.png`, fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('Browser PASS: real concurrent branches, Join 1/2, sibling drain on failure, complete stream, filtering, export, rerun, truncated stream, responsive layout. Fixture/snapshot teaching data only.');
+    console.log('Browser PASS: concurrent branches, Join, Stop request + acknowledgment, deadline, discarded late result, full stream, filtering, export, rerun, responsive layout. Fixture/snapshot teaching data only.');
   } finally {
     if (browser) await browser.close();
     server.kill();

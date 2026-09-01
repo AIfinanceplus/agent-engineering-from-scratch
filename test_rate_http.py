@@ -99,8 +99,8 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=2", html)
-        self.assertIn("rate_console_core.js?v=2", html)
+        self.assertIn("rate_console.js?v=3", html)
+        self.assertIn("rate_console_core.js?v=3", html)
         self.assertNotIn("rate_workbench.js", html)
         self.assertNotIn("r12_step7.js", html)
         self.assertNotIn("data-detail-tab", html)
@@ -197,6 +197,55 @@ class RateHTTPTests(unittest.TestCase):
         run = messages[-1]["result"]
         self.assertEqual([m["event"] for m in messages if m["type"] == "event"], run["trace"])
         self.assertEqual(run["architecture"]["join_policy"], "all_success")
+
+    def test_cancel_endpoint_keeps_stream_open_until_blocking_tool_returns(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def blocking_fetch(**_):
+            entered.set()
+            if not release.wait(4):
+                raise TimeoutError("test release missing")
+            return completed_steepener_history()
+
+        agent = RateParallelAgent({"fetch_public_rate_history": blocking_fetch})
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=3)
+        with patch.object(serve_rates, "PARALLEL_RATE_AGENT", agent):
+            try:
+                connection.request("POST", "/api/rates/stream", body=b'{"execution_mode":"parallel","budget_ms":10000}',
+                                   headers={"Content-Type": "application/json"})
+                response = connection.getresponse()
+                messages = [json.loads(response.readline())]
+                run_id = messages[0]["run_id"]
+                self.assertTrue(messages[0]["cancel_supported"])
+                self.assertTrue(entered.wait(1))
+                status, _, payload = self.post({"run_id": run_id}, "/api/rates/cancel")
+                self.assertEqual(status, 202)
+                self.assertTrue(payload["control"]["accepted"])
+                self.assertIsNone(payload["control"]["terminal"])
+                self.assertEqual(self.post({"run_id": run_id}, "/api/rates/cancel")[0], 202)
+                while True:
+                    message = json.loads(response.readline())
+                    messages.append(message)
+                    if message.get("event", {}).get("event") == "cancellation_requested":
+                        break
+                self.assertFalse(release.is_set())
+                release.set()
+                messages.extend(json.loads(line) for line in response.read().splitlines())
+            finally:
+                release.set()
+                connection.close()
+        self.assertEqual(messages[-1]["error"]["code"], "RUN_CANCELLED")
+        events = [m["event"] for m in messages if m["type"] == "event"]
+        self.assertEqual(events[-1]["event"], "run_stopped")
+        self.assertTrue(any(e["event"] == "tool_output_discarded" for e in events))
+        self.assertFalse(any(e["event"] == "tool_observation" for e in events))
+        self.assertEqual(self.post({"run_id": run_id}, "/api/rates/cancel")[0], 409)
+
+    def test_cancel_unknown_run_and_invalid_budget(self):
+        self.assertEqual(self.post({"run_id": "unknown"}, "/api/rates/cancel")[0], 404)
+        self.assertEqual(self.post({}, "/api/rates/cancel")[0], 400)
+        self.assertEqual(self.post({"execution_mode": "parallel", "budget_ms": -1}, "/api/rates/stream")[0], 400)
+        self.assertEqual(self.post({"execution_mode": "parallel", "demo_scenario": []}, "/api/rates/stream")[0], 400)
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

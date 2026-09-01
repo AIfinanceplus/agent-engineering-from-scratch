@@ -384,7 +384,9 @@ http://127.0.0.1:8000
 The default page has only two work areas: **Agent Graph** and **Agent Live Stream**.
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
-   20-observation holding period, $100/bp DV01 and 1bp round-trip cost.
+   20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
+   default scenario now demonstrates a **1-second execution budget**, not a
+   completed trade. Select a previous successful scenario to complete a trade.
 2. Follow Goal → Planner → Runtime → D1 → **A2 / A10 concurrently** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
@@ -408,7 +410,47 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: concurrency and the all-success Join
+### Current lesson: time budget and cooperative cancellation
+
+The one new concept is a **run-level stop boundary**. A deadline and a user's
+Stop click signal the same `RunControl`. A stop request is not a confirmation
+that a Tool has stopped; it is not a thread kill and does not undo earlier work.
+
+| Scenario | Budget / behavior | Observe |
+| --- | --- | --- |
+| 演示 · 1 秒预算 (default) | 1s budget; cooperative A2 would wait 2s | Deadline → stop request → A2 exits → run timed out; completed A10 stays complete |
+| 演示 · 手动停止 | 30s budget; both branches wait up to 8s | Click Stop; keep the stream connected until both Tools acknowledge exit |
+| 演示 · 晚到结果 | 1s budget; A2 deliberately ignores the stop signal for 2.4s | Remain in “停止中”; late output is shown as DISCARDED, never sent to Join |
+
+The graph topology is unchanged. Amber dashed nodes mean **stop requested**,
+not **already stopped**. The stream retains the budget, reason, request,
+per-Tool acknowledgment, discarded output and final stop confirmation.
+Connection loss without confirmation yields **状态未知**, not “已取消”.
+
+Engineering contract:
+
+- The budget uses a monotonic clock and covers the whole run, including D1.
+  It limits acceptance of results and scheduling of later work; it is **not a
+  hard upper bound on how long a blocking Tool takes to return**.
+- All Tool calls run in bounded worker pools; the owner polls controls and
+  writes the ordered stream. Cooperative waits, retries, series preparation
+  and source-switch boundaries check the same run scope.
+- A blocking network read retains its transport timeout and may not stop
+  immediately. There is no claim that Python threads are forcibly terminated.
+- `POST /api/rates/cancel` with `{ "run_id": "..." }` returns 202 for a stop
+  request, 409 for a known terminal run and 404 for an unknown/expired run.
+  Repeated requests do not create additional effects. Old run IDs cannot stop
+  a new run. Controls are process-local with bounded terminal history.
+- Success and cancellation are ordered at a locked terminal boundary. Late
+  output stays audit-only; completed work is not rolled back. Serial legacy
+  APIs and their checkpoint/idempotency contracts are unchanged.
+- Keep the stream open after pressing Stop. `run_stopped` and the final error
+  frame confirm termination only after submitted callables have exited.
+
+Source files: `rate_control.py` holds the scope and registry; `rate_parallel.py`
+owns execution and result acceptance. No broker or external writes are added.
+
+### Previous lesson: concurrency and the all-success Join
 
 Only one new concept is introduced: independent tasks may run together, but a
 dependent task must wait for **all required successful results**. Runtime uses at
@@ -416,11 +458,11 @@ most two worker threads per run. Workers send events through a queue; one owner
 assigns event sequence numbers, updates run state and writes the HTTP stream.
 This is concurrent scheduling, not a claim of CPU speedup under the Python GIL.
 
-The compact scenario selector has four choices:
+The previous lesson's four choices remain available:
 
 | Scenario | Data / timing | Observe |
 | --- | --- | --- |
-| 演示 · 2Y 较慢 (default) | Official bundled snapshot; A2 waits 2s, A10 waits 0.4s | Both run; A10 completes; Join waits 1/2 for A2 |
+| 演示 · 2Y 较慢 | Official bundled snapshot; A2 waits 2s, A10 waits 0.4s | Both run; A10 completes; Join waits 1/2 for A2 |
 | 演示 · 10Y 较慢 | Same snapshot; reverse the delays | Completion order reverses; Join still waits for both |
 | 演示 · 10Y 失败 | Same snapshot; explicit A10 fault after 0.4s | A2 finishes; J1/S1/E1 never execute |
 | 公开数据 · 无注入 | Original FRED → Treasury → disclosed snapshot fallback | No injected delay or failure; fast branches may finish too quickly to see overlap |
@@ -451,7 +493,7 @@ web/rate_workbench.js        retained historical rate overlay
 To revisit the advanced event-market experiment, run `python3 serve_r12.py`.
 
 Console checks: `node --test test_rate_console.cjs` and
-`python3 -m unittest test_rate_http test_rate_agent test_rate_parallel test_rate_ui_contract`.
+`python3 -m unittest test_rate_http test_rate_agent test_rate_parallel test_rate_control test_rate_ui_contract`.
 For the optional real-browser smoke test, install Playwright in your test
 environment and run `CHROMIUM_EXECUTABLE=/path/to/chromium node test_rate_console_browser.cjs`.
 That test starts a temporary local HTTP server with explicitly labelled fixture

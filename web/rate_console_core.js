@@ -25,16 +25,18 @@
   const PARALLEL_ROWS = [['G1'], ['P1'], ['R1'], ['D1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
-    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false };
+    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
   }
   function failState(state, error) {
+    const uncertain = state.phase === 'cancelling' && !state.stopConfirmed;
     state.error = typeof error === 'string' ? { message: error } : error;
     state.phase = 'failed';
     state.terminal = true;
     const active = state.error.task_id || state.activeTask;
-    if (active in state.nodes) state.nodes[active] = 'failed';
-    if (state.nodes.R1 !== 'waiting') state.nodes.R1 = 'failed';
+    if (active in state.nodes) state.nodes[active] = uncertain ? 'unknown' : 'failed';
+    if (state.nodes.R1 !== 'waiting') state.nodes.R1 = uncertain ? 'unknown' : 'failed';
     for (const id of Object.keys(state.nodes)) {
+      if (state.nodes[id] === 'cancelling') state.nodes[id] = 'unknown';
       if (['waiting', 'ready', 'running'].includes(state.nodes[id])) state.nodes[id] = 'blocked';
     }
     state.activeTasks = [];
@@ -52,7 +54,7 @@
       case 'task_started':
       case 'tool_execution_started':
       case 'eval_started':
-        if (id in state.nodes) state.nodes[id] = 'running';
+        if (id in state.nodes) state.nodes[id] = state.phase === 'cancelling' ? 'cancelling' : 'running';
         if (!state.activeTasks.includes(id)) state.activeTasks.push(id);
         state.activeTask = state.activeTasks[0] || null;
         break;
@@ -85,6 +87,27 @@
         state.activeTasks = [];
         break;
       case 'run_completed': state.nodes.R1 = 'completed'; break;
+      case 'run_budget_started': state.budgetMs = event.budget_ms; break;
+      case 'cancellation_requested':
+        state.phase = 'cancelling';
+        state.stopReason = event.reason;
+        state.nodes.R1 = 'cancelling';
+        for (const task of event.active_tasks) {
+          if (task in state.nodes && state.nodes[task] !== 'completed') state.nodes[task] = 'cancelling';
+        }
+        break;
+      case 'task_cancelled':
+        if (event.worker_stopped !== true) throw new Error('缺少 Tool 停止确认。');
+        if (id in state.nodes) state.nodes[id] = event.reason === 'deadline' ? 'timed_out' : 'cancelled';
+        state.activeTasks = state.activeTasks.filter(task => task !== id);
+        state.activeTask = state.activeTasks[0] || null;
+        break;
+      case 'run_stopped':
+        if (event.workers_stopped !== true) throw new Error('缺少 Runtime 停止确认。');
+        state.stopConfirmed = true;
+        state.stopReason = event.reason;
+        state.nodes.R1 = event.status;
+        break;
     }
   }
   function applyMessage(state, message) {
@@ -97,17 +120,28 @@
       }
       state.runId = message.run_id;
       state.phase = 'running';
+      state.cancelSupported = message.cancel_supported === true;
+      state.budgetMs = message.budget_ms ?? null;
     } else {
       if (!state.runId || message.run_id !== state.runId) throw new Error('流式消息来自不同的运行。');
       if (message.type === 'event') applyEvent(state, message.event);
       else if (message.type === 'result') {
+        if (state.stopReason) throw new Error('停止请求后不能接受成功结果。');
         const result = message.result;
         if (!result || result.run_id !== state.runId || !Array.isArray(result.trace) || JSON.stringify(result.trace) !== JSON.stringify(state.events) || state.events.at(-1)?.event !== 'run_completed') throw new Error('最终结果与已接收的事件流不一致。');
         state.result = result;
         state.phase = result.eval?.passed === true ? 'completed' : 'failed';
         state.terminal = true;
       } else if (message.type === 'error') {
-        failState(state, message.error || { message: 'Agent 执行失败' });
+        if (['RUN_CANCELLED', 'RUN_DEADLINE_EXCEEDED'].includes(message.error?.code)) {
+          const status = message.error.code === 'RUN_CANCELLED' ? 'cancelled' : 'timed_out';
+          if (!state.stopConfirmed || state.events.at(-1)?.event !== 'run_stopped' || state.events.at(-1)?.status !== status) throw new Error('未收到完整停止确认，不能标记已停止。');
+          state.phase = status;
+          state.terminal = true;
+          state.error = message.error;
+          state.activeTasks = [];
+          state.activeTask = null;
+        } else failState(state, message.error || { message: 'Agent 执行失败' });
       } else throw new Error(`未知消息类型：${message.type}`);
     }
     return state;
@@ -140,6 +174,13 @@
       case 'task_blocked': return { ...common, label: 'BLOCKED', title: 'Node not executed', description: event.reason };
       case 'demo_scenario_selected': return { ...common, label: 'DEMO', title: `Teaching mode · ${event.scenario}`, description: event.message };
       case 'demo_delay_started': return { ...common, label: 'DEMO DELAY', title: `Teaching delay · ${event.delay_ms}ms`, description: event.reason };
+      case 'run_budget_started': return { ...common, label: 'BUDGET', title: `Run budget · ${event.budget_ms / 1000}s`, description: '覆盖整次运行；到期请求协作停止，不强杀线程。' };
+      case 'deadline_exceeded': return { ...common, kind: 'control', label: 'DEADLINE', title: 'Deadline exceeded', description: '预算已到 ≠ Tool 已停止。Runtime 将请求停止并等待确认。' };
+      case 'cancellation_requested': return { ...common, kind: 'control', label: 'STOP REQUEST', title: 'Stop requested · waiting for acknowledgment', description: `原因：${event.reason} · 等待 ${event.active_tasks.join(', ') || '运行边界'} 确认` };
+      case 'task_cancelled': return { ...common, kind: 'control', label: 'STOP ACK', title: 'Tool acknowledged stop', description: '该调用已退出；不是仅关闭浏览器连接。' };
+      case 'tool_output_discarded': return { ...common, kind: 'control', label: 'DISCARDED', title: 'Late result discarded', description: '保留供检查，但不写入有效 Observation，不传给下游。', detailLabel: '查看被丢弃的完整结果', payload: event.output };
+      case 'run_stopped': return { ...common, kind: 'control', label: 'STOPPED', title: event.reason === 'deadline' ? 'Run timed out · all workers stopped' : 'Run cancelled · all workers stopped', description: '停止已确认；此前完成的节点保留，下游不再执行。' };
+      case 'non_cooperative_wait': return { ...common, kind: 'control', label: 'DEMO', title: 'Non-cooperative Tool demo', description: event.reason };
       case 'tool_execution_failed': return { ...common, kind: 'error', label: 'ERROR', title: event.error_type, description: `${event.error_message} · ${event.retryable ? '将按策略重试' : '不再重试'}`, detailLabel: '错误详情' };
       case 'tool_retry_scheduled': return { ...common, label: 'RETRY', title: `Retry scheduled · attempt ${event.next_attempt}`, description: `${event.delay_ms}ms 退避后再次调用` };
       case 'data_source_attempt': return { ...common, label: 'SOURCE', title: `${event.provider} · ${event.status}`, description: event.error_message || event.source_mode };

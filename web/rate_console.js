@@ -2,13 +2,16 @@
   'use strict';
   const { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
-  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行' };
+  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知' };
   let state = createState('parallel');
   let inFlight = false;
   let filter = null;
+  let cancelPending = false;
+  let cancelNote = '';
   const rows = [];
   const nodeElements = new Map();
   const edgeElements = [];
+  const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : byId('scenario').value === 'live' ? 120000 : 30000;
 
   function element(tag, className, text) {
     const el = document.createElement(tag);
@@ -98,10 +101,11 @@
       button.setAttribute('aria-label', `${id} ${definitions().find(n => n.id === id).title} · ${statusLabel} · 筛选事件`);
     }
     edgeElements.forEach(edge => { edge.element.dataset.active = String(state.nodes[edge.from] === 'completed' && !['waiting', 'blocked'].includes(state.nodes[edge.to])); });
-    const phases = { idle: 'Ready to run', connecting: 'Connecting', running: 'Agent running', completed: 'Run completed', failed: 'Run failed' };
+    const phases = { idle: 'Ready to run', connecting: 'Connecting', running: 'Agent running', completed: 'Run completed', failed: 'Run failed', cancelling: 'Stopping · 等待确认', cancelled: 'Run cancelled', timed_out: 'Run timed out' };
     byId('run-status').dataset.phase = state.phase;
     byId('run-status').querySelector('span').textContent = phases[state.phase];
     byId('run-id').textContent = state.runId || (inFlight ? '正在连接 Runtime…' : '等待开始一次运行');
+    byId('run-budget').textContent = `预算 ${(state.budgetMs ?? scenarioBudget()) / 1000}s`;
     byId('event-count').textContent = state.events.length;
     byId('empty-state').hidden = rows.length > 0 || !!filter;
     byId('stream-scope').textContent = filter ? `${filter} · ${definitions().find(n => n.id === filter).title}` : `全部节点 · 调用 · 结果${state.activeTasks.length ? ` · 活跃 ${state.activeTasks.length}` : ''}`;
@@ -110,10 +114,13 @@
     byId('filter-empty').hidden = !filter || rows.some(row => !row.hidden);
     byId('download').disabled = !state.events.length;
     byId('run-button').disabled = inFlight;
+    byId('stop-button').hidden = !inFlight || state.terminal || !state.cancelSupported;
+    byId('stop-button').disabled = cancelPending || state.phase === 'cancelling';
+    byId('stop-button').textContent = state.phase === 'cancelling' ? '停止中…' : cancelPending ? '已请求…' : 'Stop';
     byId('scenario').disabled = inFlight;
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
-    byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : state.phase === 'completed' ? '事件流已完成 · 完整输入与输出已保留' : inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件';
+    byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? '事件流已完成 · 完整输入与输出已保留' : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
   }
   function scrollToLatest() {
     if (byId('follow').checked) byId('stream-scroll').scrollTop = byId('stream-scroll').scrollHeight;
@@ -136,7 +143,29 @@
     scrollToLatest();
   }
   function showError() {
-    addRow({ task_id: state.error?.task_id || state.activeTask || 'END' }, { kind: 'error', label: 'RUN ERROR', title: state.error?.code || 'Stream interrupted', description: state.error?.message || '运行失败', detailLabel: '完整错误信息', payload: state.error });
+    const stopped = ['cancelled', 'timed_out'].includes(state.phase);
+    addRow({ task_id: state.error?.task_id || state.activeTask || 'END' }, { kind: stopped ? 'control' : 'error', label: stopped ? 'RUN STOPPED' : 'RUN ERROR', title: state.error?.code || 'Stream interrupted', description: state.error?.message || '运行失败', detailLabel: '完整运行终态', payload: state.error });
+  }
+  async function requestStop() {
+    const runId = state.runId;
+    if (!runId || !inFlight || state.terminal || cancelPending) return;
+    cancelPending = true;
+    cancelNote = '正在提交停止请求；不会关闭事件流。';
+    update();
+    try {
+      const response = await fetch('/api/rates/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: runId }) });
+      const body = await response.json();
+      if (state.runId !== runId || state.terminal) return;
+      if (response.status === 409) cancelNote = '运行已结束，等待最后的流式消息。';
+      else if (!response.ok || !body.control?.accepted) throw new Error(body.error?.message || '停止请求未被确认');
+      else cancelNote = '停止请求已接受，等待 Tool 退出确认。';
+    } catch (error) {
+      if (state.runId !== runId || state.terminal) return;
+      cancelPending = false;
+      cancelNote = `取消尚未确认：${error.message}；可以重试。`;
+    } finally {
+      if (state.runId === runId) update();
+    }
   }
   async function run() {
     if (inFlight) return;
@@ -146,6 +175,9 @@
     for (const key of Object.keys(config)) config[key] = Number(config[key]);
     config.execution_mode = 'parallel';
     config.demo_scenario = byId('scenario').value;
+    config.budget_ms = scenarioBudget();
+    cancelPending = false;
+    cancelNote = '';
     inFlight = true;
     state = createState('parallel');
     state.phase = 'connecting';
@@ -197,8 +229,10 @@
     }
   }
   byId('run-button').addEventListener('click', run);
+  byId('stop-button').addEventListener('click', requestStop);
   byId('scenario').addEventListener('change', () => {
     if (!state.runId) byId('source-note').textContent = byId('scenario').value === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+    update();
   });
   byId('parameters').addEventListener('submit', event => { event.preventDefault(); run(); });
   byId('clear-filter').addEventListener('click', () => { filter = null; update(); });

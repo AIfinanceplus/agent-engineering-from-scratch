@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from native_http import http_get_text as native_http_get_text
+from rate_control import check_run_control
 
 
 FRED_GRAPH_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
@@ -41,6 +42,7 @@ class RateSourceError(RuntimeError):
 
 def load_bundled_rate_history(start_date: str) -> dict:
     """Explicit offline lesson mode; never pretend a snapshot is a live fetch."""
+    check_run_control()
     _iso_date(start_date, "start_date")
     rows = _parse_snapshot_csv(SNAPSHOT_PATH.read_text(encoding="utf-8"), start_date)
     return _artifact(
@@ -65,7 +67,10 @@ class FredCurveHistorySource:
         attempts = []
 
         try:
-            rows = _parse_fred_curve_csv(self._transport(_fred_bulk_url(start_date)), start_date)
+            check_run_control()
+            raw = self._transport(_fred_bulk_url(start_date))
+            check_run_control()
+            rows = _parse_fred_curve_csv(raw, start_date)
             attempts.append(_source_attempt("FRED", "live_bulk_csv", "SELECTED"))
             return _artifact(rows, start_date=start_date, provider="FRED",
                              source_mode="live_bulk_csv", source_attempts=attempts,
@@ -74,6 +79,7 @@ class FredCurveHistorySource:
             attempts.append(_source_attempt("FRED", "live_bulk_csv", "FAILED", exc))
 
         try:
+            check_run_control()
             rows = self._fetch_treasury(start_date)
             attempts.append(_source_attempt("U.S. Treasury", "live_official_csv", "SELECTED"))
             return _artifact(rows, start_date=start_date, provider="U.S. Treasury",
@@ -83,6 +89,7 @@ class FredCurveHistorySource:
             attempts.append(_source_attempt("U.S. Treasury", "live_official_csv", "FAILED", exc))
 
         try:
+            check_run_control()
             raw = self._snapshot_path.read_text(encoding="utf-8")
             rows = _parse_snapshot_csv(raw, start_date)
             attempts.append(_source_attempt("U.S. Treasury", "bundled_snapshot", "SELECTED"))
@@ -103,7 +110,9 @@ class FredCurveHistorySource:
         all_rows = {}
         for year in range(current_year, requested_year - 1, -1):
             try:
+                check_run_control()
                 raw = self._transport(_treasury_year_url(year))
+                check_run_control()
             except (ConnectionError, TimeoutError, RuntimeError) as exc:
                 raise ConnectionError(f"U.S. Treasury {year} connection failed: {exc}") from exc
             for row in _parse_treasury_csv(raw, year):
