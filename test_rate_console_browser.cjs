@@ -1,0 +1,103 @@
+/* Optional end-to-end check. Requires Playwright and a Chromium executable.
+   CHROMIUM_EXECUTABLE=/path/to/chromium node test_rate_console_browser.cjs */
+const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
+const { once } = require('node:events');
+const { chromium } = require('playwright');
+
+(async () => {
+  // The real HTTP handler and Agent run against a clearly labelled test fixture.
+  const server = spawn(process.env.PYTHON || 'python', ['-u', '-c', `
+import json, time
+from http.server import ThreadingHTTPServer
+import serve_rates
+from rate_agent import RateStrategyAgent
+from test_rate_strategy import completed_steepener_history
+def fetch(start_date):
+    time.sleep(0.7)
+    result = completed_steepener_history()
+    result.update(provider="TEST FIXTURE", source_freshness="TEST FIXTURE")
+    return result
+serve_rates.RATE_AGENT = RateStrategyAgent({"fetch_public_rate_history": fetch})
+server = ThreadingHTTPServer(("127.0.0.1", 0), serve_rates.RateStrategyHandler)
+print(server.server_address[1], flush=True)
+server.serve_forever()
+`], { cwd: __dirname, stdio: ['ignore', 'pipe', 'pipe'] });
+  let browser;
+  let logs = '';
+  server.stderr.on('data', data => { logs += data; });
+  try {
+    const port = await new Promise((resolve, reject) => {
+      server.stdout.once('data', data => resolve(Number(String(data).trim())));
+      server.once('error', reject);
+      server.once('exit', code => reject(new Error(`Server exited ${code}: ${logs}`)));
+    });
+    browser = await chromium.launch({ executablePath: process.env.CHROMIUM_EXECUTABLE || undefined, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 960 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    const url = `http://127.0.0.1:${port}`;
+    await page.goto(url);
+    assert.equal(await page.locator('.graph-node').count(), 6);
+    assert.equal(await page.locator('script').count(), 2);
+    if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
+    await page.locator('#run-button').click();
+    await page.waitForSelector('[data-node="D1"][data-status="running"]');
+    assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
+    assert.equal(await page.locator('#run-button').isDisabled(), true);
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 6);
+    assert.equal(await page.locator('.event-row').count(), 19);
+    assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
+    assert.match(await page.locator('#source-note').innerText(), /TEST FIXTURE/);
+    await page.locator('.graph-node[data-node="D1"]').click();
+    assert.equal(await page.locator('.event-row:visible').count(), 6);
+    const result = page.locator('.event-row[data-kind="result"][data-node="D1"]');
+    await result.locator('summary').click();
+    assert.match(await result.locator('pre').innerText(), /observations/);
+    assert.match(await result.locator('pre').innerText(), /2026-03-22/);
+    await page.locator('#clear-filter').click();
+    assert.equal(await page.locator('.event-row:visible').count(), 19);
+    if (process.env.SCREENSHOT_DIR) {
+      await page.locator('#follow').uncheck();
+      await page.locator('#stream-scroll').evaluate(el => { el.scrollTop = 0; });
+      await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-completed.png`, fullPage: true });
+    }
+    const downloadWait = page.waitForEvent('download');
+    await page.locator('#download').click();
+    const download = await downloadWait;
+    assert.match(download.suggestedFilename(), /^RATE-RUN-.*\.json$/);
+
+    // A real strategy validation failure must not erase the successful D1 node.
+    await page.locator('#settings summary').click();
+    await page.locator('[name="holding_days"]').fill('9999');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.equal(await page.locator('.graph-node[data-node="D1"]').getAttribute('data-status'), 'completed');
+    assert.equal(await page.locator('.graph-node[data-node="S1"]').getAttribute('data-status'), 'failed');
+    assert.equal(await page.locator('.graph-node[data-node="E1"]').getAttribute('data-status'), 'blocked');
+    assert.equal(await page.locator('#run-button').isDisabled(), false);
+    if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-failed.png`, fullPage: true });
+
+    // An abruptly closed stream is not a successful run.
+    await page.route('**/api/rates/stream', route => route.fulfill({ contentType: 'application/x-ndjson', body: JSON.stringify({ protocol: 'rate-ndjson-v1', type: 'start', run_id: 'TRUNCATED' }) + '\n' }));
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.match(await page.locator('#stream-footer').innerText(), /未收到最终结果/);
+    await page.unroute('**/api/rates/stream');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(url);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-mobile.png`, fullPage: true });
+    assert.deepEqual(errors, []);
+    console.log('Browser PASS: real incremental events, all nodes, full Tool results, filtering, export, rerun, failure, truncated stream, responsive layout. Fixture data only.');
+  } finally {
+    if (browser) await browser.close();
+    server.kill();
+    if (server.exitCode === null) await once(server, 'exit');
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

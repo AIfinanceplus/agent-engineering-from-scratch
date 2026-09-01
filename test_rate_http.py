@@ -93,19 +93,72 @@ class RateHTTPTests(unittest.TestCase):
         self.assertTrue(result["result"]["eval"]["passed"])
         self.assertGreaterEqual(len([message for message in messages if message["type"] == "event"]), 10)
 
-    def test_root_retains_full_workbench_and_loads_rate_overlay_last(self):
+    def test_root_loads_only_focused_graph_and_stream_console(self):
         status, html = self.get_root()
         self.assertEqual(status, 200)
-        self.assertIn("Agent 运行过程", html)
-        self.assertIn('data-detail-tab="trace"', html)
-        self.assertIn('data-detail-tab="logic"', html)
-        self.assertIn('data-detail-tab="evidence"', html)
-        self.assertIn('data-detail-tab="state"', html)
-        self.assertIn('data-detail-tab="checkpoint"', html)
-        self.assertIn('data-detail-tab="architecture"', html)
-        self.assertIn("rate_workbench.js", html)
-        self.assertLess(html.index("r12_step7.js"), html.index("rate_workbench.js"))
-        self.assertIn("rate_workbench.js?v=rate-v1-state-eval-v2", html)
+        self.assertIn("Agent Graph", html)
+        self.assertIn("Agent Live Stream", html)
+        self.assertIn("rate_console.js?v=1", html)
+        self.assertIn("rate_console_core.js?v=1", html)
+        self.assertNotIn("rate_workbench.js", html)
+        self.assertNotIn("r12_step7.js", html)
+        self.assertNotIn("data-detail-tab", html)
+
+    def test_stream_arrives_before_tool_finishes_and_contains_exact_payloads(self):
+        entered, release = threading.Event(), threading.Event()
+
+        def gated_fetch(start_date):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("test gate timed out")
+            return completed_steepener_history()
+
+        agent = RateStrategyAgent({"fetch_public_rate_history": gated_fetch})
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=3)
+        with patch.object(serve_rates, "RATE_AGENT", agent):
+            try:
+                connection.request("POST", "/api/rates/stream", body=b"{}",
+                                   headers={"Content-Type": "application/json"})
+                response = connection.getresponse()
+                messages = []
+                while True:
+                    message = json.loads(response.readline())
+                    messages.append(message)
+                    if message.get("event", {}).get("event") == "tool_execution_started":
+                        break
+                self.assertTrue(entered.wait(1))
+                self.assertFalse(release.is_set())
+                self.assertEqual(messages[-1]["event"]["task_id"], "D1")
+                self.assertIn("start_date", messages[-1]["event"]["arguments"])
+                release.set()
+                messages.extend(json.loads(line) for line in response.read().splitlines())
+            finally:
+                release.set()
+                connection.close()
+        run = messages[-1]["result"]
+        self.assertEqual({m["protocol"] for m in messages}, {"rate-ndjson-v1"})
+        self.assertEqual({m["run_id"] for m in messages}, {run["run_id"]})
+        events = [m["event"] for m in messages if m["type"] == "event"]
+        self.assertEqual(events, run["trace"])
+        self.assertEqual([e["sequence"] for e in events], list(range(1, len(events) + 1)))
+        self.assertEqual({e["task_id"] for e in events}, {"G1", "P1", "R1", "D1", "S1", "E1", "END"})
+        outputs = {e["task_id"]: e["output"] for e in events if "output" in e}
+        self.assertEqual(outputs, {"D1": run["data"], "S1": run["simulation"], "E1": run["eval"]})
+
+    def test_stream_error_keeps_the_correct_node_and_complete_partial_trace(self):
+        status, _, messages = self.post_stream({"holding_days": 0})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["task_id"], "S1")
+        events = [m["event"] for m in messages if m["type"] == "event"]
+        self.assertEqual(messages[-1]["error"]["trace"], events)
+        self.assertTrue(any(e["event"] == "task_completed" and e["task_id"] == "D1" for e in events))
+        self.assertFalse(any(e["task_id"] == "E1" for e in events))
+
+    def test_stream_runs_have_distinct_ids(self):
+        first = self.post_stream({})[2]
+        second = self.post_stream({})[2]
+        self.assertNotEqual(first[0]["run_id"], second[0]["run_id"])
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

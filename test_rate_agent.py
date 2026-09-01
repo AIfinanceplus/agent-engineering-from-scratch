@@ -7,6 +7,21 @@ from tools import TOOL_REGISTRY
 
 
 class RateStrategyAgentTests(unittest.TestCase):
+    def test_event_sink_gets_immutable_input_and_output_snapshots(self):
+        streamed = []
+        history = completed_steepener_history()
+        agent = RateStrategyAgent({"fetch_public_rate_history": lambda **_: history})
+        run = agent.run_once(event_sink=streamed.append)
+        self.assertEqual(streamed, run["trace"])
+        calls = {e["task_id"]: e for e in streamed if e["event"] == "tool_execution_started"}
+        results = {e["task_id"]: e for e in streamed if e["event"] == "tool_observation"}
+        self.assertEqual(calls["S1"]["arguments"]["history"], history)
+        self.assertEqual(results["D1"]["output"], history)
+        history["observations"].clear()
+        self.assertTrue(results["D1"]["output"]["observations"])
+        streamed[0]["goal"] = "mutated callback"
+        self.assertNotEqual(run["trace"][0]["goal"], "mutated callback")
+
     def test_fixed_plan_crosses_registry_validation_and_completes_eval(self):
         calls = []
 

@@ -1,4 +1,5 @@
 import unittest
+import subprocess
 from pathlib import Path
 
 
@@ -6,6 +7,20 @@ ROOT = Path(__file__).parent
 
 
 class RateUIContractTests(unittest.TestCase):
+    def test_console_event_reducer_runtime_contracts(self):
+        result = subprocess.run(["node", "--test", "test_rate_console.cjs"], cwd=ROOT,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_console_has_one_live_run_control_and_no_legacy_scripts(self):
+        html = (ROOT / "web" / "rate_console.html").read_text(encoding="utf-8")
+        self.assertEqual(html.count('id="run-button"'), 1)
+        self.assertIn('id="graph-nodes"', html)
+        self.assertIn('id="event-list"', html)
+        self.assertNotIn('data-detail-tab', html)
+        self.assertNotIn('r12_', html)
+        self.assertNotIn('rate_workbench', html)
+
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
@@ -64,12 +79,12 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn("child.hidden = child !== overlay", source)
         self.assertNotIn("panel.innerHTML =", source)
 
-    def test_server_extends_r12_workbench_and_loads_rate_overlay_last(self):
+    def test_server_retains_legacy_apis_but_serves_focused_console(self):
         source = (ROOT / "serve_rates.py").read_text(encoding="utf-8")
         self.assertIn("class RateStrategyHandler(R12VisualizerHandler)", source)
-        self.assertIn('(*R12VisualizerHandler.extra_scripts, "rate_workbench.js")', source)
+        self.assertIn('"rate_console.html"', source)
         self.assertIn('"/api/rates/run-once"', source)
-        self.assertIn("Full Workbench UI retained", source)
+        self.assertIn("Graph & Live Stream", source)
 
 
 if __name__ == "__main__":

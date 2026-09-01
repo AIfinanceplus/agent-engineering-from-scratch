@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Workflow · Graph &amp; Live Stream</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/rate_console.css?v=1">
+  <script defer src="/rate_console_core.js?v=1"></script>
+  <script defer src="/rate_console.js?v=1"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>2s10s 利率策略 <span>/</span> 确定性 Agent · 仅模拟</p></div></div>
+    <div class="controls">
+      <details class="settings" id="settings">
+        <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
+        <form id="parameters" class="parameter-panel">
+          <h2>Simulation parameters</h2><p>只调整策略参数，不改变工作流。</p>
+          <label>回看窗口 <span>有效观测日</span><input name="lookback_days" type="number" value="60" min="20" step="1" required></label>
+          <label>入场阈值 <span>|z-score|</span><input name="entry_z" type="number" value="1" min="0.01" step="any" required></label>
+          <label>持有窗口 <span>有效观测日</span><input name="holding_days" type="number" value="20" min="1" step="1" required></label>
+          <label>DV01 <span>USD / bp</span><input name="dv01_usd_per_bp" type="number" value="100" min="0.01" step="any" required></label>
+          <label>往返成本 <span>bp</span><input name="round_trip_cost_bps" type="number" value="1" min="0" step="any" required></label>
+        </form>
+      </details>
+      <button class="run-button" id="run-button" type="button"><span aria-hidden="true">▶</span> Run Agent</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="run-id" id="run-id">等待开始一次运行</span></div>
+    <div class="workspace">
+      <section class="graph-panel" aria-labelledby="graph-title">
+        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag">6 nodes</span></div>
+        <div class="graph-canvas"><div class="graph-nodes" id="graph-nodes" aria-label="Agent 工作流节点"></div></div>
+        <div class="graph-caption"><span class="legend-dot"></span><span>状态由运行事件驱动 · 点击节点筛选右侧事件</span></div>
+      </section>
+
+      <section class="stream-panel" aria-labelledby="stream-title">
+        <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
+        <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
+        <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
+          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>看见 Agent 的每一步</h3><p>点击 Run Agent，节点状态与执行事件将同步出现。<br>展开任意事件，查看完整输入、输出或错误。</p><span>Real events. Full context.</span></div>
+          <ol id="event-list" class="event-list" aria-label="运行事件"></ol>
+          <p id="filter-empty" class="filter-empty" hidden>此节点尚未产生事件。</p>
+        </div>
+        <div class="stream-footer"><span id="stream-footer">准备接收真实运行事件</span><span class="protocol">NDJSON</span></div>
+      </section>
+    </div>
+    <footer class="page-footer"><span>仅教学模拟 · 无真实订单</span><span id="source-note">数据来源及快照状态将在 D1 结果中披露</span></footer>
+  </main>
+</body>
+</html>

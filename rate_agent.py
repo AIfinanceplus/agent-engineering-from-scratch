@@ -12,7 +12,7 @@ import hashlib
 import json
 import time
 from copy import deepcopy
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Callable
 
 from rate_strategy import evaluate_rate_simulation
@@ -104,10 +104,14 @@ class RateStrategyAgent:
         completed_task_ids: set[str] = set()
 
         def emit(event: str, **payload) -> None:
-            row = {"sequence": len(trace) + 1, "event": event, **payload}
+            # Capture values at the event boundary, not mutable Tool references.
+            row = deepcopy({"sequence": len(trace) + 1, "event": event,
+                            "run_id": run_id,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            **payload})
             trace.append(row)
             if event_sink is not None:
-                event_sink(row)
+                event_sink(deepcopy(row))
 
         def persist_checkpoint(boundary: str, next_task: str | None) -> None:
             if checkpoint_store is None:
@@ -176,12 +180,14 @@ class RateStrategyAgent:
             )
 
         if not resume:
-            emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation")
+            emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation",
+                 configuration=configuration)
             emit(
                 "plan_created",
                 task_id="P1",
                 planner="fixed_two_tool_dag",
                 task_ids=[task["task_id"] for task in plan],
+                tasks=plan,
             )
             emit(
                 "runtime_started",
@@ -221,6 +227,7 @@ class RateStrategyAgent:
                 task_id=task["task_id"],
                 tool_name=tool.name,
                 passed=validation.get("ok") is True,
+                validation=validation,
             )
             if not validation.get("ok"):
                 raise ValueError(validation["error"]["message"])
@@ -236,6 +243,7 @@ class RateStrategyAgent:
                     attempt=attempt,
                     max_attempts=max_attempts,
                     max_retries=tool.max_retries,
+                    arguments=arguments,
                 )
                 try:
                     observation = function(**arguments)
@@ -299,6 +307,7 @@ class RateStrategyAgent:
                 tool_name=tool.name,
                 artifact_type=observation.get("artifact_type"),
                 status="COMPLETED",
+                output=observation,
             )
             emit(
                 "task_completed",
@@ -322,13 +331,15 @@ class RateStrategyAgent:
 
         history = observations["D1"]
         simulation = observations["S1"]
-        emit("eval_started", task_id="E1", evaluator="evaluate_rate_simulation")
+        emit("eval_started", task_id="E1", evaluator="evaluate_rate_simulation",
+             arguments={"simulation": simulation})
         evaluation = evaluate_rate_simulation(simulation)
         emit(
             "eval_completed",
             task_id="E1",
             artifact_type=evaluation["artifact_type"],
             passed=evaluation["passed"],
+            output=evaluation,
         )
         emit("run_completed", task_id="END", status="COMPLETED_ONE_PAPER_SIMULATION")
         persist_checkpoint("after_E1", None)

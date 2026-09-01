@@ -1,10 +1,12 @@
-"""Serve Rate Strategy V1 inside the full Agent Research Workbench UI."""
+"""Serve the focused Agent Graph + Live Stream console; keep legacy APIs."""
 
 from __future__ import annotations
 
 from http.server import ThreadingHTTPServer
 import os
 import tempfile
+from pathlib import Path
+from uuid import uuid4
 
 from rate_agent import RateSimulatedCrash, RateStrategyAgent
 from rate_checkpoint import RateCheckpointStore
@@ -17,9 +19,18 @@ RATE_AGENT = RateStrategyAgent()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-V1-STATE"
-    page_title = "Agent Research Workbench · Rate Strategy V1 · State / Resume"
-    extra_scripts = (*R12VisualizerHandler.extra_scripts, "rate_workbench.js")
+    version_label = "RATE-CONSOLE-V1"
+    page_title = "Agent Workflow · Graph & Live Stream"
+
+    def do_GET(self):
+        if self.path.split("?", 1)[0] not in {"/", "/index.html"}:
+            return super().do_GET()
+        body = (Path(__file__).parent / "web" / "rate_console.html").read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream"}:
@@ -159,6 +170,8 @@ class RateStrategyHandler(R12VisualizerHandler):
 
     def _stream_run(self, request_data):
         """Stream each real Rate Agent event as newline-delimited JSON."""
+        run_id = f"RATE-RUN-{uuid4().hex[:16]}"
+        streamed_events = []
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-transform")
@@ -168,26 +181,39 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.close_connection = True
 
         def send(message_type, **payload):
-            self.wfile.write(encode_stream_message(message_type, **payload))
+            self.wfile.write(encode_stream_message(
+                message_type, protocol="rate-ndjson-v1", run_id=run_id, **payload
+            ))
             self.wfile.flush()
 
+        def observe(event):
+            streamed_events.append(event)
+            send("event", event=event)
+
         try:
-            send("start", run_id="RATE-STREAM", strategy="2s10s", protocol="rate-ndjson-v1")
+            send("start", strategy="2s10s")
             run = RATE_AGENT.run_once(
+                run_id=run_id,
                 lookback_days=request_data.get("lookback_days", 60),
                 entry_z=request_data.get("entry_z", 1.0),
                 holding_days=request_data.get("holding_days", 20),
                 dv01_usd_per_bp=request_data.get("dv01_usd_per_bp", 100.0),
                 round_trip_cost_bps=request_data.get("round_trip_cost_bps", 1.0),
                 start_date=request_data.get("start_date"),
-                event_sink=lambda event: send("event", event=event),
+                event_sink=observe,
             )
             send("result", result=run)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return
         except Exception as exc:
             try:
-                send("error", error={"code": exc.__class__.__name__, "message": str(exc), "trace": getattr(exc, "trace", [])})
+                send("error", error={
+                    "code": exc.__class__.__name__, "message": str(exc),
+                    "task_id": getattr(exc, "task_id", None) or (
+                        streamed_events[-1].get("task_id") if streamed_events else None
+                    ),
+                    "trace": streamed_events,
+                })
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
@@ -196,9 +222,9 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Research Workbench · Rate Strategy V1 · State / Resume")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V1")
     print(f"Open http://{host}:{port}")
-    print("Full Workbench UI retained: Trace / Logic / Evidence / State / Checkpoint / Architecture")
+    print("Focused console: real node states, Tool arguments, results and retries")
     print("Strategy workspace: D1 resilient public rates -> S1 explicit rule -> E1 paper simulation eval")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")

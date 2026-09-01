@@ -368,7 +368,7 @@ Checks include:
 
 CI remains network-independent by injecting API-shaped source responses while exercising the same production parser, Runtime, Evidence, synthesis, forecast, and settlement contracts.
 
-## Run the current workbench
+## Run the Agent Graph & Live Stream console
 
 ```bash
 python3 -m pip install -r requirements.txt
@@ -381,26 +381,49 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Suggested Rate Strategy V1 flow:
+The default page has only two work areas: **Agent Graph** and **Agent Live Stream**.
 
-```text
-1. 默认进入左侧“利率策略”，原 Workbench 和 Agent 运行过程仍在
-2. 保持默认参数：60日 lookback、1.0 z、20日 holding、$100 DV01、1bp cost
-3. 点击 Run One Simulation，观察 Goal → Planner → Runtime → D1 → S1 → E1
-4. 分别点击 Trace / Logic / Evidence / State / Checkpoint / Architecture
-5. 检查 D1 的 FRED common-date observations 与两条 Evidence
-6. 检查 S1 的 entry/exit、steepener 或 flattener、gross/cost/net P&L
-7. 检查 E1 contract checks 全部 PASS；Checkpoint 明确显示 V1 尚未持久化
-```
+1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
+   20-observation holding period, $100/bp DV01 and 1bp round-trip cost.
+2. Follow the real, serial workflow: Goal → Planner → Runtime → D1 → S1 → E1.
+   Runtime remains active while it orchestrates the Tool nodes. No LLM or
+   parallel execution is implied.
+3. The stream includes every emitted node event, registry lookup, validation,
+   Tool call (full arguments), Tool result (full output), retry and Eval result.
+   Expand a row to inspect JSON; no observations are truncated.
+4. Click a Graph node to filter events; click it again or “显示全部” to reset.
+   “跟随最新” controls scrolling without discarding earlier events.
+5. D1 discloses the actual provider, source date and offline-snapshot status.
+   Failures retain received events and mark downstream nodes as unexecuted.
+6. Export JSON to retain the completed run or a partial failure trace.
+
+The `POST /api/rates/stream` transport uses `rate-ndjson-v1` for every frame,
+one unique run ID per request and consecutive event sequence numbers. A closed
+connection without a terminal result/error is not considered success. Source
+attempt details are reported when D1 returns, not during individual network reads.
+The console observes execution; closing its browser does not provide a durable
+cancel/resume contract.
+
+Visualization is a required design consideration for every new Agent lesson:
+show real state transitions and inspectable inputs/outputs, keep the default
+view focused, and never animate a simulated process as live execution.
 
 Current UI:
 
 ```text
-web/index.html                 shared Workbench shell
-web/r7_v3.js                  shared UI state and learning components
-web/r12_ui.js ... step7.js    retained project evolution layers
-web/rate_workbench.js         rate-only Strategy workspace overlay
-web/rate_workbench.css
+web/rate_console.html        focused default page
+web/rate_console.css         responsive Graph / Stream layout
+web/rate_console_core.js     pure event and protocol reducer
+web/rate_console.js          incremental DOM updates and stream reader
+web/index.html               retained historical Workbench shell
+web/rate_workbench.js        retained historical rate overlay
 ```
 
 To revisit the advanced event-market experiment, run `python3 serve_r12.py`.
+
+Console checks: `node --test test_rate_console.cjs` and
+`python3 -m unittest test_rate_http test_rate_agent test_rate_ui_contract`.
+For the optional real-browser smoke test, install Playwright in your test
+environment and run `CHROMIUM_EXECUTABLE=/path/to/chromium node test_rate_console_browser.cjs`.
+That test starts a temporary local HTTP server with explicitly labelled fixture
+data; it tests rendering and streaming, not public-source availability.
