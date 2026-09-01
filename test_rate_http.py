@@ -81,7 +81,7 @@ class RateHTTPTests(unittest.TestCase):
         self.assertIn('data-detail-tab="architecture"', html)
         self.assertIn("rate_workbench.js", html)
         self.assertLess(html.index("r12_step7.js"), html.index("rate_workbench.js"))
-        self.assertIn("rate_workbench.js?v=rate-v1-fallback-eval-v2", html)
+        self.assertIn("rate_workbench.js?v=rate-v1-state-eval-v2", html)
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

@@ -15,8 +15,8 @@ RATE_AGENT = RateStrategyAgent()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-V1-FALLBACK"
-    page_title = "Agent Research Workbench · Rate Strategy V1 · Source Fallback"
+    version_label = "RATE-V1-STATE"
+    page_title = "Agent Research Workbench · Rate Strategy V1 · State / Resume"
     extra_scripts = (*R12VisualizerHandler.extra_scripts, "rate_workbench.js")
 
     def do_POST(self):
@@ -115,7 +115,7 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Research Workbench · Rate Strategy V1 · Source Fallback")
+    print("Agent Research Workbench · Rate Strategy V1 · State / Resume")
     print(f"Open http://{host}:{port}")
     print("Full Workbench UI retained: Trace / Logic / Evidence / State / Checkpoint / Architecture")
     print("Strategy workspace: D1 resilient public rates -> S1 explicit rule -> E1 paper simulation eval")
