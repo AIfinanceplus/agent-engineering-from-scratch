@@ -63,6 +63,7 @@ class RateStrategyAgent:
         checkpoint_store=None,
         resume: bool = False,
         crash_after_task: str | None = None,
+        event_sink=None,
     ) -> dict:
         start_date = start_date or (date.today() - timedelta(days=1_095)).isoformat()
         configuration = {
@@ -103,7 +104,10 @@ class RateStrategyAgent:
         completed_task_ids: set[str] = set()
 
         def emit(event: str, **payload) -> None:
-            trace.append({"sequence": len(trace) + 1, "event": event, **payload})
+            row = {"sequence": len(trace) + 1, "event": event, **payload}
+            trace.append(row)
+            if event_sink is not None:
+                event_sink(row)
 
         def persist_checkpoint(boundary: str, next_task: str | None) -> None:
             if checkpoint_store is None:

@@ -14,6 +14,7 @@
 const rateWorkbenchState = {
   run:null,
   failureTrace:[],
+  streamTrace:[],
   busy:false,
   error:null,
   selectedNode:'G1',
@@ -65,7 +66,7 @@ function rateRenderInput() {
       <label>Holding<input data-rate-field="holding_days" value="${esc(c.holding_days)}" inputmode="numeric"><small>observations</small></label>
       <label>DV01<input data-rate-field="dv01_usd_per_bp" value="${esc(c.dv01_usd_per_bp)}" inputmode="decimal"><small>USD / bp</small></label>
       <label>Round-trip cost<input data-rate-field="round_trip_cost_bps" value="${esc(c.round_trip_cost_bps)}" inputmode="decimal"><small>basis points</small></label>
-      <div class="rate-run-actions"><button id="rate-run-once" class="btn primary" ${rateWorkbenchState.busy ? 'disabled' : ''}>${rateWorkbenchState.busy ? 'D1 Resolving rate source…' : '▶ Run One Simulation'}</button><button id="rate-export" class="btn" ${rateWorkbenchState.run ? '' : 'disabled'}>⇩ JSON</button></div>
+      <div class="rate-run-actions"><button id="rate-run-once" class="btn primary" ${rateWorkbenchState.busy ? 'disabled' : ''}>${rateWorkbenchState.busy ? 'D1 Resolving rate source…' : '▶ Run One Simulation'}</button><button id="rate-stream-run" class="btn" ${rateWorkbenchState.busy ? 'disabled' : ''}>◉ Live Agent Stream</button><button id="rate-export" class="btn" ${rateWorkbenchState.run ? '' : 'disabled'}>⇩ JSON</button></div>
     </div>
     <p class="rate-rule">利差 = 10Y − 2Y；z ≤ −阈值做 steepener，z ≥ 阈值做 flattener；固定持有后按 DV01 近似平仓。</p>
     ${rateWorkbenchState.error ? `<div class="eval-diagnostic"><strong>Run failed:</strong> ${esc(rateWorkbenchState.error)}</div>` : ''}`;
@@ -73,6 +74,7 @@ function rateRenderInput() {
     rateWorkbenchState.config[input.dataset.rateField] = input.value;
   }));
   overlay.querySelector('#rate-run-once')?.addEventListener('click', rateRunOnce);
+  overlay.querySelector('#rate-stream-run')?.addEventListener('click', rateStreamOnce);
   overlay.querySelector('#rate-recovery-demo')?.addEventListener('click', () => rateRunOnce('/api/rates/recovery-demo', true));
   overlay.querySelector('#rate-idempotency-demo')?.addEventListener('click', () => rateRunOnce('/api/rates/idempotency-demo', false, true));
   overlay.querySelector('#rate-export')?.addEventListener('click', rateExportRun);
@@ -258,6 +260,7 @@ async function rateRunOnce(endpoint='/api/rates/run-once', recoveryDemo=false, i
   rateWorkbenchState.error = null;
   rateWorkbenchState.run = null;
   rateWorkbenchState.failureTrace = [];
+  rateWorkbenchState.streamTrace = [];
   rateWorkbenchState.selectedNode = 'D1';
   appState.selectedDetailTab = 'trace';
   appState.selectedInspectorTab = 'output';
@@ -282,6 +285,60 @@ async function rateRunOnce(endpoint='/api/rates/run-once', recoveryDemo=false, i
     rateWorkbenchState.failureTrace = error.trace || [];
     rateWorkbenchState.selectedNode = 'D1';
     toast(`Rate Agent: ${error.message}`);
+  } finally {
+    rateWorkbenchState.busy = false;
+    rateRenderAll();
+  }
+}
+
+async function rateStreamOnce() {
+  rateWorkbenchState.busy = true;
+  rateWorkbenchState.error = null;
+  rateWorkbenchState.run = null;
+  rateWorkbenchState.failureTrace = [];
+  rateWorkbenchState.streamTrace = [];
+  rateWorkbenchState.selectedNode = 'G1';
+  appState.selectedDetailTab = 'trace';
+  appState.selectedInspectorTab = 'output';
+  rateRenderAll();
+  try {
+    const response = await fetch('/api/rates/stream', {method:'POST',headers:{'Content-Type':'application/json','Accept':'application/x-ndjson'},cache:'no-store',body:JSON.stringify({
+      lookback_days:rateConfigNumber('lookback_days'),entry_z:rateConfigNumber('entry_z'),holding_days:rateConfigNumber('holding_days'),dv01_usd_per_bp:rateConfigNumber('dv01_usd_per_bp'),round_trip_cost_bps:rateConfigNumber('round_trip_cost_bps'),
+    })});
+    if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    const consume = (message) => {
+      if (message.type === 'event') {
+        rateWorkbenchState.streamTrace.push(message.event);
+        rateWorkbenchState.failureTrace = rateWorkbenchState.streamTrace;
+        rateRenderAll();
+      } else if (message.type === 'result') {
+        rateWorkbenchState.run = message.result;
+        rateWorkbenchState.selectedNode = 'E1';
+        appState.selectedDetailTab = 'trace';
+        appState.selectedInspectorTab = 'eval';
+      } else if (message.type === 'error') {
+        const streamError = new Error(message.error?.message || 'stream failed');
+        streamError.trace = message.error?.trace || rateWorkbenchState.streamTrace;
+        throw streamError;
+      }
+    };
+    while (true) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), {stream:!chunk.done});
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      lines.filter(Boolean).forEach((line) => consume(JSON.parse(line)));
+      if (chunk.done) break;
+    }
+    if (buffer.trim()) consume(JSON.parse(buffer));
+    toast(`Live Agent Stream completed · ${rateWorkbenchState.run?.trace?.length || rateWorkbenchState.streamTrace.length} events`);
+  } catch (error) {
+    rateWorkbenchState.error = error.message;
+    rateWorkbenchState.failureTrace = error.trace || rateWorkbenchState.streamTrace;
+    toast(`Rate Agent stream: ${error.message}`);
   } finally {
     rateWorkbenchState.busy = false;
     rateRenderAll();

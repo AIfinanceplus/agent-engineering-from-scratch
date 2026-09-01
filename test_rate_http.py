@@ -50,6 +50,19 @@ class RateHTTPTests(unittest.TestCase):
         connection.close()
         return response.status, headers, json.loads(raw)
 
+    def post_stream(self, payload):
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=10)
+        body = json.dumps(payload).encode("utf-8")
+        connection.request(
+            "POST", "/api/rates/stream", body=body,
+            headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
+        )
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        headers = dict(response.getheaders())
+        connection.close()
+        return response.status, headers, [json.loads(line) for line in raw.splitlines()]
+
     def get_root(self):
         connection = http.client.HTTPConnection(self.host, self.port, timeout=5)
         connection.request("GET", "/")
@@ -68,6 +81,17 @@ class RateHTTPTests(unittest.TestCase):
         self.assertFalse(run["guardrails"]["broker_connection"])
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual(headers["Connection"], "close")
+
+    def test_stream_emits_start_events_and_result(self):
+        status, headers, messages = self.post_stream({})
+        self.assertEqual(status, 200)
+        self.assertIn("application/x-ndjson", headers["Content-Type"])
+        self.assertEqual(messages[0]["type"], "start")
+        self.assertTrue(any(message["type"] == "event" for message in messages))
+        result = messages[-1]
+        self.assertEqual(result["type"], "result")
+        self.assertTrue(result["result"]["eval"]["passed"])
+        self.assertGreaterEqual(len([message for message in messages if message["type"] == "event"]), 10)
 
     def test_root_retains_full_workbench_and_loads_rate_overlay_last(self):
         status, html = self.get_root()

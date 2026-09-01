@@ -9,6 +9,7 @@ import tempfile
 from rate_agent import RateSimulatedCrash, RateStrategyAgent
 from rate_checkpoint import RateCheckpointStore
 from rate_commands import RateIdempotencyStore
+from r7_streaming import encode_stream_message
 from serve_r12 import R12VisualizerHandler
 
 
@@ -21,11 +22,13 @@ class RateStrategyHandler(R12VisualizerHandler):
     extra_scripts = (*R12VisualizerHandler.extra_scripts, "rate_workbench.js")
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
             return
+        if self.path == "/api/rates/stream":
+            return self._stream_run(request_data)
         if self.path != "/api/rates/run-once":
             if self.path == "/api/rates/recovery-demo":
                 return self._run_recovery_demo(request_data)
@@ -153,6 +156,40 @@ class RateStrategyHandler(R12VisualizerHandler):
                 {"ok": False, "action": "rate_strategy_idempotency_demo",
                  "error": {"code": exc.__class__.__name__, "message": str(exc)}},
             )
+
+    def _stream_run(self, request_data):
+        """Stream each real Rate Agent event as newline-delimited JSON."""
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def send(message_type, **payload):
+            self.wfile.write(encode_stream_message(message_type, **payload))
+            self.wfile.flush()
+
+        try:
+            send("start", run_id="RATE-STREAM", strategy="2s10s", protocol="rate-ndjson-v1")
+            run = RATE_AGENT.run_once(
+                lookback_days=request_data.get("lookback_days", 60),
+                entry_z=request_data.get("entry_z", 1.0),
+                holding_days=request_data.get("holding_days", 20),
+                dv01_usd_per_bp=request_data.get("dv01_usd_per_bp", 100.0),
+                round_trip_cost_bps=request_data.get("round_trip_cost_bps", 1.0),
+                start_date=request_data.get("start_date"),
+                event_sink=lambda event: send("event", event=event),
+            )
+            send("result", result=run)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        except Exception as exc:
+            try:
+                send("error", error={"code": exc.__class__.__name__, "message": str(exc), "trace": getattr(exc, "trace", [])})
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
 
 
 def main() -> None:
