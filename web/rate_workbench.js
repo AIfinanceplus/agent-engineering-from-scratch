@@ -102,12 +102,17 @@ function rateRenderFlow() {
   overlay.hidden = false;
   const run = rateWorkbenchState.run;
   const trace = run?.trace || rateWorkbenchState.failureTrace;
-  const nodes = Object.entries(RATE_NODE_META);
-  overlay.innerHTML = `<div class="execution-head"><div class="execution-title"><h2>Agent 运行过程</h2><span class="pill ${rateWorkbenchState.busy ? 'running' : run?.eval?.passed ? 'done' : rateWorkbenchState.error ? 'fail' : ''}">${rateWorkbenchState.busy ? 'RUNNING' : run ? 'COMPLETED' : rateWorkbenchState.error ? 'FAILED' : 'IDLE'}</span></div><div class="run-meta"><span>${esc(run?.run_id || 'No active run')}</span><span>${run ? '2/2 Tool tasks' : rateWorkbenchState.error ? 'D1 failed' : '0/2 Tool tasks'}</span><span>${trace.length} trace events</span></div></div>
-    <div class="flow-scroll"><div class="flow rate-agent-flow">${nodes.map(([id,meta],index) => {
-      const status = rateNodeStatus(id);
-      return `<article class="node ${status} ${rateWorkbenchState.selectedNode === id ? 'selected' : ''}" data-rate-node="${id}" data-node="${id}"><span class="node-index">${index + 1}</span><strong class="node-name">${esc(meta.name)}</strong><span class="node-icon">${meta.icon}</span><span class="node-status">${status}</span><span class="checkpoint-marker">${id === 'E1' && run?.eval?.passed ? 'EVAL PASS' : ''}</span></article>`;
-    }).join('')}</div></div>`;
+  const latest = [...trace].reverse().find((row) => row.event) || {event:'waiting_for_run'};
+  const graphRows = [['G1','P1','R1'], ['D1','S1'], ['E1']];
+  const graphNode = (id) => {
+    const meta = RATE_NODE_META[id];
+    const status = rateNodeStatus(id);
+    return `<article class="node ${status} ${rateWorkbenchState.selectedNode === id ? 'selected' : ''}" data-rate-node="${id}" data-node="${id}"><span class="node-index">${id}</span><strong class="node-name">${esc(meta.name)}</strong><span class="node-icon">${meta.icon}</span><span class="node-status">${status}</span><span class="checkpoint-marker">${id === 'E1' && run?.eval?.passed ? 'EVAL PASS' : ''}</span></article>`;
+  };
+  overlay.innerHTML = `<div class="execution-head"><div class="execution-title"><h2>Agent Graph</h2><span class="pill ${rateWorkbenchState.busy ? 'running' : run?.eval?.passed ? 'done' : rateWorkbenchState.error ? 'fail' : ''}">${rateWorkbenchState.busy ? 'STREAMING' : run ? 'COMPLETED' : rateWorkbenchState.error ? 'FAILED' : 'IDLE'}</span></div><div class="run-meta"><span>${esc(run?.run_id || 'No active run')}</span><span>${run ? 'D1 → S1 → E1' : rateWorkbenchState.error ? 'D1 failed' : 'waiting'}</span></div></div>
+    <div class="rate-graph-legend"><span><i class="rate-legend-dot ready"></i>ready</span><span><i class="rate-legend-dot running"></i>running</span><span><i class="rate-legend-dot completed"></i>completed</span><span class="rate-graph-note">依赖关系：D1 完成后才允许 S1，S1 完成后才允许 E1</span></div>
+    <div class="rate-agent-graph">${graphRows.map((row, rowIndex) => `<div class="rate-graph-row">${row.map(graphNode).join('<span class="rate-graph-edge">↓</span>')}</div>${rowIndex < graphRows.length - 1 ? '<div class="rate-graph-connector">⋮</div>' : ''}`).join('')}</div>
+    <div class="rate-stream-hud"><div><span class="kicker">LIVE AGENT STREAM</span><strong>${esc(latest.event)}</strong></div><div class="rate-stream-metrics"><span>${trace.length} events</span><span>${esc(latest.task_id || 'Runtime')}</span><span>${rateWorkbenchState.busy ? 'flushing now' : run ? 'stream closed' : 'not started'}</span></div></div>`;
   overlay.querySelectorAll('[data-rate-node]').forEach((node) => node.addEventListener('click', () => {
     rateWorkbenchState.selectedNode = node.dataset.rateNode;
     appState.selectedDetailTab = 'logic';
