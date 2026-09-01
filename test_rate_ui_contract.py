@@ -14,6 +14,9 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn("Agent 运行过程", base)
         self.assertIn("Run One Simulation", source)
         self.assertIn("/api/rates/recovery-demo", source)
+        self.assertIn("/api/rates/idempotency-demo", source)
+        self.assertIn("Idempotent Write", source)
+        self.assertIn("idempotency", source)
         self.assertIn("Run Crash + Resume Demo", source)
         self.assertIn("rate-recovery-launch", source)
         self.assertIn("STATE TRANSITION TIMELINE", source)
@@ -50,7 +53,7 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn("checkpoint_saved", source)
         self.assertIn("process_restarted", source)
         self.assertIn("task_skipped_from_checkpoint", source)
-        self.assertIn("appState.selectedDetailTab = recoveryDemo ? 'state' : 'trace'", source)
+        self.assertIn("appState.selectedDetailTab = (recoveryDemo || idempotencyDemo) ? 'state' : 'trace'", source)
         self.assertIn("child.hidden = child !== overlay", source)
         self.assertNotIn("panel.innerHTML =", source)
 

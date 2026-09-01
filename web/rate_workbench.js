@@ -5,6 +5,10 @@
   link.rel = 'stylesheet';
   link.href = 'rate_workbench.css?v=rate-workbench-v2';
   document.head.appendChild(link);
+  const lessonLink = document.createElement('link');
+  lessonLink.rel = 'stylesheet';
+  lessonLink.href = 'rate_workbench_lesson.css?v=rate-workbench-lesson-v1';
+  document.head.appendChild(lessonLink);
 })();
 
 const rateWorkbenchState = {
@@ -54,7 +58,7 @@ function rateRenderInput() {
   const c = rateWorkbenchState.config;
   overlay.innerHTML = `<div class="input-title"><div><div class="kicker">RATE STRATEGY INPUT</div><h2>一次跑通 2s10s Agent Simulation</h2></div><span class="pill">DETERMINISTIC · PAPER ONLY</span></div>
     <div class="rate-goal"><strong>Goal</strong><span>读取公开 DGS2 / DGS10 → 生成曲线均值回归信号 → 完成一笔历史 paper trade → Eval</span></div>
-    <section class="rate-recovery-launch"><div><div class="kicker">LESSON 1 · STATE / CHECKPOINT / RESUME</div><h3>故障实验：D1 完成后崩溃，再从 S1 恢复</h3><p>一次点击先保存 D1 checkpoint，再模拟进程重启。完成后自动打开 State，让你看到每个状态边界。</p></div><button id="rate-recovery-demo" class="btn primary recovery-cta" ${rateWorkbenchState.busy ? 'disabled' : ''}>▶ Run Crash + Resume Demo</button></section>
+    <section class="rate-recovery-launch"><div><div class="kicker">LESSON 1 · STATE / CHECKPOINT / RESUME</div><h3>故障实验：D1 完成后崩溃，再从 S1 恢复</h3><p>一次点击先保存 D1 checkpoint，再模拟进程重启。完成后自动打开 State，让你看到每个状态边界。</p></div><div class="rate-lesson-actions"><button id="rate-recovery-demo" class="btn primary recovery-cta" ${rateWorkbenchState.busy ? 'disabled' : ''}>▶ Run Crash + Resume Demo</button><button id="rate-idempotency-demo" class="btn" ${rateWorkbenchState.busy ? 'disabled' : ''}>↻ Idempotent Write</button></div></section>
     <div class="rate-config-grid">
       <label>Lookback<input data-rate-field="lookback_days" value="${esc(c.lookback_days)}" inputmode="numeric"><small>observations</small></label>
       <label>Entry z<input data-rate-field="entry_z" value="${esc(c.entry_z)}" inputmode="decimal"><small>absolute threshold</small></label>
@@ -70,6 +74,7 @@ function rateRenderInput() {
   }));
   overlay.querySelector('#rate-run-once')?.addEventListener('click', rateRunOnce);
   overlay.querySelector('#rate-recovery-demo')?.addEventListener('click', () => rateRunOnce('/api/rates/recovery-demo', true));
+  overlay.querySelector('#rate-idempotency-demo')?.addEventListener('click', () => rateRunOnce('/api/rates/idempotency-demo', false, true));
   overlay.querySelector('#rate-export')?.addEventListener('click', rateExportRun);
 }
 
@@ -153,7 +158,8 @@ function rateRenderState() {
   const transitions = trace.filter((row) => transitionLabels[row.event]).map((row) => `<article class="rate-transition-row"><span class="rate-transition-seq">${esc(row.sequence)}</span><div><strong>${esc(transitionLabels[row.event])}</strong><small>${esc(row.task_id || 'Runtime')}${row.next_task ? ` · next ${esc(row.next_task)}` : ''}${row.completed_task_ids ? ` · completed ${esc(row.completed_task_ids.join(', '))}` : ''}</small></div><span class="pill ${row.event === 'run_completed' ? 'done' : 'running'}">${esc(row.event)}</span></article>`).join('');
   if (!run && !rateWorkbenchState.busy && !rateWorkbenchState.error) return '<div class="empty">State appears after a run. 点击上方 Crash + Resume Demo，页面会自动打开这条状态时间线。</div>';
   const currentStatus = run ? (demo ? 'COMPLETED · RESUMED' : run.status) : rateWorkbenchState.busy ? 'RUNNING' : 'FAILED';
-  return `<div class="rate-state-wrap"><div class="kicker">STATE TRANSITION TIMELINE</div><div class="rate-state-timeline">${stateSteps.map((step) => `<article class="rate-state-step ${step.done ? 'done' : ''} ${step.active ? 'active' : ''}"><span class="rate-state-dot"></span><strong>${esc(step.label)}</strong><small>${esc(step.hint)}</small></article>`).join('')}</div><p class="rate-state-caption">${demo ? '这次 Run 将故障恢复过程作为可观察状态：D1 只执行一次，S1 从已保存边界继续。' : '普通 Run 只有运行与完成状态；需要看到持久化恢复边界时，请运行上方故障实验。'}</p><div class="state-grid"><section class="state-card"><div class="kicker">STATE · NOW</div><h4>Current Runtime View</h4><dl class="kv"><dt>run.status</dt><dd>${esc(currentStatus)}</dd><dt>phase</dt><dd>${esc(run?.state?.phase || 'D1')}</dd><dt>current task</dt><dd>${esc(run?.state?.current_task || (demo ? 'none · resumed' : 'D1'))}</dd><dt>completed</dt><dd>${esc((run?.state?.completed_tasks || []).join(', ') || 'none')}</dd><dt>trace events</dt><dd>${trace.length}</dd><dt>recovery mode</dt><dd>${demo ? 'Crash + Resume' : 'single run'}</dd></dl></section><section class="state-card"><div class="kicker">CHECKPOINT · DURABILITY</div><h4>恢复边界</h4><dl class="kv"><dt>checkpoint count</dt><dd>${esc(run?.recovery?.checkpoint_count ?? '—')}</dd><dt>crashed after</dt><dd>${esc(run?.recovery?.crashed_after || '—')}</dd><dt>D1 executions</dt><dd>${esc(run?.recovery?.d1_executions ?? '—')}</dd><dt>resumed</dt><dd>${esc(run?.recovery?.resumed ?? false)}</dd><dt>checkpoint status</dt><dd>${demo ? 'DURABLE' : 'not enabled'}</dd></dl></section><section class="state-card"><div class="kicker">GUARDRAILS</div><h4>Execution Boundary</h4><dl class="kv"><dt>paper only</dt><dd>${run?.guardrails?.paper_only ?? '—'}</dd><dt>broker connection</dt><dd>${run?.guardrails?.broker_connection ?? '—'}</dd><dt>automatic execution</dt><dd>${run?.guardrails?.automatic_execution ?? '—'}</dd><dt>LLM model</dt><dd>${esc(run?.architecture?.model || 'none_deterministic_v1')}</dd><dt>lookahead</dt><dd>${run?.simulation?.guardrails?.lookahead_used_for_entry_signal ?? '—'}</dd></dl></section></div>${transitions ? `<section class="rate-transition-list"><div class="kicker">OBSERVED TRANSITIONS</div>${transitions}</section>` : ''}</div>`;
+  const idem = run?.idempotency;
+  return `<div class="rate-state-wrap"><div class="kicker">STATE TRANSITION TIMELINE</div><div class="rate-state-timeline">${stateSteps.map((step) => `<article class="rate-state-step ${step.done ? 'done' : ''} ${step.active ? 'active' : ''}"><span class="rate-state-dot"></span><strong>${esc(step.label)}</strong><small>${esc(step.hint)}</small></article>`).join('')}</div><p class="rate-state-caption">${demo ? '这次 Run 将故障恢复过程作为可观察状态：D1 只执行一次，S1 从已保存边界继续。' : idem ? '这次实验把同一写入命令提交两次：第二次由幂等键拦截，不新增 ledger event。' : '普通 Run 只有运行与完成状态；需要看到持久化恢复边界时，请运行上方故障实验。'}</p><div class="state-grid"><section class="state-card"><div class="kicker">STATE · NOW</div><h4>Current Runtime View</h4><dl class="kv"><dt>run.status</dt><dd>${esc(currentStatus)}</dd><dt>phase</dt><dd>${esc(run?.state?.phase || 'D1')}</dd><dt>current task</dt><dd>${esc(run?.state?.current_task || (demo ? 'none · resumed' : 'D1'))}</dd><dt>completed</dt><dd>${esc((run?.state?.completed_tasks || []).join(', ') || 'none')}</dd><dt>trace events</dt><dd>${trace.length}</dd><dt>recovery mode</dt><dd>${demo ? 'Crash + Resume' : idem ? 'Idempotent command' : 'single run'}</dd></dl></section><section class="state-card"><div class="kicker">CHECKPOINT · DURABILITY</div><h4>恢复边界</h4><dl class="kv"><dt>checkpoint count</dt><dd>${esc(run?.recovery?.checkpoint_count ?? '—')}</dd><dt>crashed after</dt><dd>${esc(run?.recovery?.crashed_after || '—')}</dd><dt>D1 executions</dt><dd>${esc(run?.recovery?.d1_executions ?? '—')}</dd><dt>resumed</dt><dd>${esc(run?.recovery?.resumed ?? false)}</dd><dt>checkpoint status</dt><dd>${demo ? 'DURABLE' : 'not enabled'}</dd></dl></section>${idem ? `<section class="state-card"><div class="kicker">COMMAND · IDEMPOTENCY</div><h4>副作用只发生一次</h4><dl class="kv"><dt>key</dt><dd>${esc(idem.idempotency_key)}</dd><dt>attempts</dt><dd>${esc(idem.attempts.join(' → '))}</dd><dt>applied attempts</dt><dd>${esc(idem.applied_attempts)}</dd><dt>ledger events</dt><dd>${esc(idem.ledger_event_count)}</dd></dl></section>` : ''}<section class="state-card"><div class="kicker">GUARDRAILS</div><h4>Execution Boundary</h4><dl class="kv"><dt>paper only</dt><dd>${run?.guardrails?.paper_only ?? '—'}</dd><dt>broker connection</dt><dd>${run?.guardrails?.broker_connection ?? '—'}</dd><dt>automatic execution</dt><dd>${run?.guardrails?.automatic_execution ?? '—'}</dd><dt>LLM model</dt><dd>${esc(run?.architecture?.model || 'none_deterministic_v1')}</dd><dt>lookahead</dt><dd>${run?.simulation?.guardrails?.lookahead_used_for_entry_signal ?? '—'}</dd></dl></section></div>${transitions ? `<section class="rate-transition-list"><div class="kicker">OBSERVED TRANSITIONS</div>${transitions}</section>` : ''}</div>`;
 }
 
 function rateRenderCheckpoint() {
@@ -246,7 +252,7 @@ function rateRestoreOriginalPanels() {
   if (tabs) tabs.hidden = false;
 }
 
-async function rateRunOnce(endpoint='/api/rates/run-once', recoveryDemo=false) {
+async function rateRunOnce(endpoint='/api/rates/run-once', recoveryDemo=false, idempotencyDemo=false) {
   rateWorkbenchState.busy = true;
   rateWorkbenchState.error = null;
   rateWorkbenchState.run = null;
@@ -267,9 +273,9 @@ async function rateRunOnce(endpoint='/api/rates/run-once', recoveryDemo=false) {
     }
     rateWorkbenchState.run = payload.run;
     rateWorkbenchState.selectedNode = 'E1';
-    appState.selectedDetailTab = recoveryDemo ? 'state' : 'trace';
+    appState.selectedDetailTab = (recoveryDemo || idempotencyDemo) ? 'state' : 'trace';
     appState.selectedInspectorTab = recoveryDemo ? 'checkpoint' : 'eval';
-    toast(`${recoveryDemo ? 'Recovery demo completed' : 'Rate Agent completed'} · ${payload.run.eval.passed ? 'EVAL PASS' : 'EVAL FAIL'}`);
+    toast(`${recoveryDemo ? 'Recovery demo completed' : idempotencyDemo ? 'Idempotency demo completed' : 'Rate Agent completed'} · ${payload.run.eval.passed ? 'EVAL PASS' : 'EVAL FAIL'}`);
   } catch (error) {
     rateWorkbenchState.error = error.message;
     rateWorkbenchState.failureTrace = error.trace || [];

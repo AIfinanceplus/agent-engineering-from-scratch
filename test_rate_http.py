@@ -148,6 +148,15 @@ class RateHTTPTests(unittest.TestCase):
         self.assertIn("task_skipped_from_checkpoint", events)
         self.assertTrue(run["eval"]["passed"])
 
+    def test_idempotency_demo_applies_same_command_once(self):
+        status, _, payload = self.post({}, "/api/rates/idempotency-demo")
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+        idem = payload["run"]["idempotency"]
+        self.assertEqual(idem["attempts"], ["APPLIED", "DEDUPLICATED"])
+        self.assertEqual(idem["applied_attempts"], 1)
+        self.assertEqual(idem["ledger_event_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

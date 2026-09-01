@@ -8,6 +8,7 @@ import tempfile
 
 from rate_agent import RateSimulatedCrash, RateStrategyAgent
 from rate_checkpoint import RateCheckpointStore
+from rate_commands import RateIdempotencyStore
 from serve_r12 import R12VisualizerHandler
 
 
@@ -20,7 +21,7 @@ class RateStrategyHandler(R12VisualizerHandler):
     extra_scripts = (*R12VisualizerHandler.extra_scripts, "rate_workbench.js")
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
@@ -28,6 +29,8 @@ class RateStrategyHandler(R12VisualizerHandler):
         if self.path != "/api/rates/run-once":
             if self.path == "/api/rates/recovery-demo":
                 return self._run_recovery_demo(request_data)
+            if self.path == "/api/rates/idempotency-demo":
+                return self._run_idempotency_demo(request_data)
         try:
             run = RATE_AGENT.run_once(
                 lookback_days=request_data.get("lookback_days", 60),
@@ -109,6 +112,42 @@ class RateStrategyHandler(R12VisualizerHandler):
             {"ok": False, "action": "rate_strategy_recovery_demo",
              "error": {"code": "RECOVERY_DEMO_DID_NOT_CRASH", "message": "demo did not reach crash boundary"}},
         )
+
+    def _run_idempotency_demo(self, request_data):
+        """Show that the same state-changing command is applied only once."""
+        try:
+            run = RATE_AGENT.run_once(
+                lookback_days=request_data.get("lookback_days", 60),
+                entry_z=request_data.get("entry_z", 1.0),
+                holding_days=request_data.get("holding_days", 20),
+                dv01_usd_per_bp=request_data.get("dv01_usd_per_bp", 100.0),
+                round_trip_cost_bps=request_data.get("round_trip_cost_bps", 1.0),
+                start_date=request_data.get("start_date"),
+            )
+            with tempfile.TemporaryDirectory(prefix="rate-idempotency-demo-") as directory:
+                store = RateIdempotencyStore(directory)
+                key = f"{run['run_id']}:PAPER-FILL"
+                command = {"action": "record_paper_fill", "paper_trade_id": run["simulation"]["completed_trade"]["paper_trade_id"]}
+                first = store.execute_once(key, command)
+                second = store.execute_once(key, command)
+            run["idempotency"] = {
+                "demo": True,
+                "idempotency_key": key,
+                "attempts": [first["status"], second["status"]],
+                "applied_attempts": int(first["applied"]) + int(second["applied"]),
+                "ledger_event_count": second["record"]["effect_count"],
+                "same_command": True,
+            }
+            return self._send_eval_json(
+                200,
+                {"ok": True, "action": "rate_strategy_idempotency_demo", "run": run},
+            )
+        except Exception as exc:
+            return self._send_eval_json(
+                400,
+                {"ok": False, "action": "rate_strategy_idempotency_demo",
+                 "error": {"code": exc.__class__.__name__, "message": str(exc)}},
+            )
 
 
 def main() -> None:
