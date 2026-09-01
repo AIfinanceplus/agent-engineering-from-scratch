@@ -39,6 +39,18 @@ class RateSourceError(RuntimeError):
     """No public source could provide a usable aligned history."""
 
 
+def load_bundled_rate_history(start_date: str) -> dict:
+    """Explicit offline lesson mode; never pretend a snapshot is a live fetch."""
+    _iso_date(start_date, "start_date")
+    rows = _parse_snapshot_csv(SNAPSHOT_PATH.read_text(encoding="utf-8"), start_date)
+    return _artifact(
+        rows, start_date=start_date, provider="U.S. Treasury",
+        source_mode="bundled_snapshot", source_attempts=[
+            _source_attempt("U.S. Treasury", "bundled_snapshot", "SELECTED")
+        ], fallback_used=False, snapshot_captured_at=SNAPSHOT_CAPTURED_AT,
+    )
+
+
 class FredCurveHistorySource:
     """Backward-compatible name for the new multi-source curve adapter."""
 

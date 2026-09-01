@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { NODES, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+const { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
 
 function setup() {
   const state = createState();
@@ -81,6 +81,7 @@ test('disconnect preserves events and does not claim nodes completed', () => {
   assert.equal(state.events.length, 4);
   assert.equal(state.nodes.D1, 'failed');
   assert.equal(state.nodes.S1, 'blocked');
+  assert.deepEqual(state.activeTasks, []);
 });
 
 test('calls and results expose full payloads, including all historical observations', () => {
@@ -92,4 +93,38 @@ test('calls and results expose full payloads, including all historical observati
   assert.equal(result.payload.observations.length, 746);
   assert.match(result.description, /SNAPSHOT/);
   assert.equal(describe({ event: 'eval_completed', passed: false, output: { checks: { no_real_orders: false } } }).kind, 'error');
+});
+
+test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  assert.deepEqual(PARALLEL_ROWS[4], ['A2', 'A10']);
+  emit('task_started', 'A2');
+  emit('task_started', 'A10');
+  assert.deepEqual(state.activeTasks, ['A2', 'A10']);
+  emit('task_completed', 'A10');
+  emit('join_waiting', 'J1', { completed_dependencies: ['A10'], waiting_for: ['A2'], required: 2 });
+  assert.deepEqual(state.activeTasks, ['A2']);
+  assert.equal(state.nodes.A2, 'running');
+  assert.equal(state.nodes.J1, 'waiting');
+  assert.equal(state.join.completed.length, 1);
+  emit('task_completed', 'A2');
+  emit('join_released', 'J1');
+  assert.equal(state.nodes.J1, 'ready');
+});
+
+test('branch failure does not falsely complete or fail its still-running sibling', () => {
+  const { state, emit, message } = setup();
+  state.nodes.A2 = 'waiting'; state.nodes.A10 = 'waiting'; state.nodes.J1 = 'waiting';
+  emit('task_started', 'A2'); emit('task_started', 'A10');
+  emit('task_failed', 'A10');
+  emit('join_blocked', 'J1');
+  assert.equal(state.nodes.A2, 'running');
+  assert.deepEqual(state.activeTasks, ['A2']);
+  emit('task_completed', 'A2');
+  applyMessage(state, message('error', { error: { task_id: 'A10', message: 'branch failed' } }));
+  assert.equal(state.nodes.A2, 'completed');
+  assert.equal(state.nodes.A10, 'failed');
+  assert.equal(state.nodes.J1, 'blocked');
+  assert.equal(state.nodes.S1, 'blocked');
 });

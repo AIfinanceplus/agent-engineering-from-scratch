@@ -11,15 +11,17 @@ from uuid import uuid4
 from rate_agent import RateSimulatedCrash, RateStrategyAgent
 from rate_checkpoint import RateCheckpointStore
 from rate_commands import RateIdempotencyStore
+from rate_parallel import RateParallelAgent
 from r7_streaming import encode_stream_message
 from serve_r12 import R12VisualizerHandler
 
 
 RATE_AGENT = RateStrategyAgent()
+PARALLEL_RATE_AGENT = RateParallelAgent()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V1"
+    version_label = "RATE-CONSOLE-V2-PARALLEL"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -191,8 +193,11 @@ class RateStrategyHandler(R12VisualizerHandler):
             send("event", event=event)
 
         try:
-            send("start", strategy="2s10s")
-            run = RATE_AGENT.run_once(
+            parallel = request_data.get("execution_mode", "serial") == "parallel"
+            send("start", strategy="2s10s", execution_mode="parallel" if parallel else "serial")
+            agent = PARALLEL_RATE_AGENT if parallel else RATE_AGENT
+            options = {"demo_scenario": request_data.get("demo_scenario", "live")} if parallel else {}
+            run = agent.run_once(
                 run_id=run_id,
                 lookback_days=request_data.get("lookback_days", 60),
                 entry_z=request_data.get("entry_z", 1.0),
@@ -201,6 +206,7 @@ class RateStrategyHandler(R12VisualizerHandler):
                 round_trip_cost_bps=request_data.get("round_trip_cost_bps", 1.0),
                 start_date=request_data.get("start_date"),
                 event_sink=observe,
+                **options,
             )
             send("result", result=run)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
@@ -213,6 +219,7 @@ class RateStrategyHandler(R12VisualizerHandler):
                         streamed_events[-1].get("task_id") if streamed_events else None
                     ),
                     "trace": streamed_events,
+                    "failures": getattr(exc, "failures", {}),
                 })
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
@@ -222,10 +229,11 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V1")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V2-PARALLEL")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
-    print("Strategy workspace: D1 resilient public rates -> S1 explicit rule -> E1 paper simulation eval")
+    print("Lesson: D1 bulk data -> A2 / A10 concurrent branches -> J1 all-success Join -> S1 -> E1")
+    print("Default UI mode is an explicitly disclosed snapshot + timing/failure teaching demo")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

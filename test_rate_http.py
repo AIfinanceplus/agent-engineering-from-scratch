@@ -6,6 +6,7 @@ from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
 from rate_agent import RateStrategyAgent
+from rate_parallel import RateParallelAgent, prepare_rate_series
 from rate_sources import FredCurveHistorySource
 import serve_rates
 from serve_rates import RateStrategyHandler
@@ -98,8 +99,8 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=1", html)
-        self.assertIn("rate_console_core.js?v=1", html)
+        self.assertIn("rate_console.js?v=2", html)
+        self.assertIn("rate_console_core.js?v=2", html)
         self.assertNotIn("rate_workbench.js", html)
         self.assertNotIn("r12_step7.js", html)
         self.assertNotIn("data-detail-tab", html)
@@ -159,6 +160,43 @@ class RateHTTPTests(unittest.TestCase):
         first = self.post_stream({})[2]
         second = self.post_stream({})[2]
         self.assertNotEqual(first[0]["run_id"], second[0]["run_id"])
+
+    def test_parallel_stream_reports_join_waiting_before_slow_branch_returns(self):
+        release = threading.Event()
+        barrier = threading.Barrier(2, timeout=3)
+
+        def prepare(**arguments):
+            barrier.wait()
+            if arguments["series_id"] == "DGS2" and not release.wait(3):
+                raise TimeoutError("test release not received")
+            return prepare_rate_series(**arguments)
+
+        agent = RateParallelAgent({"fetch_public_rate_history": lambda **_: completed_steepener_history(),
+                                   "prepare_rate_series": prepare})
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=3)
+        with patch.object(serve_rates, "PARALLEL_RATE_AGENT", agent):
+            try:
+                connection.request("POST", "/api/rates/stream", body=b'{"execution_mode":"parallel"}',
+                                   headers={"Content-Type": "application/json"})
+                response = connection.getresponse()
+                messages = []
+                while True:
+                    message = json.loads(response.readline())
+                    messages.append(message)
+                    event = message.get("event", {})
+                    if event.get("event") == "join_waiting" and event["completed_dependencies"] == ["A10"]:
+                        break
+                self.assertEqual(messages[0]["execution_mode"], "parallel")
+                self.assertFalse(release.is_set())
+                release.set()
+                messages.extend(json.loads(line) for line in response.read().splitlines())
+            finally:
+                release.set()
+                connection.close()
+        self.assertEqual(messages[-1]["type"], "result")
+        run = messages[-1]["result"]
+        self.assertEqual([m["event"] for m in messages if m["type"] == "event"], run["trace"])
+        self.assertEqual(run["architecture"]["join_policy"], "all_success")
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

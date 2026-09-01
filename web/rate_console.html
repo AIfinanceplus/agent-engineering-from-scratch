@@ -5,14 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=1">
-  <script defer src="/rate_console_core.js?v=1"></script>
-  <script defer src="/rate_console.js?v=1"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=2">
+  <script defer src="/rate_console_core.js?v=2"></script>
+  <script defer src="/rate_console.js?v=2"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>2s10s 利率策略 <span>/</span> 确定性 Agent · 仅模拟</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>并发与汇合 <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
     <div class="controls">
+      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
         <form id="parameters" class="parameter-panel">
@@ -32,16 +33,16 @@
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="run-id" id="run-id">等待开始一次运行</span></div>
     <div class="workspace">
       <section class="graph-panel" aria-labelledby="graph-title">
-        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag">6 nodes</span></div>
+        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">9 nodes</span></div>
         <div class="graph-canvas"><div class="graph-nodes" id="graph-nodes" aria-label="Agent 工作流节点"></div></div>
-        <div class="graph-caption"><span class="legend-dot"></span><span>状态由运行事件驱动 · 点击节点筛选右侧事件</span></div>
+        <div class="graph-caption"><span class="legend-dot"></span><span>并发 2 · Join 等两边成功 · 点击节点筛选事件</span></div>
       </section>
 
       <section class="stream-panel" aria-labelledby="stream-title">
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
         <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
         <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
-          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>看见 Agent 的每一步</h3><p>点击 Run Agent，节点状态与执行事件将同步出现。<br>展开任意事件，查看完整输入、输出或错误。</p><span>Real events. Full context.</span></div>
+          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>看见两个分支同时运行</h3><p>观察 A2 / A10 并发执行、Join 从 0/2 走到 2/2。<br>默认使用公开历史快照和明确的教学延时。</p><span>Fan-out. Wait. Fan-in.</span></div>
           <ol id="event-list" class="event-list" aria-label="运行事件"></ol>
           <p id="filter-empty" class="filter-empty" hidden>此节点尚未产生事件。</p>
         </div>

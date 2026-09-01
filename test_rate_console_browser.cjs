@@ -12,6 +12,7 @@ import json, time
 from http.server import ThreadingHTTPServer
 import serve_rates
 from rate_agent import RateStrategyAgent
+from rate_parallel import RateParallelAgent
 from test_rate_strategy import completed_steepener_history
 def fetch(start_date):
     time.sleep(0.7)
@@ -19,6 +20,7 @@ def fetch(start_date):
     result.update(provider="TEST FIXTURE", source_freshness="TEST FIXTURE")
     return result
 serve_rates.RATE_AGENT = RateStrategyAgent({"fetch_public_rate_history": fetch})
+serve_rates.PARALLEL_RATE_AGENT = RateParallelAgent({"fetch_public_rate_history": fetch})
 server = ThreadingHTTPServer(("127.0.0.1", 0), serve_rates.RateStrategyHandler)
 print(server.server_address[1], flush=True)
 server.serve_forever()
@@ -38,16 +40,18 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 6);
+    assert.equal(await page.locator('.graph-node').count(), 9);
     assert.equal(await page.locator('script').count(), 2);
+    await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
     await page.locator('#run-button').click();
     await page.waitForSelector('[data-node="D1"][data-status="running"]');
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 6);
-    assert.equal(await page.locator('.event-row').count(), 19);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 9);
+    const eventCount = await page.locator('.event-row').count();
+    assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
     assert.match(await page.locator('#source-note').innerText(), /TEST FIXTURE/);
     await page.locator('.graph-node[data-node="D1"]').click();
@@ -57,7 +61,7 @@ server.serve_forever()
     assert.match(await result.locator('pre').innerText(), /observations/);
     assert.match(await result.locator('pre').innerText(), /2026-03-22/);
     await page.locator('#clear-filter').click();
-    assert.equal(await page.locator('.event-row:visible').count(), 19);
+    assert.equal(await page.locator('.event-row:visible').count(), eventCount);
     if (process.env.SCREENSHOT_DIR) {
       await page.locator('#follow').uncheck();
       await page.locator('#stream-scroll').evaluate(el => { el.scrollTop = 0; });
@@ -86,6 +90,26 @@ server.serve_forever()
     assert.match(await page.locator('#stream-footer').innerText(), /未收到最终结果/);
     await page.unroute('**/api/rates/stream');
 
+    await page.locator('#settings summary').click();
+    await page.locator('[name="holding_days"]').fill('20');
+    await page.locator('#scenario').selectOption('two_year_slow');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('.graph-node[data-node="A2"][data-status="running"]');
+    await page.waitForSelector('.graph-node[data-node="A10"][data-status="running"]');
+    await page.waitForSelector('.graph-node[data-node="A10"][data-status="completed"]');
+    assert.equal(await page.locator('.graph-node[data-node="A2"]').getAttribute('data-status'), 'running');
+    await page.waitForFunction(() => document.querySelector('[data-node="J1"] .node-status').textContent === '等待 1/2');
+    if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-parallel-waiting.png`, fullPage: true });
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    assert.match(await page.locator('#source-note').innerText(), /离线快照/);
+    await page.locator('#scenario').selectOption('ten_year_fail');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('.graph-node[data-node="A10"][data-status="failed"]');
+    assert.equal(await page.locator('.graph-node[data-node="A2"]').getAttribute('data-status'), 'running');
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.equal(await page.locator('.graph-node[data-node="A2"]').getAttribute('data-status'), 'completed');
+    assert.equal(await page.locator('.graph-node[data-node="J1"]').getAttribute('data-status'), 'blocked');
+
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(url);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
@@ -94,7 +118,7 @@ server.serve_forever()
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-mobile.png`, fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('Browser PASS: real incremental events, all nodes, full Tool results, filtering, export, rerun, failure, truncated stream, responsive layout. Fixture data only.');
+    console.log('Browser PASS: real concurrent branches, Join 1/2, sibling drain on failure, complete stream, filtering, export, rerun, truncated stream, responsive layout. Fixture/snapshot teaching data only.');
   } finally {
     if (browser) await browser.close();
     server.kill();

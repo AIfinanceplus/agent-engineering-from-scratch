@@ -385,9 +385,10 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost.
-2. Follow the real, serial workflow: Goal → Planner → Runtime → D1 → S1 → E1.
-   Runtime remains active while it orchestrates the Tool nodes. No LLM or
-   parallel execution is implied.
+2. Follow Goal → Planner → Runtime → D1 → **A2 / A10 concurrently** → J1 → S1 → E1.
+   D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
+   and 10Y series; J1 checks that both came from the same run and source batch.
+   S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
 3. The stream includes every emitted node event, registry lookup, validation,
    Tool call (full arguments), Tool result (full output), retry and Eval result.
    Expand a row to inspect JSON; no observations are truncated.
@@ -402,7 +403,35 @@ one unique run ID per request and consecutive event sequence numbers. A closed
 connection without a terminal result/error is not considered success. Source
 attempt details are reported when D1 returns, not during individual network reads.
 The console observes execution; closing its browser does not provide a durable
-cancel/resume contract.
+cancel/resume contract. The UI now requests `execution_mode="parallel"`; omitted
+mode retains the previous serial API for compatibility. Existing serial
+checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
+recovery is not implemented in this lesson.
+
+### Current lesson: concurrency and the all-success Join
+
+Only one new concept is introduced: independent tasks may run together, but a
+dependent task must wait for **all required successful results**. Runtime uses at
+most two worker threads per run. Workers send events through a queue; one owner
+assigns event sequence numbers, updates run state and writes the HTTP stream.
+This is concurrent scheduling, not a claim of CPU speedup under the Python GIL.
+
+The compact scenario selector has four choices:
+
+| Scenario | Data / timing | Observe |
+| --- | --- | --- |
+| 演示 · 2Y 较慢 (default) | Official bundled snapshot; A2 waits 2s, A10 waits 0.4s | Both run; A10 completes; Join waits 1/2 for A2 |
+| 演示 · 10Y 较慢 | Same snapshot; reverse the delays | Completion order reverses; Join still waits for both |
+| 演示 · 10Y 失败 | Same snapshot; explicit A10 fault after 0.4s | A2 finishes; J1/S1/E1 never execute |
+| 公开数据 · 无注入 | Original FRED → Treasury → disclosed snapshot fallback | No injected delay or failure; fast branches may finish too quickly to see overlap |
+
+The delays and injected failures are recorded as `demo_*` events. Tools really
+execute; the UI never replays an animation as a live run. On branch failure we
+drain the already-running read-only sibling, then return a failure with its
+completed results still in the trace. We do not claim to cancel a running Tool.
+
+Core check: **“One branch finished” is not the same as “Join may proceed.”**
+Try both speed orders, then the failure scenario, without changing the strategy.
 
 Visualization is a required design consideration for every new Agent lesson:
 show real state transitions and inspectable inputs/outputs, keep the default
@@ -422,7 +451,7 @@ web/rate_workbench.js        retained historical rate overlay
 To revisit the advanced event-market experiment, run `python3 serve_r12.py`.
 
 Console checks: `node --test test_rate_console.cjs` and
-`python3 -m unittest test_rate_http test_rate_agent test_rate_ui_contract`.
+`python3 -m unittest test_rate_http test_rate_agent test_rate_parallel test_rate_ui_contract`.
 For the optional real-browser smoke test, install Playwright in your test
 environment and run `CHROMIUM_EXECUTABLE=/path/to/chromium node test_rate_console_browser.cjs`.
 That test starts a temporary local HTTP server with explicitly labelled fixture

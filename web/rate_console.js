@@ -1,9 +1,9 @@
 (function () {
   'use strict';
-  const { NODES, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
+  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
-  const labels = { waiting: '待执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行' };
-  let state = createState();
+  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行' };
+  let state = createState('parallel');
   let inFlight = false;
   let filter = null;
   const rows = [];
@@ -16,27 +16,56 @@
     if (text !== undefined) el.textContent = text;
     return el;
   }
-  NODES.forEach((node, index) => {
-    const button = element('button', 'graph-node');
-    button.type = 'button';
-    button.dataset.node = node.id;
-    button.setAttribute('aria-pressed', 'false');
-    button.append(element('span', 'node-id', node.id));
-    const text = element('span', 'node-text');
-    text.append(element('span', 'node-title', node.title), element('span', 'node-description', node.description));
-    button.append(text, element('span', 'node-status'));
-    button.addEventListener('click', () => { filter = filter === node.id ? null : node.id; update(); });
-    nodeElements.set(node.id, button);
-    byId('graph-nodes').append(button);
-    if (index < NODES.length - 1) {
-      const edge = element('div', 'graph-edge');
-      edge.setAttribute('aria-hidden', 'true');
-      // Static markup only; all event and Tool data use textContent.
-      edge.innerHTML = '<svg viewBox="0 0 12 22" fill="none"><path d="M6 0v20m-3-4 3 4 3-4" stroke="currentColor" stroke-width="1.2"/></svg>';
-      byId('graph-nodes').append(edge);
-      edgeElements.push(edge);
-    }
-  });
+  const definitions = () => state.mode === 'parallel' ? PARALLEL_NODES : NODES;
+  function buildGraph() {
+    nodeElements.clear();
+    edgeElements.length = 0;
+    byId('graph-nodes').replaceChildren();
+    byId('graph-nodes').classList.toggle('parallel-graph', state.mode === 'parallel');
+    byId('node-count').textContent = `${definitions().length} nodes`;
+    const graphRows = state.mode === 'parallel' ? PARALLEL_ROWS : NODES.map(n => [n.id]);
+    graphRows.forEach((ids, index) => {
+      const row = element('div', ids.length > 1 ? 'graph-row branch-row' : 'graph-row');
+      byId('graph-nodes').append(row);
+      for (const id of ids) {
+        const node = definitions().find(n => n.id === id);
+        const button = element('button', 'graph-node');
+        button.type = 'button';
+        button.dataset.node = node.id;
+        button.setAttribute('aria-pressed', 'false');
+        button.append(element('span', 'node-id', node.id));
+        const text = element('span', 'node-text');
+        text.append(element('span', 'node-title', node.title), element('span', 'node-description', node.description));
+        button.append(text, element('span', 'node-status'));
+        button.addEventListener('click', () => { filter = filter === node.id ? null : node.id; update(); });
+        nodeElements.set(node.id, button);
+        row.append(button);
+      }
+      if (index < graphRows.length - 1) {
+        const edge = element('div', 'graph-edge');
+        edge.setAttribute('aria-hidden', 'true');
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('viewBox', '0 0 100 24');
+        svg.setAttribute('preserveAspectRatio', 'none');
+        const nextIds = graphRows[index + 1];
+        ids.forEach((from, fromIndex) => nextIds.forEach((to, toIndex) => {
+          const x1 = ids.length === 1 ? 50 : 25 + 50 * fromIndex;
+          const x2 = nextIds.length === 1 ? 50 : 25 + 50 * toIndex;
+          const path = document.createElementNS(svg.namespaceURI, 'path');
+          path.setAttribute('d', `M${x1} 0V12H${x2}V23M${x2 - 1.3} 19L${x2} 23L${x2 + 1.3} 19`);
+          path.setAttribute('fill', 'none');
+          path.setAttribute('stroke', 'currentColor');
+          path.setAttribute('stroke-width', '1');
+          path.setAttribute('vector-effect', 'non-scaling-stroke');
+          svg.append(path);
+          edgeElements.push({ element: path, from, to });
+        }));
+        edge.append(svg);
+        byId('graph-nodes').append(edge);
+      }
+    });
+  }
+  buildGraph();
 
   function addDetails(row, label, payload) {
     const details = element('details', 'event-details');
@@ -64,22 +93,24 @@
     for (const [id, button] of nodeElements) {
       button.dataset.status = state.nodes[id];
       button.setAttribute('aria-pressed', String(filter === id));
-      button.querySelector('.node-status').textContent = labels[state.nodes[id]];
-      button.setAttribute('aria-label', `${id} ${NODES.find(n => n.id === id).title} · ${labels[state.nodes[id]]} · 筛选事件`);
+      const statusLabel = id === 'J1' && state.nodes.J1 === 'waiting' ? `等待 ${state.join.completed.length}/2` : labels[state.nodes[id]];
+      button.querySelector('.node-status').textContent = statusLabel;
+      button.setAttribute('aria-label', `${id} ${definitions().find(n => n.id === id).title} · ${statusLabel} · 筛选事件`);
     }
-    edgeElements.forEach((edge, i) => { edge.dataset.active = String(state.nodes[NODES[i + 1].id] !== 'waiting' && state.nodes[NODES[i + 1].id] !== 'blocked'); });
+    edgeElements.forEach(edge => { edge.element.dataset.active = String(state.nodes[edge.from] === 'completed' && !['waiting', 'blocked'].includes(state.nodes[edge.to])); });
     const phases = { idle: 'Ready to run', connecting: 'Connecting', running: 'Agent running', completed: 'Run completed', failed: 'Run failed' };
     byId('run-status').dataset.phase = state.phase;
     byId('run-status').querySelector('span').textContent = phases[state.phase];
     byId('run-id').textContent = state.runId || (inFlight ? '正在连接 Runtime…' : '等待开始一次运行');
     byId('event-count').textContent = state.events.length;
     byId('empty-state').hidden = rows.length > 0 || !!filter;
-    byId('stream-scope').textContent = filter ? `${filter} · ${NODES.find(n => n.id === filter).title}` : '全部节点 · 调用 · 结果';
+    byId('stream-scope').textContent = filter ? `${filter} · ${definitions().find(n => n.id === filter).title}` : `全部节点 · 调用 · 结果${state.activeTasks.length ? ` · 活跃 ${state.activeTasks.length}` : ''}`;
     byId('clear-filter').hidden = !filter;
     rows.forEach(row => { row.hidden = !!filter && row.dataset.node !== filter && !(filter === 'R1' && row.dataset.node === 'END'); });
     byId('filter-empty').hidden = !filter || rows.some(row => !row.hidden);
     byId('download').disabled = !state.events.length;
     byId('run-button').disabled = inFlight;
+    byId('scenario').disabled = inFlight;
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
     byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : state.phase === 'completed' ? '事件流已完成 · 完整输入与输出已保留' : inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件';
@@ -92,7 +123,9 @@
     byId('source-note').textContent = `${data.provider || '公开利率数据'} · ${data.source_freshness === 'SNAPSHOT' ? '离线快照（非实时）' : data.source_freshness || '来源见结果'} · 截至 ${data.as_of || '未知'}`;
   }
   function receive(message) {
+    const oldMode = state.mode;
     applyMessage(state, message);
+    if (oldMode !== state.mode) buildGraph();
     if (message.type === 'event') {
       addRow(message.event, describe(message.event));
       if (message.event.event === 'tool_observation' && message.event.task_id === 'D1') showSource(message.event.output);
@@ -111,15 +144,17 @@
     if (!form.checkValidity()) { byId('settings').open = true; form.reportValidity(); return; }
     const config = Object.fromEntries(new FormData(form).entries());
     for (const key of Object.keys(config)) config[key] = Number(config[key]);
+    config.execution_mode = 'parallel';
+    config.demo_scenario = byId('scenario').value;
     inFlight = true;
-    state = createState();
+    state = createState('parallel');
     state.phase = 'connecting';
     filter = null;
     rows.length = 0;
     byId('event-list').replaceChildren();
     byId('settings').open = false;
     byId('follow').checked = true;
-    byId('source-note').textContent = '数据来源及快照状态将在 D1 结果中披露';
+    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
     update();
     let reader;
     try {
@@ -162,6 +197,9 @@
     }
   }
   byId('run-button').addEventListener('click', run);
+  byId('scenario').addEventListener('change', () => {
+    if (!state.runId) byId('source-note').textContent = byId('scenario').value === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+  });
   byId('parameters').addEventListener('submit', event => { event.preventDefault(); run(); });
   byId('clear-filter').addEventListener('click', () => { filter = null; update(); });
   byId('follow').addEventListener('change', scrollToLatest);
