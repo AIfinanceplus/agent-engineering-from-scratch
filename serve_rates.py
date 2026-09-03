@@ -23,7 +23,7 @@ RUN_CONTROLS = RunControlRegistry()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V5-REPLANNING"
+    version_label = "RATE-CONSOLE-V6-MODEL-AUTHORITY"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -265,12 +265,12 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V5-REPLANNING")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V6-MODEL-AUTHORITY")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
-    print("Graph: C1 guards D1 -> V1 validates Observation -> Q1 admits A2 / A10 -> J1 -> S1 -> E1")
-    print("Default UI mode is a disclosed snapshot + invalid Observation + bounded replan teaching demo")
-    print("New lesson: bounded replanning + plan fingerprint loop detection")
+    print("Graph: G1 -> M1 proposes -> P1 validates -> Runtime executes the approved rate DAG")
+    print("Default UI uses a scripted model with malformed JSON + one bounded format repair")
+    print("New lesson: model proposals are untrusted; Runtime owns Tool authority")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

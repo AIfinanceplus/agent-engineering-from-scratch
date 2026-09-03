@@ -39,7 +39,9 @@ E1 latest historically completed 20-observation paper trade
 `RateStrategyAgent` uses a fixed two-Tool DAG. The shared Tool Registry validates
 the public-data and simulation calls before execution. V1 deliberately uses no
 LLM planner: the goal is to make Planner → Runtime → Tool → Observation → Eval
-visible in one click. The full Workbench shell is retained, including the Agent
+visible in one click. The current Model Authority lesson adds a deterministic
+scripted model adapter so malformed and unsafe proposals are repeatable; it is
+explicitly not a remote LLM. The full Workbench shell is retained, including the Agent
 flow and Trace / Logic / Evidence / State / Checkpoint / Architecture views; only
 the Strategy workspace is narrowed to the rate strategy. The output is a teaching
 approximation, not an executable bond-price model or investment recommendation.
@@ -385,14 +387,16 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario demonstrates a rejected Observation followed by one bounded
-   plan revision, then completes from the disclosed teaching snapshot.
-2. Follow Goal → Planner → Runtime → C1 → D1 → V1 → Q1 → **A2 / A10** → J1 → S1 → E1.
+   default scenario demonstrates malformed model JSON, one bounded repair, five
+   Runtime validation checks, then completes from the disclosed teaching snapshot.
+2. Follow Goal → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
+   Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
-3. The stream includes every emitted node event, registry lookup, validation,
-   Tool call (full arguments), Tool result (full output), retry and Eval result.
+3. The stream includes the model prompt, raw output, parse/validation decision,
+   every emitted node event, registry lookup, Tool call (full arguments), Tool
+   result (full output), retry and Eval result.
    Expand a row to inspect JSON; no observations are truncated.
 4. Click a Graph node to filter events; click it again or “显示全部” to reset.
    “跟随最新” controls scrolling without discarding earlier events.
@@ -410,7 +414,39 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: bounded replanning and loop detection
+### Current lesson: model proposal vs Runtime authority
+
+**M1** is a Model Gateway, not an executor. It returns untrusted text. **P1**
+parses and validates that text before Runtime can resolve or call any Tool. The
+default adapter is `scripted-teaching-model-v1`, which is deliberately
+deterministic and marked `is_real_llm=false`; no API key or external model call
+is hidden inside the demo.
+
+| Scenario | Model output | Observe |
+| --- | --- | --- |
+| 模型格式错误 · 修复后执行 (default) | First response is truncated JSON; second response is valid | PARSE FAILED → one `REPAIR 1/1` → five authority checks → PLAN ACCEPTED → Runtime starts |
+| 模型计划合法 · Runtime 放行 | Valid JSON matching the approved rate DAG | Raw output remains a proposal until schema, allowlist, DAG, paper-only and template checks pass |
+| 模型越权 · ABSTAIN | Valid JSON adds `place_real_order` and claims automatic execution | P1 rejects the unknown capability and unsafe claims; Runtime and every Tool remain unstarted |
+
+Engineering contract:
+
+- JSON parsing is not authorization. A syntactically valid model response can
+  still be unsafe.
+- The model sees an explicit allowlist and proposal-only authority, but Runtime
+  independently enforces both; prompt instructions are not a security boundary.
+- P1 checks exact fields, unique task IDs, known dependencies, acyclicity,
+  registered Tool names, paper-only claims and the executable strategy template.
+- Format repair is bounded to one extra model response and cannot add Tool
+  permissions. There is no open-ended “keep asking until it works” loop.
+- Raw model text and the parsed proposal remain in Trace for audit. Neither can
+  directly call a Python function, mutate state, or create an order.
+- The safe demo shows the architectural seam for a future real model adapter.
+  Provider routing, token budgets and model fallbacks belong to the next lesson.
+
+Source file: `rate_model_planner.py`. The rate strategy and all Tool side-effect
+boundaries are unchanged.
+
+### Previous lesson: bounded replanning and loop detection
 
 **V1** is an Observation Gate. It separates “the Tool returned successfully”
 from “the returned artifact is safe and sufficient for downstream use.” When

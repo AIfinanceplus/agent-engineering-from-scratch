@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[7], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[8], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -223,4 +223,37 @@ test('loop and budget guards stop Planner instead of spinning', () => {
     assert.equal(state.nodes.P1, 'failed');
     assert.equal(describe({ event, guard: {} }).kind, 'error');
   }
+});
+
+test('model proposal remains untrusted until P1 accepts it', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('model_request_started', 'M1', { model: 'scripted', attempt: 1, is_real_llm: false, prompt: {} });
+  assert.equal(state.nodes.M1, 'running');
+  emit('model_response_received', 'M1', { raw_output: '{}', output_characters: 2 });
+  assert.equal(state.nodes.M1, 'proposed');
+  emit('plan_parse_started', 'P1');
+  emit('plan_parse_failed', 'P1', { error_type: 'ModelPlanParseError', error_message: 'bad json' });
+  emit('model_repair_requested', 'M1');
+  assert.equal(state.nodes.P1, 'repairing');
+  assert.equal(state.nodes.M1, 'repairing');
+  emit('model_request_started', 'M1', { model: 'scripted', attempt: 2, is_real_llm: false, prompt: {} });
+  emit('model_response_received', 'M1', { raw_output: '{}', output_characters: 2 });
+  emit('plan_validation_completed', 'P1', { accepted: true, output: { checks: {} } });
+  assert.equal(state.nodes.P1, 'ready');
+  emit('model_plan_accepted', 'P1', { proposal: {} });
+  assert.equal(state.nodes.M1, 'completed');
+  assert.equal(state.nodes.P1, 'completed');
+  assert.equal(describe({ event: 'model_response_received', raw_output: '{}', output_characters: 2 }).label, 'RAW OUTPUT');
+});
+
+test('unsafe model plan fails P1 and leaves Runtime waiting', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('plan_validation_completed', 'P1', { accepted: false, reasons: ['unknown tool'] });
+  emit('model_plan_rejected', 'P1', { reasons: ['unknown tool'] });
+  assert.equal(state.nodes.M1, 'completed');
+  assert.equal(state.nodes.P1, 'failed');
+  assert.equal(state.nodes.R1, 'waiting');
+  assert.equal(describe({ event: 'model_plan_rejected', reasons: ['unknown tool'] }).label, 'ABSTAIN');
 });

@@ -21,6 +21,10 @@ from rate_control import RunControl, RunStopped, check_run_control
 from rate_resilience import AdmissionController, CircuitBreaker, CircuitOpen
 from rate_replanning import (PlanRevisionGuard, ReplanBudgetExhausted,
                              ReplanLoopDetected, validate_rate_history_observation)
+from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
+                                ModelPlanRejected, ScriptedRatePlanModel,
+                                build_plan_prompt, parse_plan_proposal,
+                                validate_plan_proposal)
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -28,13 +32,15 @@ from tools import TOOL_REGISTRY, Tool, resolve_tool
 
 SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result",
              "breaker_open", "breaker_recovery", "backpressure", "overload_rejected",
-             "replan_success", "replan_loop", "replan_budget"}
+             "replan_success", "replan_loop", "replan_budget",
+             "model_valid", "model_repair", "model_unsafe"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
 REPLAN_SCENARIOS = {"replan_success", "replan_loop", "replan_budget"}
-GRAPH_ROWS = [["G1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
+MODEL_SCENARIOS = {"model_valid", "model_repair", "model_unsafe"}
+GRAPH_ROWS = [["G1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
@@ -148,13 +154,7 @@ class RateParallelAgent:
                              round_trip_cost_bps=round_trip_cost_bps)
         trace, observations = [], {}
         current_task = "G1"
-        plan = [
-            {"task_id": "D1", "tool_name": "fetch_public_rate_history", "depends_on": []},
-            {"task_id": "A2", "tool_name": "prepare_rate_series", "depends_on": ["D1"]},
-            {"task_id": "A10", "tool_name": "prepare_rate_series", "depends_on": ["D1"]},
-            {"task_id": "J1", "tool_name": "join_rate_series", "depends_on": ["A2", "A10"]},
-            {"task_id": "S1", "tool_name": "simulate_one_curve_trade", "depends_on": ["J1"]},
-        ]
+        plan = deepcopy(SAFE_RATE_TASKS)
         by_id = {task["task_id"]: task for task in plan}
         completed = set()
         inflight = set()
@@ -177,7 +177,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -194,7 +194,7 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["C1", "V1", "Q1", *by_id, "E1"]:
+            for task_id in ["M1", "C1", "V1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
@@ -496,9 +496,72 @@ class RateParallelAgent:
                 run_batch({"D1": arguments})
 
         try:
-            emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation",
+            goal = "one auditable 2s10s paper simulation"
+            emit("goal_received", task_id="G1", goal=goal,
                  configuration={**configuration, "start_date": start_date}, demo_scenario=demo_scenario)
-            emit("plan_created", task_id="P1", planner="bounded_fanout_all_success_join",
+            planner_name = "bounded_fanout_all_success_join"
+            model_adapter = None
+            if demo_scenario in MODEL_SCENARIOS:
+                current_task = "M1"
+                model_adapter = ScriptedRatePlanModel(demo_scenario)
+                allowed_tools = {task["tool_name"] for task in SAFE_RATE_TASKS}
+                prompt = build_plan_prompt(goal, allowed_tools)
+                repaired = False
+                while True:
+                    emit("model_request_started", task_id="M1", model=model_adapter.model_name,
+                         is_real_llm=model_adapter.is_real_llm, prompt=prompt,
+                         purpose="plan_proposal", attempt=model_adapter.calls + 1)
+                    teaching_pause(0.3)
+                    raw_output = model_adapter.complete(prompt)
+                    emit("model_response_received", task_id="M1", model=model_adapter.model_name,
+                         is_real_llm=model_adapter.is_real_llm, raw_output=raw_output,
+                         output_characters=len(raw_output), attempt=model_adapter.calls)
+                    teaching_pause()
+                    emit("plan_parse_started", task_id="P1", response_attempt=model_adapter.calls)
+                    try:
+                        proposal = parse_plan_proposal(raw_output)
+                    except ModelPlanParseError as exc:
+                        emit("plan_parse_failed", task_id="P1", error_type=type(exc).__name__,
+                             error_message=str(exc), raw_output=raw_output)
+                        if demo_scenario == "model_repair" and not repaired:
+                            repaired = True
+                            emit("model_repair_requested", task_id="M1", error=str(exc),
+                                 repair_contract="return one valid JSON object; do not add capabilities")
+                            teaching_pause(0.45)
+                            continue
+                        emit("model_plan_rejected", task_id="P1", reasons=[str(exc)], decision="ABSTAIN")
+                        raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
+                                               code="MODEL_OUTPUT_INVALID") from exc
+                    emit("plan_parsed", task_id="P1", proposal=proposal)
+                    emit("plan_validation_started", task_id="P1",
+                         checks=["schema", "tool_allowlist", "acyclic", "paper_only", "executable_template"])
+                    try:
+                        validated = validate_plan_proposal(proposal, allowed_tools=allowed_tools,
+                                                           expected_tasks=SAFE_RATE_TASKS)
+                    except ModelPlanRejected as exc:
+                        emit("plan_validation_completed", task_id="P1", accepted=False,
+                             reasons=exc.reasons, decision="ABSTAIN")
+                        emit("model_plan_rejected", task_id="P1", reasons=exc.reasons,
+                             decision="ABSTAIN")
+                        teaching_pause(0.45)
+                        raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
+                                               code="MODEL_PLAN_REJECTED") from exc
+                    emit("plan_validation_completed", task_id="P1", accepted=True,
+                         output=validated, decision="EXECUTE")
+                    emit("model_plan_accepted", task_id="P1", model=model_adapter.model_name,
+                         decision="EXECUTE", proposal=proposal)
+                    teaching_pause()
+                    plan = deepcopy(proposal["tasks"])
+                    by_id = {task["task_id"]: task for task in plan}
+                    planner_name = "validated_model_proposal"
+                    completed.add("M1")
+                    break
+            else:
+                emit("model_bypassed", task_id="M1",
+                     reason="该历史场景使用已验证的确定性 Planner，不调用模型。")
+                completed.add("M1")
+            current_task = "P1"
+            emit("plan_created", task_id="P1", planner=planner_name,
                  task_ids=list(by_id), tasks=plan, graph={"rows": GRAPH_ROWS, "edges": GRAPH_EDGES})
             initial_d1_arguments = {"start_date": start_date}
             if revision_guard:
@@ -506,7 +569,8 @@ class RateParallelAgent:
                                                 "arguments": initial_d1_arguments})
                 emit("plan_revision_registered", task_id="P1", revision=revision["revision"],
                      fingerprint=revision["fingerprint"], remaining_revisions=revision["remaining_revisions"])
-            emit("runtime_started", task_id="R1", model="none_deterministic_v1", max_workers=2,
+            emit("runtime_started", task_id="R1",
+                 model=model_adapter.model_name if model_adapter else "none_deterministic_v1", max_workers=2,
                  registry_tools=list(dict.fromkeys(t["tool_name"] for t in plan)))
             emit("run_budget_started", task_id="R1", budget_ms=control.budget_ms,
                  scope="whole_run", policy="cooperative_stop_then_drain")
@@ -577,12 +641,15 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["C1", "V1", "Q1", *by_id, "E1"]},
-            "architecture": {"planner": "bounded_fanout_all_success_join", "model": "none_deterministic_v1",
+            "state": {"phase": "completed", "completed_tasks": ["M1", "C1", "V1", "Q1", *by_id, "E1"]},
+            "architecture": {"planner": planner_name,
+                             "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
+                             "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards",
+            "lesson": {"topic": "model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
+                       ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"),
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,

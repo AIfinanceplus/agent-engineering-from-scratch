@@ -40,7 +40,7 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 12);
+    assert.equal(await page.locator('.graph-node').count(), 13);
     assert.equal(await page.locator('script').count(), 2);
     await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
@@ -49,7 +49,7 @@ server.serve_forever()
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 12);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 13);
     const eventCount = await page.locator('.event-row').count();
     assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
@@ -72,6 +72,25 @@ server.serve_forever()
     const download = await downloadWait;
     assert.match(download.suggestedFilename(), /^RATE-RUN-.*\.json$/);
 
+    // The default model response is malformed, repaired once, then validated.
+    await page.locator('#scenario').selectOption('model_repair');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const modelKinds = await page.locator('.event-kind').allTextContents();
+    assert.ok(modelKinds.includes('RAW OUTPUT'));
+    assert.ok(modelKinds.includes('PARSE FAILED'));
+    assert.ok(modelKinds.includes('REPAIR 1/1'));
+    assert.ok(modelKinds.includes('PLAN ACCEPTED'));
+    assert.equal(await page.locator('.graph-node[data-node="M1"]').getAttribute('data-status'), 'completed');
+
+    // A valid JSON proposal with a real-order capability is still rejected.
+    await page.locator('#scenario').selectOption('model_unsafe');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.ok((await page.locator('.event-kind').allTextContents()).includes('ABSTAIN'));
+    assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 0);
+    assert.equal(await page.locator('.graph-node[data-node="R1"]').getAttribute('data-status'), 'blocked');
+
     // Observation success is not enough: V1 rejects, P1 replans, then V1 accepts.
     await page.locator('#scenario').selectOption('replan_success');
     await page.locator('#run-button').click();
@@ -91,6 +110,7 @@ server.serve_forever()
     assert.ok((await page.locator('.event-kind').allTextContents()).includes('LOOP STOP'));
 
     // A real strategy validation failure must not erase the successful D1 node.
+    await page.locator('#scenario').selectOption('live');
     await page.locator('#settings summary').click();
     await page.locator('[name="holding_days"]').fill('9999');
     await page.locator('#run-button').click();
@@ -192,7 +212,7 @@ server.serve_forever()
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-mobile.png`, fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('Browser PASS: Circuit Breaker, backpressure, overload rejection, concurrency, cancellation, full stream, filtering, export and responsive layout. Fixture/snapshot teaching data only.');
+    console.log('Browser PASS: model authority, replanning, Circuit Breaker, backpressure, concurrency, cancellation, full stream, filtering, export and responsive layout. Fixture/snapshot teaching data only.');
   } finally {
     if (browser) await browser.close();
     server.kill();

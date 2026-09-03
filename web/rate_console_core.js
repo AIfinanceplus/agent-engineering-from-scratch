@@ -14,7 +14,9 @@
     { id: 'E1', title: 'Evaluate', description: 'Eval · 校验输出与安全边界' }
   ];
   const PARALLEL_NODES = [
-    ...NODES.slice(0, 2),
+    NODES[0],
+    { id: 'M1', title: 'Model gateway', description: '生成提议 · 无执行权限' },
+    NODES[1],
     { id: 'R1', title: 'Runtime', description: '调度 · 容错 · 单线程归集事件' },
     { id: 'C1', title: 'Circuit breaker', description: '连续失败时阻止新 Tool 调用' },
     NODES[3],
@@ -25,7 +27,7 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -52,6 +54,23 @@
     const id = event.task_id;
     switch (event.event) {
       case 'goal_received': state.nodes.G1 = 'completed'; break;
+      case 'model_bypassed': state.nodes.M1 = 'completed'; break;
+      case 'model_request_started': state.nodes.M1 = 'running'; break;
+      case 'model_response_received': state.nodes.M1 = 'proposed'; break;
+      case 'model_repair_requested': state.nodes.M1 = 'repairing'; break;
+      case 'plan_parse_started': state.nodes.P1 = 'running'; break;
+      case 'plan_parse_failed': state.nodes.P1 = 'repairing'; break;
+      case 'plan_parsed': state.nodes.P1 = 'running'; break;
+      case 'plan_validation_started': state.nodes.P1 = 'running'; break;
+      case 'plan_validation_completed': state.nodes.P1 = event.accepted ? 'ready' : 'failed'; break;
+      case 'model_plan_accepted':
+        state.nodes.M1 = 'completed';
+        state.nodes.P1 = 'completed';
+        break;
+      case 'model_plan_rejected':
+        state.nodes.M1 = 'completed';
+        state.nodes.P1 = 'failed';
+        break;
       case 'plan_created': state.nodes.P1 = 'completed'; break;
       case 'runtime_started': state.nodes.R1 = 'running'; break;
       case 'task_started':
@@ -184,6 +203,17 @@
     const common = { kind: 'node', label: 'NODE', title: event.event, description: '', detailLabel: '完整事件', payload: event };
     switch (event.event) {
       case 'goal_received': return { ...common, label: 'INPUT', title: 'Goal received', description: event.goal, detailLabel: '目标与运行参数' };
+      case 'model_bypassed': return { ...common, kind: 'model', label: 'MODEL', title: 'Model gateway bypassed', description: event.reason };
+      case 'model_request_started': return { ...common, kind: 'model', label: 'MODEL INPUT', title: `${event.model} · proposal ${event.attempt}`, description: event.is_real_llm ? '真实模型调用；模型只能生成提议。' : '可重复的教学模型；不是外部 LLM，也没有执行权限。', detailLabel: '完整 prompt 与权限声明', payload: event.prompt };
+      case 'model_response_received': return { ...common, kind: 'model', label: 'RAW OUTPUT', title: `${event.output_characters} characters received`, description: '这是未经信任的模型文本；尚未成为 Plan。', detailLabel: '原始模型输出', payload: { raw_output: event.raw_output, model: event.model, is_real_llm: event.is_real_llm } };
+      case 'plan_parse_started': return { ...common, kind: 'model', label: 'PARSE', title: 'Parse model output as JSON', description: '解析只证明 JSON 可读，不代表内容安全。' };
+      case 'plan_parse_failed': return { ...common, kind: 'error', label: 'PARSE FAILED', title: event.error_type, description: event.error_message, detailLabel: '损坏的原始输出', payload: event.raw_output };
+      case 'model_repair_requested': return { ...common, kind: 'model', label: 'REPAIR 1/1', title: 'Request one bounded format repair', description: '只修复输出格式；不扩大 Tool 权限。', detailLabel: '修复约束', payload: event };
+      case 'plan_parsed': return { ...common, kind: 'model', label: 'JSON', title: 'Proposal parsed', description: '进入 Runtime 校验；仍不可执行。', detailLabel: '解析后的提议', payload: event.proposal };
+      case 'plan_validation_started': return { ...common, kind: 'model', label: 'AUTHORITY', title: 'Runtime validates proposal', description: event.checks.join(' · '), detailLabel: '校验项目', payload: event.checks };
+      case 'plan_validation_completed': return { ...common, kind: event.accepted ? 'result' : 'error', label: event.accepted ? 'PLAN ACCEPTED' : 'PLAN REJECTED', title: event.accepted ? 'Runtime permits execution' : 'Runtime refuses execution', description: event.accepted ? 'Schema、Tool allowlist、DAG、paper-only 与执行模板全部通过。' : event.reasons.join(' · '), detailLabel: '完整校验结果', payload: event.output || event.reasons };
+      case 'model_plan_accepted': return { ...common, kind: 'model', label: 'BOUNDARY', title: 'Proposal promoted to executable Plan', description: '决定权属于 Runtime，不属于模型。', detailLabel: '获准执行的提议', payload: event.proposal };
+      case 'model_plan_rejected': return { ...common, kind: 'error', label: 'ABSTAIN', title: 'Unsafe proposal stopped before Runtime', description: event.reasons.join(' · '), detailLabel: '拒绝原因', payload: event.reasons };
       case 'plan_created': return { ...common, title: 'Plan created', description: event.graph ? 'C1 保护 D1；V1 验证 Observation；Q1 控制分支准入' : '固定计划 · D1 → S1，随后 E1 校验', detailLabel: '完整计划与依赖' };
       case 'runtime_started': return { ...common, title: 'Runtime started', description: '从 Tool Registry 解析能力，并执行参数校验和重试策略。', detailLabel: 'Runtime 与 Tool Registry' };
       case 'task_started': return { ...common, title: 'Node started', description: event.tool_name };

@@ -99,9 +99,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=5", html)
-        self.assertIn("rate_console_core.js?v=5", html)
-        self.assertIn("Bounded Replanning", html)
+        self.assertIn("rate_console.js?v=6", html)
+        self.assertIn("rate_console_core.js?v=6", html)
+        self.assertIn("LLM Planner", html)
+        self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
         self.assertNotIn("rate_workbench.js", html)
         self.assertNotIn("r12_step7.js", html)
@@ -287,6 +288,26 @@ class RateHTTPTests(unittest.TestCase):
             self.assertEqual(messages[-1]["error"]["code"], code)
             events = [message["event"] for message in messages if message["type"] == "event"]
             self.assertFalse(any(e.get("task_id") in {"A2", "A10", "J1", "S1", "E1"} for e in events))
+
+    def test_model_repair_stream_exposes_raw_failure_then_safe_execution(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "model_repair"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertEqual(sum(e["event"] == "model_request_started" for e in events), 2)
+        self.assertTrue(any(e["event"] == "plan_parse_failed" for e in events))
+        accepted = next(e["sequence"] for e in events if e["event"] == "model_plan_accepted")
+        first_tool = next(e["sequence"] for e in events if e["event"] == "tool_execution_started")
+        self.assertLess(accepted, first_tool)
+
+    def test_unsafe_model_plan_stream_abstains_before_runtime_or_tools(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "model_unsafe"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["code"], "MODEL_PLAN_REJECTED")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertTrue(any(e["event"] == "model_plan_rejected" and e["decision"] == "ABSTAIN" for e in events))
+        self.assertFalse(any(e["event"] in {"runtime_started", "tool_execution_started"} for e in events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})
