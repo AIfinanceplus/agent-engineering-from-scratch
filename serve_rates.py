@@ -23,7 +23,7 @@ RUN_CONTROLS = RunControlRegistry()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V3-CONTROL"
+    version_label = "RATE-CONSOLE-V4-RESILIENCE"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -265,12 +265,12 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V3-CONTROL")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V4-RESILIENCE")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
-    print("Lesson: D1 bulk data -> A2 / A10 concurrent branches -> J1 all-success Join -> S1 -> E1")
+    print("Graph: C1 guards D1 -> Q1 admits A2 / A10 -> J1 all-success Join -> S1 -> E1")
     print("Default UI mode is an explicitly disclosed snapshot + timing/failure teaching demo")
-    print("New lesson: run budget -> stop request -> Tool acknowledgment; never pretend threads were killed")
+    print("New lessons: Circuit Breaker + bounded admission, rate limiting and backpressure")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

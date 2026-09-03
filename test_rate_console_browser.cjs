@@ -40,7 +40,7 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 9);
+    assert.equal(await page.locator('.graph-node').count(), 11);
     assert.equal(await page.locator('script').count(), 2);
     await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
@@ -49,7 +49,7 @@ server.serve_forever()
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 9);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 11);
     const eventCount = await page.locator('.event-row').count();
     assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
@@ -81,6 +81,34 @@ server.serve_forever()
     assert.equal(await page.locator('.graph-node[data-node="S1"]').getAttribute('data-status'), 'failed');
     assert.equal(await page.locator('.graph-node[data-node="E1"]').getAttribute('data-status'), 'blocked');
     assert.equal(await page.locator('#run-button').isDisabled(), false);
+    await page.locator('#settings summary').click();
+    await page.locator('[name="holding_days"]').fill('20');
+
+    // Circuit breaker opens after two failures, waits, probes once, then closes.
+    await page.locator('#scenario').selectOption('breaker_recovery');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('.graph-node[data-node="C1"][data-status="open"]');
+    await page.waitForSelector('.graph-node[data-node="C1"][data-status="completed"]');
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    assert.ok((await page.locator('.event-kind').allTextContents()).includes('SHORT-CIRCUIT') === false);
+    assert.ok((await page.locator('.event-title').allTextContents()).some(text => text.includes('OPEN → HALF_OPEN')));
+
+    // Backpressure keeps the second task out of the Tool until its permit arrives.
+    await page.locator('#scenario').selectOption('backpressure');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('.graph-node[data-node="Q1"][data-status="queued"]');
+    await page.waitForSelector('.graph-node[data-node="Q1"][data-status="completed"]');
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const kinds = await page.locator('.event-kind').allTextContents();
+    assert.ok(kinds.includes('QUEUED'));
+    assert.ok(kinds.includes('DEQUEUED'));
+
+    // A zero-capacity waiting room rejects overload before the Tool call.
+    await page.locator('#scenario').selectOption('overload_rejected');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('.graph-node[data-node="Q1"][data-status="rejected"]');
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.equal(await page.locator('.event-row[data-node="A10"][data-kind="call"]').count(), 0);
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-failed.png`, fullPage: true });
 
     // An abruptly closed stream is not a successful run.
@@ -146,7 +174,7 @@ server.serve_forever()
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-mobile.png`, fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('Browser PASS: concurrent branches, Join, Stop request + acknowledgment, deadline, discarded late result, full stream, filtering, export, rerun, responsive layout. Fixture/snapshot teaching data only.');
+    console.log('Browser PASS: Circuit Breaker, backpressure, overload rejection, concurrency, cancellation, full stream, filtering, export and responsive layout. Fixture/snapshot teaching data only.');
   } finally {
     if (browser) await browser.close();
     server.kill();

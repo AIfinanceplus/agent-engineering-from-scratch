@@ -99,8 +99,8 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=3", html)
-        self.assertIn("rate_console_core.js?v=3", html)
+        self.assertIn("rate_console.js?v=4", html)
+        self.assertIn("rate_console_core.js?v=4", html)
         self.assertNotIn("rate_workbench.js", html)
         self.assertNotIn("r12_step7.js", html)
         self.assertNotIn("data-detail-tab", html)
@@ -246,6 +246,25 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(self.post({}, "/api/rates/cancel")[0], 400)
         self.assertEqual(self.post({"execution_mode": "parallel", "budget_ms": -1}, "/api/rates/stream")[0], 400)
         self.assertEqual(self.post({"execution_mode": "parallel", "demo_scenario": []}, "/api/rates/stream")[0], 400)
+
+    def test_circuit_breaker_stream_exposes_guard_before_tool_boundary(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "breaker_open"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "error")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertEqual(sum(e["event"] == "tool_execution_started" and e["task_id"] == "D1" for e in events), 2)
+        self.assertTrue(any(e["event"] == "circuit_call_rejected" for e in events))
+
+    def test_backpressure_stream_queues_and_releases_before_a10_call(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "backpressure"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        queued = next(e["sequence"] for e in events if e["event"] == "backpressure_queued")
+        released = next(e["sequence"] for e in events if e["event"] == "backpressure_released")
+        a10_call = next(e["sequence"] for e in events if e["event"] == "tool_execution_started" and e["task_id"] == "A10")
+        self.assertLess(queued, released)
+        self.assertLess(released, a10_call)
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

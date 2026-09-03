@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[4], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[6], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -165,4 +165,30 @@ test('late success cannot overwrite a stop request', () => {
   const view = describe({ event: 'tool_output_discarded', output: { value: 123 } });
   assert.equal(view.label, 'DISCARDED');
   assert.equal(view.payload.value, 123);
+});
+
+test('circuit transitions remain visible and rejected calls never complete C1', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('circuit_call_allowed', 'C1', { state: 'closed', attempt: 1 });
+  emit('circuit_failure_recorded', 'C1', { snapshot: { state: 'open' } });
+  emit('circuit_state_changed', 'C1', { from_state: 'closed', to_state: 'open' });
+  assert.equal(state.nodes.C1, 'open');
+  emit('circuit_call_rejected', 'C1');
+  assert.equal(state.nodes.C1, 'open');
+  assert.equal(describe({ event: 'circuit_call_rejected', snapshot: { state: 'open' } }).kind, 'guard');
+});
+
+test('backpressure shows queued, throttled, released and drained states', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('admission_requested', 'Q1', { target_task: 'A10' });
+  emit('backpressure_queued', 'Q1', { target_task: 'A10', queue_depth: 1 });
+  assert.equal(state.nodes.Q1, 'queued');
+  emit('rate_limit_waiting', 'Q1', { target_task: 'A10', delay_ms: 500 });
+  assert.equal(state.nodes.Q1, 'throttling');
+  emit('backpressure_released', 'Q1', { target_task: 'A10' });
+  assert.equal(state.nodes.Q1, 'running');
+  emit('admission_cycle_completed', 'Q1');
+  assert.equal(state.nodes.Q1, 'completed');
 });

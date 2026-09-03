@@ -18,15 +18,20 @@ from uuid import uuid4
 
 from rate_sources import load_bundled_rate_history
 from rate_control import RunControl, RunStopped, check_run_control
+from rate_resilience import AdmissionController, CircuitBreaker, CircuitOpen
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
 
 
-SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
-GRAPH_ROWS = [["G1"], ["P1"], ["R1"], ["D1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "P1"], ["P1", "R1"], ["R1", "D1"],
-               ["D1", "A2"], ["D1", "A10"], ["A2", "J1"],
+SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result",
+             "breaker_open", "breaker_recovery", "backpressure", "overload_rejected"}
+BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
+ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
+TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
+GRAPH_ROWS = [["G1"], ["P1"], ["R1"], ["C1"], ["D1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"], ["D1", "Q1"],
+               ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
 
@@ -149,6 +154,11 @@ class RateParallelAgent:
         completed = set()
         inflight = set()
         stop_announced = False
+        breaker = CircuitBreaker(
+            failure_threshold=2,
+            reset_timeout_ms=300 if demo_scenario == "breaker_recovery" else 30000,
+        ) if demo_scenario in BREAKER_SCENARIOS else None
+        injected_source_failures = 0
 
         def emit(event, **payload):
             row = deepcopy({"sequence": len(trace) + 1, "run_id": run_id,
@@ -167,11 +177,12 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in [*by_id, "E1"]:
+            for task_id in ["C1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
         def call(task_id, arguments, publish=emit):
+            nonlocal injected_source_failures
             control.check()
             task = by_id[task_id]
             name = task["tool_name"]
@@ -187,16 +198,38 @@ class RateParallelAgent:
                 raise ValueError(validation["error"]["message"])
             function = self.overrides.get(name, tool.function)
             if task_id == "D1" and demo_scenario != "live":
-                function = load_bundled_rate_history
+                if demo_scenario in BREAKER_SCENARIOS:
+                    def breaker_demo_source(**kwargs):
+                        nonlocal injected_source_failures
+                        injected_source_failures += 1
+                        if injected_source_failures <= 2:
+                            raise ConnectionError(f"教学故障注入：上游连续失败 {injected_source_failures}/2")
+                        return load_bundled_rate_history(**kwargs)
+                    function = breaker_demo_source
+                else:
+                    function = load_bundled_rate_history
             for attempt in range(1, tool.max_retries + 2):
                 control.check()
+                if task_id == "D1" and breaker:
+                    decision = breaker.before_call()
+                    if decision.get("transition"):
+                        publish("circuit_state_changed", task_id="C1", tool_name=name,
+                                **decision["transition"], snapshot=decision)
+                    if not decision["allowed"]:
+                        publish("circuit_call_rejected", task_id="C1", tool_name=name,
+                                attempt=attempt, snapshot=decision,
+                                reason="OPEN circuit rejects the call before Tool execution")
+                        raise CircuitOpen("fetch_public_rate_history circuit is OPEN; Tool was not called")
+                    publish("circuit_call_allowed", task_id="C1", tool_name=name,
+                            attempt=attempt, state=decision["state"], scope="single_teaching_run",
+                            snapshot=decision)
                 publish("tool_execution_started", task_id=task_id, tool_name=name,
                         arguments=arguments, attempt=attempt, max_attempts=tool.max_retries + 1,
                         max_retries=tool.max_retries, risk=tool.risk)
                 try:
-                    if task_id in {"A2", "A10"} and demo_scenario != "live":
+                    if task_id in {"A2", "A10"} and demo_scenario in TIMING_SCENARIOS | ADMISSION_SCENARIOS:
                         slow = "A10" if demo_scenario == "ten_year_slow" else "A2"
-                        delay_ms = 2000 if task_id == slow else 400
+                        delay_ms = 350 if demo_scenario in ADMISSION_SCENARIOS else (2000 if task_id == slow else 400)
                         if demo_scenario == "manual_cancel":
                             delay_ms = 8000
                         if demo_scenario == "late_result":
@@ -223,6 +256,13 @@ class RateParallelAgent:
                     raise
                 except Exception as exc:
                     control.check()  # A stop request is not a retryable Tool failure.
+                    if task_id == "D1" and breaker:
+                        breaker_result = breaker.record_failure()
+                        publish("circuit_failure_recorded", task_id="C1", tool_name=name,
+                                error_type=type(exc).__name__, snapshot=breaker_result)
+                        if breaker_result.get("transition"):
+                            publish("circuit_state_changed", task_id="C1", tool_name=name,
+                                    **breaker_result["transition"], snapshot=breaker_result)
                     retryable = isinstance(exc, tool.retryable_errors) and attempt <= tool.max_retries
                     publish("tool_execution_failed", task_id=task_id, tool_name=name,
                             attempt=attempt, error_type=type(exc).__name__, error_message=str(exc), retryable=retryable)
@@ -237,6 +277,13 @@ class RateParallelAgent:
                         self.sleep(delay_ms / 1000)
                         control.check()
                     continue
+                if task_id == "D1" and breaker:
+                    breaker_result = breaker.record_success()
+                    publish("circuit_success_recorded", task_id="C1", tool_name=name,
+                            snapshot=breaker_result)
+                    if breaker_result.get("transition"):
+                        publish("circuit_state_changed", task_id="C1", tool_name=name,
+                                **breaker_result["transition"], snapshot=breaker_result)
                 return output
 
         def run_batch(arguments_by_id, *, fan_in=False):
@@ -313,6 +360,55 @@ class RateParallelAgent:
             if failures:
                 raise ParallelRunError("Tool 失败；依赖它的下游未执行。", next(iter(failures)), trace, failures)
 
+        def run_admission_demo(arguments_by_id):
+            """Make overload handling visible without creating fake Tool results."""
+            queue_capacity = 0 if demo_scenario == "overload_rejected" else 1
+            admission = AdmissionController(max_in_flight=1, queue_capacity=queue_capacity,
+                                            min_interval_ms=500)
+            decisions = {}
+            for task_id in ("A2", "A10"):
+                emit("admission_requested", task_id="Q1", target_task=task_id,
+                     scope="single_teaching_run", policy=admission.snapshot())
+                decisions[task_id] = admission.request(task_id)
+                decision = decisions[task_id]["decision"]
+                if decision == "granted":
+                    emit("rate_limit_granted", task_id="Q1", target_task=task_id,
+                         snapshot=decisions[task_id])
+                elif decision == "queued":
+                    emit("backpressure_queued", task_id="Q1", target_task=task_id,
+                         queue_depth=len(decisions[task_id]["queued"]), snapshot=decisions[task_id])
+                else:
+                    emit("admission_rejected", task_id="Q1", target_task=task_id,
+                         reason="bounded queue is full", snapshot=decisions[task_id])
+
+            run_batch({"A2": arguments_by_id["A2"]})
+            admission.release("A2")
+            emit("admission_capacity_released", task_id="Q1", target_task="A2",
+                 snapshot=admission.snapshot())
+            if decisions["A10"]["decision"] == "rejected":
+                emit("task_failed", task_id="A10", error_type="AdmissionRejected",
+                     error_message="Runtime rejected A10 before Tool execution; bounded queue was full")
+                emit("join_blocked", task_id="J1", failed_dependencies=["A10"],
+                     reason="all_success requires both branches; rejected work is not a result")
+                for downstream in ("S1", "E1"):
+                    emit("task_blocked", task_id=downstream, reason="J1 cannot complete")
+                raise ParallelRunError("负载超过容量；A10 在 Tool 调用前被拒绝。", "A10", trace,
+                                       {"A10": "admission rejected"})
+
+            wait_ms = admission.next_wait_ms()
+            if wait_ms and wait_ms > 0:
+                emit("rate_limit_waiting", task_id="Q1", target_task="A10",
+                     delay_ms=wait_ms, reason="respect minimum admission interval")
+                control.wait(wait_ms / 1000)
+            promoted = admission.promote()
+            if not promoted:
+                raise RuntimeError("queued task was not promotable")
+            emit("backpressure_released", task_id="Q1", target_task="A10",
+                 queue_depth=len(promoted["queued"]), snapshot=promoted)
+            run_batch({"A10": arguments_by_id["A10"]})
+            admission.release("A10")
+            emit("admission_cycle_completed", task_id="Q1", snapshot=admission.snapshot())
+
         try:
             emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation",
                  configuration={**configuration, "start_date": start_date}, demo_scenario=demo_scenario)
@@ -326,12 +422,24 @@ class RateParallelAgent:
                 emit("demo_scenario_selected", task_id="R1", scenario=demo_scenario,
                      source_freshness="SNAPSHOT", teaching_delay=True,
                      message="明确的离线教学演示；Tool 真正执行，延时/故障由教学模式注入。")
+            if not breaker:
+                emit("circuit_bypassed", task_id="C1", reason="本场景不注入连续上游故障")
+                completed.add("C1")
             current_task = "D1"
             run_batch({"D1": {"start_date": start_date}})
+            if breaker:
+                completed.add("C1")
             emit("parallel_group_started", task_id="R1", task_ids=["A2", "A10"], max_workers=2)
             emit("join_waiting", task_id="J1", completed_dependencies=[], waiting_for=["A2", "A10"], required=2)
-            run_batch({task_id: {"history": observations["D1"], "series_id": series_id, "batch_id": run_id}
-                       for task_id, series_id in (("A2", "DGS2"), ("A10", "DGS10"))}, fan_in=True)
+            branch_arguments = {task_id: {"history": observations["D1"], "series_id": series_id, "batch_id": run_id}
+                                for task_id, series_id in (("A2", "DGS2"), ("A10", "DGS10"))}
+            if demo_scenario in ADMISSION_SCENARIOS:
+                run_admission_demo(branch_arguments)
+                completed.add("Q1")
+            else:
+                emit("admission_bypassed", task_id="Q1", reason="本场景允许两个独立分支并发")
+                completed.add("Q1")
+                run_batch(branch_arguments, fan_in=True)
             emit("join_released", task_id="J1", completed_dependencies=["A2", "A10"], required=2)
             current_task = "J1"
             run_batch({"J1": {"two_year": observations["A2"], "ten_year": observations["A10"]}})
@@ -376,10 +484,10 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": [*by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["C1", "Q1", *by_id, "E1"]},
             "architecture": {"planner": "bounded_fanout_all_success_join", "model": "none_deterministic_v1",
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread"},
-            "lesson": {"topic": "cooperative_cancellation", "demo_scenario": demo_scenario,
+            "lesson": {"topic": "resilience_guards", "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,
                            "partial_join_allowed": False, "concurrent_external_writes": False},

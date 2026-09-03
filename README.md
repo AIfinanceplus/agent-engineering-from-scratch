@@ -385,9 +385,9 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario now demonstrates a **1-second execution budget**, not a
-   completed trade. Select a previous successful scenario to complete a trade.
-2. Follow Goal → Planner → Runtime → D1 → **A2 / A10 concurrently** → J1 → S1 → E1.
+   default scenario now demonstrates **Circuit Breaker recovery** and completes
+   a trade from the disclosed teaching snapshot.
+2. Follow Goal → Planner → Runtime → C1 → D1 → Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
@@ -410,7 +410,45 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: time budget and cooperative cancellation
+### Current lessons: Circuit Breaker and bounded admission
+
+The two new Runtime guards are visible as real graph nodes. **C1** protects an
+external Tool from repeated calls while its dependency is unhealthy. **Q1**
+controls how quickly work may enter Tools and keeps waiting work bounded.
+
+| Scenario | Policy | Observe |
+| --- | --- | --- |
+| 熔断 · 冷却后恢复 (default) | Open after 2 consecutive D1 failures; 300ms cooldown | CLOSED → OPEN → HALF-OPEN; one probe succeeds; CLOSED; workflow continues |
+| 熔断 · 阻止第三次调用 | Open after 2 failures; long cooldown | Third request is rejected before `tool_execution_started`; D1 and downstream fail closed |
+| 背压 · 排队后放行 | 1 active Tool, queue capacity 1, 500ms admission interval | A2 gets a permit; A10 is QUEUED; after capacity and interval allow it, A10 is DEQUEUED and called |
+| 过载 · 队满立即拒绝 | 1 active Tool, queue capacity 0 | A10 is rejected before any Tool call; Join and downstream remain blocked |
+
+Engineering contract:
+
+- Tool argument validation occurs before the circuit counts an execution
+  failure. Two retryable upstream failures open C1. An OPEN rejection does not
+  call the Tool and is not counted as another upstream failure.
+- Cooldown does not prove recovery. OPEN becomes HALF-OPEN and permits one
+  probe. Only a successful probe closes the circuit and resets its failure
+  count; a failed probe reopens it.
+- Q1 separates arrival from admission. A queued task has no Tool call or Tool
+  result yet. FIFO promotion happens only after capacity is released and the
+  minimum admission interval passes.
+- The waiting room is finite. Full queues reject work immediately instead of
+  consuming unbounded memory. Rejected work is never fabricated as a branch
+  result, so the all-success Join remains blocked.
+- Circuit and admission state are Runtime policy, not strategy logic. Teaching
+  failures, cooldowns and queue sizes are disclosed in stream events. No broker
+  or external write is added.
+- For deterministic teaching, C1 and Q1 are scoped to one Run. A production
+  deployment must share admission/circuit state per upstream dependency across
+  concurrent Runs (and coordinate it across processes); this demo makes no
+  claim of service-wide protection.
+
+Source file: `rate_resilience.py`. The Runtime in `rate_parallel.py` remains the
+single owner that orders guard, Tool, Observation and terminal stream events.
+
+### Previous lesson: time budget and cooperative cancellation
 
 The one new concept is a **run-level stop boundary**. A deadline and a user's
 Stop click signal the same `RunControl`. A stop request is not a confirmation

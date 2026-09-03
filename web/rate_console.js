@@ -2,7 +2,7 @@
   'use strict';
   const { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
-  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知' };
+  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝' };
   let state = createState('parallel');
   let inFlight = false;
   let filter = null;
@@ -105,7 +105,7 @@
     byId('run-status').dataset.phase = state.phase;
     byId('run-status').querySelector('span').textContent = phases[state.phase];
     byId('run-id').textContent = state.runId || (inFlight ? '正在连接 Runtime…' : '等待开始一次运行');
-    byId('run-budget').textContent = `预算 ${(state.budgetMs ?? scenarioBudget()) / 1000}s`;
+    byId('run-budget').textContent = `运行预算 ${(state.budgetMs ?? scenarioBudget()) / 1000}s`;
     byId('event-count').textContent = state.events.length;
     byId('empty-state').hidden = rows.length > 0 || !!filter;
     byId('stream-scope').textContent = filter ? `${filter} · ${definitions().find(n => n.id === filter).title}` : `全部节点 · 调用 · 结果${state.activeTasks.length ? ` · 活跃 ${state.activeTasks.length}` : ''}`;

@@ -15,14 +15,16 @@
   ];
   const PARALLEL_NODES = [
     ...NODES.slice(0, 2),
-    { id: 'R1', title: 'Runtime', description: '调度并发 · 单线程归集事件' },
+    { id: 'R1', title: 'Runtime', description: '调度 · 容错 · 单线程归集事件' },
+    { id: 'C1', title: 'Circuit breaker', description: '连续失败时阻止新 Tool 调用' },
     NODES[3],
+    { id: 'Q1', title: 'Admission queue', description: '限速 · 有界排队 · 过载拒绝' },
     { id: 'A2', title: '2Y series', description: 'Tool · 校验 2Y 序列' },
     { id: 'A10', title: '10Y series', description: 'Tool · 校验 10Y 序列' },
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['P1'], ['R1'], ['D1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['P1'], ['R1'], ['C1'], ['D1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -88,6 +90,20 @@
         break;
       case 'run_completed': state.nodes.R1 = 'completed'; break;
       case 'run_budget_started': state.budgetMs = event.budget_ms; break;
+      case 'circuit_bypassed': state.nodes.C1 = 'completed'; break;
+      case 'circuit_call_allowed': state.nodes.C1 = event.state === 'half_open' ? 'half_open' : 'running'; break;
+      case 'circuit_failure_recorded': state.nodes.C1 = event.snapshot?.state || 'running'; break;
+      case 'circuit_state_changed': state.nodes.C1 = event.to_state === 'closed' ? 'completed' : event.to_state; break;
+      case 'circuit_success_recorded': state.nodes.C1 = 'completed'; break;
+      case 'circuit_call_rejected': state.nodes.C1 = 'open'; break;
+      case 'admission_bypassed': state.nodes.Q1 = 'completed'; break;
+      case 'admission_requested': state.nodes.Q1 = 'running'; break;
+      case 'rate_limit_granted': state.nodes.Q1 = 'running'; break;
+      case 'backpressure_queued': state.nodes.Q1 = 'queued'; break;
+      case 'rate_limit_waiting': state.nodes.Q1 = 'throttling'; break;
+      case 'backpressure_released': state.nodes.Q1 = 'running'; break;
+      case 'admission_rejected': state.nodes.Q1 = 'rejected'; break;
+      case 'admission_cycle_completed': state.nodes.Q1 = 'completed'; break;
       case 'cancellation_requested':
         state.phase = 'cancelling';
         state.stopReason = event.reason;
@@ -154,7 +170,7 @@
     const common = { kind: 'node', label: 'NODE', title: event.event, description: '', detailLabel: '完整事件', payload: event };
     switch (event.event) {
       case 'goal_received': return { ...common, label: 'INPUT', title: 'Goal received', description: event.goal, detailLabel: '目标与运行参数' };
-      case 'plan_created': return { ...common, title: 'Plan created', description: event.graph ? 'D1 → A2 / A10 并发 → J1 汇合 → S1 → E1' : '固定计划 · D1 → S1，随后 E1 校验', detailLabel: '完整计划与依赖' };
+      case 'plan_created': return { ...common, title: 'Plan created', description: event.graph ? 'C1 保护 D1；Q1 控制 A2 / A10 准入；J1 等待全部成功' : '固定计划 · D1 → S1，随后 E1 校验', detailLabel: '完整计划与依赖' };
       case 'runtime_started': return { ...common, title: 'Runtime started', description: '从 Tool Registry 解析能力，并执行参数校验和重试策略。', detailLabel: 'Runtime 与 Tool Registry' };
       case 'task_started': return { ...common, title: 'Node started', description: event.tool_name };
       case 'tool_lookup': return { ...common, label: 'REGISTRY', title: event.tool_name, description: event.found ? 'Tool 已在注册表找到' : 'Tool 未注册' };
@@ -175,6 +191,21 @@
       case 'demo_scenario_selected': return { ...common, label: 'DEMO', title: `Teaching mode · ${event.scenario}`, description: event.message };
       case 'demo_delay_started': return { ...common, label: 'DEMO DELAY', title: `Teaching delay · ${event.delay_ms}ms`, description: event.reason };
       case 'run_budget_started': return { ...common, label: 'BUDGET', title: `Run budget · ${event.budget_ms / 1000}s`, description: '覆盖整次运行；到期请求协作停止，不强杀线程。' };
+      case 'circuit_bypassed': return { ...common, kind: 'guard', label: 'CIRCUIT', title: 'Circuit guard · pass through', description: event.reason };
+      case 'circuit_call_allowed': return { ...common, kind: 'guard', label: 'CIRCUIT', title: `Call allowed · ${String(event.state).toUpperCase()}`, description: `第 ${event.attempt} 次请求获准进入 Tool · 本次教学 Run` };
+      case 'circuit_failure_recorded': return { ...common, kind: 'guard', label: 'FAILURE +1', title: `${event.error_type} recorded`, description: `连续失败 ${event.snapshot?.failure_count}/${event.snapshot?.failure_threshold}` };
+      case 'circuit_state_changed': return { ...common, kind: 'guard', label: 'STATE', title: `${String(event.from_state).toUpperCase()} → ${String(event.to_state).toUpperCase()}`, description: event.to_state === 'open' ? '达到阈值；后续请求先被熔断器拦截。' : event.to_state === 'half_open' ? '冷却结束；只放行一次探测调用。' : '探测成功；恢复正常调用。' };
+      case 'circuit_call_rejected': return { ...common, kind: 'guard', label: 'SHORT-CIRCUIT', title: 'Tool call rejected before execution', description: '熔断器为 OPEN；没有进入 Tool，也不产生外部请求。', detailLabel: '熔断状态', payload: event.snapshot };
+      case 'circuit_success_recorded': return { ...common, kind: 'guard', label: 'SUCCESS', title: 'Successful call recorded', description: event.snapshot?.transition ? '探测成功，Circuit 回到 CLOSED。' : '调用成功，失败计数归零。' };
+      case 'admission_bypassed': return { ...common, kind: 'guard', label: 'ADMISSION', title: 'Normal concurrent admission', description: event.reason };
+      case 'admission_requested': return { ...common, kind: 'guard', label: 'ARRIVAL', title: `${event.target_task} requests admission`, description: '任务先经过本次教学 Run 的 Runtime Guard，尚未调用 Tool。' };
+      case 'rate_limit_granted': return { ...common, kind: 'guard', label: 'PERMIT', title: `${event.target_task} admitted`, description: '获得执行许可，可以进入 Tool。' };
+      case 'backpressure_queued': return { ...common, kind: 'guard', label: 'QUEUED', title: `${event.target_task} waits · depth ${event.queue_depth}`, description: '执行槽已满；通过有界队列把压力留在 Runtime。' };
+      case 'rate_limit_waiting': return { ...common, kind: 'guard', label: 'THROTTLE', title: `Rate limit wait · ${Math.round(event.delay_ms)}ms`, description: '容量已释放，但仍需满足最小放行间隔。' };
+      case 'backpressure_released': return { ...common, kind: 'guard', label: 'DEQUEUED', title: `${event.target_task} released from queue`, description: '拿到许可后才开始 Tool 调用。' };
+      case 'admission_capacity_released': return { ...common, kind: 'guard', label: 'CAPACITY', title: `${event.target_task} released its slot`, description: 'Runtime 可以考虑放行下一个排队任务。' };
+      case 'admission_rejected': return { ...common, kind: 'guard', label: 'REJECTED', title: `${event.target_task} rejected before Tool call`, description: '队列已满；快速失败，避免无限堆积。', detailLabel: '准入状态', payload: event.snapshot };
+      case 'admission_cycle_completed': return { ...common, kind: 'guard', label: 'DRAINED', title: 'Admission queue drained', description: '活动数与队列深度都回到 0。' };
       case 'deadline_exceeded': return { ...common, kind: 'control', label: 'DEADLINE', title: 'Deadline exceeded', description: '预算已到 ≠ Tool 已停止。Runtime 将请求停止并等待确认。' };
       case 'cancellation_requested': return { ...common, kind: 'control', label: 'STOP REQUEST', title: 'Stop requested · waiting for acknowledgment', description: `原因：${event.reason} · 等待 ${event.active_tasks.join(', ') || '运行边界'} 确认` };
       case 'task_cancelled': return { ...common, kind: 'control', label: 'STOP ACK', title: 'Tool acknowledged stop', description: '该调用已退出；不是仅关闭浏览器连接。' };
