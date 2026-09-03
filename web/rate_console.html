@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=4">
-  <script defer src="/rate_console_core.js?v=4"></script>
-  <script defer src="/rate_console.js?v=4"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=5">
+  <script defer src="/rate_console_core.js?v=5"></script>
+  <script defer src="/rate_console.js?v=5"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Runtime Resilience Guards <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Bounded Replanning &amp; Loop Detection <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
     <div class="controls">
-      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><optgroup label="新课 1：Circuit Breaker"><option value="breaker_recovery">熔断 · 冷却后恢复</option><option value="breaker_open">熔断 · 阻止第三次调用</option></optgroup><optgroup label="新课 2：Rate Limit + Backpressure"><option value="backpressure">背压 · 排队后放行</option><option value="overload_rejected">过载 · 队满立即拒绝</option></optgroup><optgroup label="上一课：协作取消"><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option></optgroup><optgroup label="更早：并发汇合"><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></optgroup></select></label>
+      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><optgroup label="本课：Bounded Replanning"><option value="replan_success">重规划 · 修订后成功</option><option value="replan_loop">循环检测 · 重复计划停止</option><option value="replan_budget">预算耗尽 · ABSTAIN</option></optgroup><optgroup label="上一课：Runtime Resilience"><option value="breaker_recovery">熔断 · 冷却后恢复</option><option value="breaker_open">熔断 · 阻止第三次调用</option><option value="backpressure">背压 · 排队后放行</option><option value="overload_rejected">过载 · 队满立即拒绝</option></optgroup><optgroup label="更早：协作取消与并发"><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></optgroup></select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
         <form id="parameters" class="parameter-panel">
@@ -34,16 +34,16 @@
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
     <div class="workspace">
       <section class="graph-panel" aria-labelledby="graph-title">
-        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">11 nodes</span></div>
+        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">12 nodes</span></div>
         <div class="graph-canvas"><div class="graph-nodes" id="graph-nodes" aria-label="Agent 工作流节点"></div></div>
-        <div class="graph-caption"><span class="legend-dot"></span><span>C1 保护外部调用 · Q1 控制准入 · 点击节点筛选</span></div>
+        <div class="graph-caption"><span class="legend-dot"></span><span>V1 不通过 ↺ P1 · 通过 ↓ Q1 · 点击节点筛选</span></div>
       </section>
 
       <section class="stream-panel" aria-labelledby="stream-title">
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
         <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
         <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
-          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>先保护 Runtime，再调用 Tool</h3><p>观察熔断状态、准入许可、有界队列与过载拒绝。<br>默认演示 CLOSED → OPEN → HALF-OPEN → CLOSED。</p><span>Protect. Admit. Execute.</span></div>
+          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>Tool 成功，不等于 Observation 可用</h3><p>默认 D1 先返回 40 条数据，V1 拒绝并反馈给 P1。<br>Planner 扩大时间窗口后再执行；计划指纹与预算阻止死循环。</p><span>Observe. Validate. Replan.</span></div>
           <ol id="event-list" class="event-list" aria-label="运行事件"></ol>
           <p id="filter-empty" class="filter-empty" hidden>此节点尚未产生事件。</p>
         </div>

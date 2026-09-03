@@ -385,9 +385,9 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario now demonstrates **Circuit Breaker recovery** and completes
-   a trade from the disclosed teaching snapshot.
-2. Follow Goal → Planner → Runtime → C1 → D1 → Q1 → **A2 / A10** → J1 → S1 → E1.
+   default scenario demonstrates a rejected Observation followed by one bounded
+   plan revision, then completes from the disclosed teaching snapshot.
+2. Follow Goal → Planner → Runtime → C1 → D1 → V1 → Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
@@ -410,7 +410,40 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lessons: Circuit Breaker and bounded admission
+### Current lesson: bounded replanning and loop detection
+
+**V1** is an Observation Gate. It separates “the Tool returned successfully”
+from “the returned artifact is safe and sufficient for downstream use.” When
+V1 rejects D1, Runtime removes the observation from active state, preserves it
+in the audit trace, and sends structured feedback to P1.
+
+| Scenario | Planner behavior | Observe |
+| --- | --- | --- |
+| 重规划 · 修订后成功 (default) | First result has only 40 rows; P1 expands the start date once | D1 complete → V1 reject → D1 invalidated → P1 revision → D1 rerun → V1 pass |
+| 循环检测 · 重复计划停止 | P1 proposes the same D1 arguments again | Canonical plan fingerprint matches; no second Tool call; ABSTAIN |
+| 预算耗尽 · ABSTAIN | One novel revision is allowed but its result is still insufficient | Second V1 rejection cannot create another plan; downstream remains blocked |
+
+Engineering contract:
+
+- Retry repeats the same Tool call after a transient execution failure.
+  Replanning creates a different plan only after a successful Tool result fails
+  an Observation-quality gate.
+- The initial plan is fingerprinted but does not consume the revision budget.
+  Only novel revised plans spend the budget.
+- Fingerprints use canonical JSON, so key ordering cannot disguise a repeated
+  plan. Duplicate detection runs before the budget check.
+- An invalidated Observation remains visible for audit, but is removed from
+  active Runtime state and can never reach A2/A10.
+- Exhausting the budget or repeating a rejected plan produces an explicit
+  `ABSTAIN`, not a fabricated result and not an infinite loop.
+- The teaching Planner is deterministic and does not use an LLM. In a model-led
+  Agent, the model may propose revisions, but Runtime must still enforce these
+  fingerprints, budgets and downstream boundaries.
+
+Source file: `rate_replanning.py`. The three teaching modes use disclosed
+snapshot injection and never create real orders or external writes.
+
+### Previous lessons: Circuit Breaker and bounded admission
 
 The two new Runtime guards are visible as real graph nodes. **C1** protects an
 external Tool from repeated calls while its dependency is unhealthy. **Q1**
@@ -418,7 +451,7 @@ controls how quickly work may enter Tools and keeps waiting work bounded.
 
 | Scenario | Policy | Observe |
 | --- | --- | --- |
-| 熔断 · 冷却后恢复 (default) | Open after 2 consecutive D1 failures; 300ms cooldown | CLOSED → OPEN → HALF-OPEN; one probe succeeds; CLOSED; workflow continues |
+| 熔断 · 冷却后恢复 | Open after 2 consecutive D1 failures; 300ms cooldown | CLOSED → OPEN → HALF-OPEN; one probe succeeds; CLOSED; workflow continues |
 | 熔断 · 阻止第三次调用 | Open after 2 failures; long cooldown | Third request is rejected before `tool_execution_started`; D1 and downstream fail closed |
 | 背压 · 排队后放行 | 1 active Tool, queue capacity 1, 500ms admission interval | A2 gets a permit; A10 is QUEUED; after capacity and interval allow it, A10 is DEQUEUED and called |
 | 过载 · 队满立即拒绝 | 1 active Tool, queue capacity 0 | A10 is rejected before any Tool call; Join and downstream remain blocked |

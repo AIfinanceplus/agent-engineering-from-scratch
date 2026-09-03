@@ -18,13 +18,14 @@
     { id: 'R1', title: 'Runtime', description: '调度 · 容错 · 单线程归集事件' },
     { id: 'C1', title: 'Circuit breaker', description: '连续失败时阻止新 Tool 调用' },
     NODES[3],
+    { id: 'V1', title: 'Observation gate', description: '不通过 ↺ P1 · 通过 ↓ Q1' },
     { id: 'Q1', title: 'Admission queue', description: '限速 · 有界排队 · 过载拒绝' },
     { id: 'A2', title: '2Y series', description: 'Tool · 校验 2Y 序列' },
     { id: 'A10', title: '10Y series', description: 'Tool · 校验 10Y 序列' },
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['P1'], ['R1'], ['C1'], ['D1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -77,6 +78,19 @@
         state.activeTasks = state.activeTasks.filter(task => task !== id);
         state.activeTask = state.activeTasks[0] || null;
         break;
+      case 'observation_validation_started': state.nodes.V1 = 'running'; break;
+      case 'observation_validation_completed': state.nodes.V1 = event.passed ? 'completed' : 'replan'; break;
+      case 'task_invalidated':
+        if (id in state.nodes) state.nodes[id] = 'invalidated';
+        break;
+      case 'replan_requested':
+        state.nodes.P1 = 'running';
+        state.nodes.V1 = 'replan';
+        break;
+      case 'plan_revision_registered': state.nodes.P1 = 'completed'; break;
+      case 'plan_revised': state.nodes.P1 = 'completed'; break;
+      case 'replan_loop_detected': state.nodes.P1 = 'failed'; break;
+      case 'replan_budget_exhausted': state.nodes.P1 = 'failed'; break;
       case 'join_waiting':
         state.join = { completed: event.completed_dependencies, waitingFor: event.waiting_for, required: event.required };
         break;
@@ -170,7 +184,7 @@
     const common = { kind: 'node', label: 'NODE', title: event.event, description: '', detailLabel: '完整事件', payload: event };
     switch (event.event) {
       case 'goal_received': return { ...common, label: 'INPUT', title: 'Goal received', description: event.goal, detailLabel: '目标与运行参数' };
-      case 'plan_created': return { ...common, title: 'Plan created', description: event.graph ? 'C1 保护 D1；Q1 控制 A2 / A10 准入；J1 等待全部成功' : '固定计划 · D1 → S1，随后 E1 校验', detailLabel: '完整计划与依赖' };
+      case 'plan_created': return { ...common, title: 'Plan created', description: event.graph ? 'C1 保护 D1；V1 验证 Observation；Q1 控制分支准入' : '固定计划 · D1 → S1，随后 E1 校验', detailLabel: '完整计划与依赖' };
       case 'runtime_started': return { ...common, title: 'Runtime started', description: '从 Tool Registry 解析能力，并执行参数校验和重试策略。', detailLabel: 'Runtime 与 Tool Registry' };
       case 'task_started': return { ...common, title: 'Node started', description: event.tool_name };
       case 'tool_lookup': return { ...common, label: 'REGISTRY', title: event.tool_name, description: event.found ? 'Tool 已在注册表找到' : 'Tool 未注册' };
@@ -182,6 +196,14 @@
         return { ...common, kind: 'result', label: 'TOOL RESULT', title: event.tool_name, description, detailLabel: '返回结果 · 完整 JSON', payload: output };
       }
       case 'task_completed': return { ...common, title: 'Node completed', description: event.tool_name };
+      case 'plan_revision_registered': return { ...common, kind: 'replan', label: 'PLAN v0', title: 'Initial plan fingerprinted', description: `重规划预算尚余 ${event.remaining_revisions} 次；相同计划不会再次执行。`, detailLabel: '计划指纹与预算' };
+      case 'observation_validation_started': return { ...common, kind: 'replan', label: 'GATE', title: 'Validate D1 Observation', description: 'Tool 调用成功不代表结果可供下游使用。' };
+      case 'observation_validation_completed': return { ...common, kind: event.passed ? 'result' : 'replan', label: event.passed ? 'GATE PASS' : 'GATE REJECT', title: event.passed ? 'Observation accepted' : 'Observation rejected', description: event.passed ? `${event.output?.observation_count} 条观测满足下游要求。` : `${event.output?.observation_count}/${event.output?.minimum_required} 条；不把无效结果传给下游。`, detailLabel: 'Observation Gate 结果', payload: event.output };
+      case 'task_invalidated': return { ...common, kind: 'replan', label: 'INVALIDATED', title: `${event.task_id} output removed from active state`, description: '结果仅保留在审计 Trace；不会进入 A2 / A10。', detailLabel: '被拒绝的完整 Observation', payload: event.rejected_observation };
+      case 'replan_requested': return { ...common, kind: 'replan', label: 'FEEDBACK ↺', title: 'V1 requests a new plan', description: '这是重规划：Tool 已成功，但结果质量不够；不是原调用的瞬时失败重试。', detailLabel: '结构化反馈', payload: event.feedback };
+      case 'plan_revised': return { ...common, kind: 'replan', label: `PLAN v${event.revision}`, title: 'Planner revised D1 arguments', description: `扩大数据窗口 · 剩余重规划预算 ${event.remaining_revisions} 次。`, detailLabel: '新旧计划与反馈', payload: event };
+      case 'replan_loop_detected': return { ...common, kind: 'error', label: 'LOOP STOP', title: 'Repeated plan fingerprint blocked', description: 'Planner 再次提出已被拒绝的同一计划；Runtime 终止循环并 ABSTAIN。', detailLabel: '循环检测状态', payload: event.guard };
+      case 'replan_budget_exhausted': return { ...common, kind: 'error', label: 'BUDGET STOP', title: 'Replanning budget exhausted', description: '新计划仍不满足 V1；Runtime 不允许无限循环，停止并 ABSTAIN。', detailLabel: '重规划预算状态', payload: event.guard };
       case 'parallel_group_started': return { ...common, label: 'FAN-OUT', title: 'Concurrent branches dispatched', description: `${event.task_ids.join(' + ')} · 最多 ${event.max_workers} 个 worker` };
       case 'join_waiting': return { ...common, label: 'JOIN', title: `Join · ${event.completed_dependencies.length}/${event.required} ready`, description: event.waiting_for.length ? `等待 ${event.waiting_for.join(' + ')}；尚未调用下游 Tool` : '两边均成功，准备放行' };
       case 'join_released': return { ...common, kind: 'result', label: 'FAN-IN', title: 'Join released · 2/2', description: '两个依赖均成功，现在才允许汇合与策略计算。' };

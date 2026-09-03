@@ -99,8 +99,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=4", html)
-        self.assertIn("rate_console_core.js?v=4", html)
+        self.assertIn("rate_console.js?v=5", html)
+        self.assertIn("rate_console_core.js?v=5", html)
+        self.assertIn("Bounded Replanning", html)
+        self.assertIn("replan_success", html)
         self.assertNotIn("rate_workbench.js", html)
         self.assertNotIn("r12_step7.js", html)
         self.assertNotIn("data-detail-tab", html)
@@ -265,6 +267,26 @@ class RateHTTPTests(unittest.TestCase):
         a10_call = next(e["sequence"] for e in events if e["event"] == "tool_execution_started" and e["task_id"] == "A10")
         self.assertLess(queued, released)
         self.assertLess(released, a10_call)
+
+    def test_replanning_stream_rejects_first_observation_then_completes(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "replan_success"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertEqual([e["passed"] for e in events if e["event"] == "observation_validation_completed"], [False, True])
+        self.assertEqual(sum(e["event"] == "tool_execution_started" and e["task_id"] == "D1" for e in events), 2)
+        self.assertTrue(any(e["event"] == "plan_revised" for e in events))
+        self.assertEqual(events, messages[-1]["result"]["trace"])
+
+    def test_replanning_loop_and_budget_fail_with_explicit_codes(self):
+        for scenario, code in (("replan_loop", "REPLAN_LOOP_DETECTED"),
+                               ("replan_budget", "REPLAN_BUDGET_EXHAUSTED")):
+            status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": scenario})
+            self.assertEqual(status, 200)
+            self.assertEqual(messages[-1]["type"], "error")
+            self.assertEqual(messages[-1]["error"]["code"], code)
+            events = [message["event"] for message in messages if message["type"] == "event"]
+            self.assertFalse(any(e.get("task_id") in {"A2", "A10", "J1", "S1", "E1"} for e in events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

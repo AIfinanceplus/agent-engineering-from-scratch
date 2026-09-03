@@ -19,19 +19,23 @@ from uuid import uuid4
 from rate_sources import load_bundled_rate_history
 from rate_control import RunControl, RunStopped, check_run_control
 from rate_resilience import AdmissionController, CircuitBreaker, CircuitOpen
+from rate_replanning import (PlanRevisionGuard, ReplanBudgetExhausted,
+                             ReplanLoopDetected, validate_rate_history_observation)
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
 
 
 SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result",
-             "breaker_open", "breaker_recovery", "backpressure", "overload_rejected"}
+             "breaker_open", "breaker_recovery", "backpressure", "overload_rejected",
+             "replan_success", "replan_loop", "replan_budget"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
-GRAPH_ROWS = [["G1"], ["P1"], ["R1"], ["C1"], ["D1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"], ["D1", "Q1"],
-               ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
+REPLAN_SCENARIOS = {"replan_success", "replan_loop", "replan_budget"}
+GRAPH_ROWS = [["G1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
+               ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
 
@@ -105,11 +109,12 @@ PARALLEL_TOOLS = (
 
 
 class ParallelRunError(RuntimeError):
-    def __init__(self, message, task_id, trace, failures=None):
+    def __init__(self, message, task_id, trace, failures=None, code=None):
         super().__init__(message)
         self.task_id = task_id
         self.trace = deepcopy(trace)
         self.failures = dict(failures or {})
+        self.code = code or self.__class__.__name__
 
 
 class RateRunStopped(RunStopped):
@@ -159,6 +164,8 @@ class RateParallelAgent:
             reset_timeout_ms=300 if demo_scenario == "breaker_recovery" else 30000,
         ) if demo_scenario in BREAKER_SCENARIOS else None
         injected_source_failures = 0
+        replan_source_calls = 0
+        revision_guard = PlanRevisionGuard(max_revisions=1) if demo_scenario in REPLAN_SCENARIOS else None
 
         def emit(event, **payload):
             row = deepcopy({"sequence": len(trace) + 1, "run_id": run_id,
@@ -167,6 +174,16 @@ class RateParallelAgent:
             trace.append(row)
             if event_sink:
                 event_sink(deepcopy(row))
+
+        def teaching_pause(seconds=0.35):
+            """Give the browser one paint window between teaching states."""
+            if demo_scenario not in REPLAN_SCENARIOS:
+                return
+            if self.sleep is time.sleep:
+                control.wait(seconds)
+            else:
+                self.sleep(seconds)
+                control.check()
 
         def announce_stop():
             nonlocal stop_announced
@@ -177,12 +194,12 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["C1", "Q1", *by_id, "E1"]:
+            for task_id in ["C1", "V1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
         def call(task_id, arguments, publish=emit):
-            nonlocal injected_source_failures
+            nonlocal injected_source_failures, replan_source_calls
             control.check()
             task = by_id[task_id]
             name = task["tool_name"]
@@ -206,6 +223,19 @@ class RateParallelAgent:
                             raise ConnectionError(f"教学故障注入：上游连续失败 {injected_source_failures}/2")
                         return load_bundled_rate_history(**kwargs)
                     function = breaker_demo_source
+                elif demo_scenario in REPLAN_SCENARIOS:
+                    def replanning_demo_source(**kwargs):
+                        nonlocal replan_source_calls
+                        replan_source_calls += 1
+                        output = load_bundled_rate_history(**kwargs)
+                        if replan_source_calls == 1 or demo_scenario == "replan_budget":
+                            output = deepcopy(output)
+                            output["observations"] = output["observations"][-40:]
+                            output["observation_count"] = len(output["observations"])
+                            output["as_of"] = output["observations"][-1]["date"]
+                            output["teaching_injection"] = "insufficient_history_observation"
+                        return output
+                    function = replanning_demo_source
                 else:
                     function = load_bundled_rate_history
             for attempt in range(1, tool.max_retries + 2):
@@ -409,11 +439,73 @@ class RateParallelAgent:
             admission.release("A10")
             emit("admission_cycle_completed", task_id="Q1", snapshot=admission.snapshot())
 
+        def validate_or_replan(initial_arguments):
+            """Reject unusable observations before downstream tasks see them."""
+            arguments = dict(initial_arguments)
+            while True:
+                emit("observation_validation_started", task_id="V1", source_task="D1",
+                     arguments={"lookback_days": lookback_days, "holding_days": holding_days})
+                validation = validate_rate_history_observation(
+                    observations["D1"], lookback_days=lookback_days, holding_days=holding_days
+                )
+                emit("observation_validation_completed", task_id="V1", source_task="D1",
+                     passed=validation["passed"], output=validation)
+                if validation["passed"]:
+                    completed.add("V1")
+                    teaching_pause(0.3)
+                    return
+                teaching_pause()
+                emit("task_invalidated", task_id="D1", reason=validation["reason"],
+                     rejected_observation=observations["D1"])
+                completed.discard("D1")
+                observations.pop("D1", None)
+                emit("replan_requested", task_id="V1", feedback=validation,
+                     target_task="P1")
+                teaching_pause(0.45)
+                if not revision_guard:
+                    raise ParallelRunError(validation["reason"], "V1", trace,
+                                           {"V1": validation["reason"]}, code="OBSERVATION_REJECTED")
+
+                proposed_arguments = dict(arguments)
+                if demo_scenario != "replan_loop":
+                    proposed_arguments["start_date"] = (
+                        date.fromisoformat(arguments["start_date"]) - timedelta(days=730)
+                    ).isoformat()
+                proposed_plan = {"task_id": "D1", "tool_name": "fetch_public_rate_history",
+                                 "arguments": proposed_arguments}
+                try:
+                    revision = revision_guard.register(proposed_plan)
+                except ReplanLoopDetected as exc:
+                    emit("replan_loop_detected", task_id="P1", fingerprint=exc.fingerprint,
+                         guard=revision_guard.snapshot(), decision="ABSTAIN")
+                    emit("task_failed", task_id="V1", error_type=type(exc).__name__, error_message=str(exc))
+                    raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
+                                           code="REPLAN_LOOP_DETECTED") from exc
+                except ReplanBudgetExhausted as exc:
+                    emit("replan_budget_exhausted", task_id="P1", max_revisions=exc.max_revisions,
+                         guard=revision_guard.snapshot(), decision="ABSTAIN")
+                    emit("task_failed", task_id="V1", error_type=type(exc).__name__, error_message=str(exc))
+                    raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
+                                           code="REPLAN_BUDGET_EXHAUSTED") from exc
+                emit("plan_revised", task_id="P1", revision=revision["revision"],
+                     fingerprint=revision["fingerprint"], remaining_revisions=revision["remaining_revisions"],
+                     previous_arguments=arguments, new_arguments=proposed_arguments,
+                     feedback=validation)
+                arguments = proposed_arguments
+                teaching_pause()
+                run_batch({"D1": arguments})
+
         try:
             emit("goal_received", task_id="G1", goal="one auditable 2s10s paper simulation",
                  configuration={**configuration, "start_date": start_date}, demo_scenario=demo_scenario)
             emit("plan_created", task_id="P1", planner="bounded_fanout_all_success_join",
                  task_ids=list(by_id), tasks=plan, graph={"rows": GRAPH_ROWS, "edges": GRAPH_EDGES})
+            initial_d1_arguments = {"start_date": start_date}
+            if revision_guard:
+                revision = revision_guard.seed({"task_id": "D1", "tool_name": "fetch_public_rate_history",
+                                                "arguments": initial_d1_arguments})
+                emit("plan_revision_registered", task_id="P1", revision=revision["revision"],
+                     fingerprint=revision["fingerprint"], remaining_revisions=revision["remaining_revisions"])
             emit("runtime_started", task_id="R1", model="none_deterministic_v1", max_workers=2,
                  registry_tools=list(dict.fromkeys(t["tool_name"] for t in plan)))
             emit("run_budget_started", task_id="R1", budget_ms=control.budget_ms,
@@ -426,9 +518,10 @@ class RateParallelAgent:
                 emit("circuit_bypassed", task_id="C1", reason="本场景不注入连续上游故障")
                 completed.add("C1")
             current_task = "D1"
-            run_batch({"D1": {"start_date": start_date}})
+            run_batch({"D1": initial_d1_arguments})
             if breaker:
                 completed.add("C1")
+            validate_or_replan(initial_d1_arguments)
             emit("parallel_group_started", task_id="R1", task_ids=["A2", "A10"], max_workers=2)
             emit("join_waiting", task_id="J1", completed_dependencies=[], waiting_for=["A2", "A10"], required=2)
             branch_arguments = {task_id: {"history": observations["D1"], "series_id": series_id, "batch_id": run_id}
@@ -484,10 +577,13 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["C1", "Q1", *by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["C1", "V1", "Q1", *by_id, "E1"]},
             "architecture": {"planner": "bounded_fanout_all_success_join", "model": "none_deterministic_v1",
-                             "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread"},
-            "lesson": {"topic": "resilience_guards", "demo_scenario": demo_scenario,
+                             "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
+                             "observation_gate": "V1",
+                             "replanning_guard": revision_guard.snapshot() if revision_guard else None},
+            "lesson": {"topic": "bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards",
+                       "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,
                            "partial_join_allowed": False, "concurrent_external_writes": False},

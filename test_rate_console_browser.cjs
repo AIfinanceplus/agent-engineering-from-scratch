@@ -40,7 +40,7 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 11);
+    assert.equal(await page.locator('.graph-node').count(), 12);
     assert.equal(await page.locator('script').count(), 2);
     await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
@@ -49,7 +49,7 @@ server.serve_forever()
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 11);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 12);
     const eventCount = await page.locator('.event-row').count();
     assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
@@ -71,6 +71,24 @@ server.serve_forever()
     await page.locator('#download').click();
     const download = await downloadWait;
     assert.match(download.suggestedFilename(), /^RATE-RUN-.*\.json$/);
+
+    // Observation success is not enough: V1 rejects, P1 replans, then V1 accepts.
+    await page.locator('#scenario').selectOption('replan_success');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const replanKinds = await page.locator('.event-kind').allTextContents();
+    assert.ok(replanKinds.includes('GATE REJECT'));
+    assert.ok(replanKinds.includes('FEEDBACK ↺'));
+    assert.ok(replanKinds.includes('PLAN v1'));
+    assert.ok(replanKinds.includes('GATE PASS'));
+    assert.equal(await page.locator('.graph-node[data-node="V1"]').getAttribute('data-status'), 'completed');
+
+    // A repeated plan is stopped before D1 can be called a second time.
+    await page.locator('#scenario').selectOption('replan_loop');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.equal(await page.locator('.event-row[data-node="D1"][data-kind="call"]').count(), 1);
+    assert.ok((await page.locator('.event-kind').allTextContents()).includes('LOOP STOP'));
 
     // A real strategy validation failure must not erase the successful D1 node.
     await page.locator('#settings summary').click();

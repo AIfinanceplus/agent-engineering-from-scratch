@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[6], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[7], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -191,4 +191,36 @@ test('backpressure shows queued, throttled, released and drained states', () => 
   assert.equal(state.nodes.Q1, 'running');
   emit('admission_cycle_completed', 'Q1');
   assert.equal(state.nodes.Q1, 'completed');
+});
+
+test('replanning visibly invalidates D1, loops through P1, then accepts V1', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('task_completed', 'D1');
+  emit('observation_validation_started', 'V1');
+  emit('observation_validation_completed', 'V1', { passed: false, output: { observation_count: 40, minimum_required: 81 } });
+  assert.equal(state.nodes.V1, 'replan');
+  emit('task_invalidated', 'D1');
+  emit('replan_requested', 'V1');
+  assert.equal(state.nodes.D1, 'invalidated');
+  assert.equal(state.nodes.P1, 'running');
+  emit('plan_revised', 'P1', { revision: 1, remaining_revisions: 0 });
+  emit('task_started', 'D1');
+  emit('task_completed', 'D1');
+  emit('observation_validation_started', 'V1');
+  emit('observation_validation_completed', 'V1', { passed: true, output: { observation_count: 746, minimum_required: 81 } });
+  assert.equal(state.nodes.P1, 'completed');
+  assert.equal(state.nodes.D1, 'completed');
+  assert.equal(state.nodes.V1, 'completed');
+  assert.equal(describe({ event: 'replan_requested', feedback: {} }).label, 'FEEDBACK ↺');
+});
+
+test('loop and budget guards stop Planner instead of spinning', () => {
+  for (const event of ['replan_loop_detected', 'replan_budget_exhausted']) {
+    const { state, emit } = setup();
+    Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+    emit(event, 'P1', { guard: { used_revisions: 1, max_revisions: 1 } });
+    assert.equal(state.nodes.P1, 'failed');
+    assert.equal(describe({ event, guard: {} }).kind, 'error');
+  }
 });
