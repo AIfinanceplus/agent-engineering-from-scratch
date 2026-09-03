@@ -387,14 +387,15 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario demonstrates malformed model JSON, one bounded repair, five
-   Runtime validation checks, then completes from the disclosed teaching snapshot.
-2. Follow Goal → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
+   default scenario demonstrates an economy-model timeout, token settlement and
+   one budget-approved capable-model fallback before the rate workflow runs.
+2. Follow Goal → MR1 Model Router → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
    Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
-3. The stream includes the model prompt, raw output, parse/validation decision,
+3. The stream includes route selection, token reservation/settlement, fallback,
+   the model prompt, raw output, parse/validation decision,
    every emitted node event, registry lookup, Tool call (full arguments), Tool
    result (full output), retry and Eval result.
    Expand a row to inspect JSON; no observations are truncated.
@@ -414,7 +415,39 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: model proposal vs Runtime authority
+### Current lesson: model routing, token budget and bounded fallback
+
+**MR1** selects from a declared Model Registry before M1 can receive a prompt.
+Every call reserves its worst-case teaching token allowance first. After the
+call, MR1 charges the disclosed usage and releases the unused reservation. The
+demo values are labelled `scripted_teaching_usage`; they are deterministic
+teaching units, not output from a real tokenizer or billing API.
+
+| Scenario | Routing policy | Observe |
+| --- | --- | --- |
+| 主模型超时 · 有界 Fallback (default) | Economy endpoint fails after accepting the prompt; one capable fallback is declared | Reserve 600 → charge 160 → FALLBACK 1/1 → reserve 1200 → charge 480 → route completes |
+| 经济模型成功 · 不升级 | Lowest sufficient tier returns a valid proposal | One model call, 440 tokens charged, zero fallback; larger model is never called |
+| 预算不足 · 调用前 ABSTAIN | Total budget 700; primary failure spends 160, leaving 540; fallback needs 1200 reserved | MR1 blocks the capable model before its call; P1, Runtime and all Tools remain unstarted |
+
+Engineering contract:
+
+- Routing chooses from a finite, registered candidate list. A model name emitted
+  by another model cannot silently become a provider endpoint.
+- Worst-case tokens are reserved before each call. Settlement happens even when
+  the provider fails after accepting the prompt, so failure is not treated as free.
+- Fallback is bounded to one declared transition. There is no recursive “try a
+  bigger model forever” behavior.
+- The same model is not retried for the injected provider timeout. Router moves
+  to the next declared candidate; Tool retry and plan replanning remain separate policies.
+- Budget rejection occurs before the second model request and yields explicit
+  `ABSTAIN`, never an unbudgeted call.
+- A successful routed response still passes the previous P1 schema, Tool
+  allowlist, DAG, paper-only and executable-template checks.
+
+Source file: `rate_model_routing.py`. The adapters remain scripted and explicitly
+non-LLM so CI and the lesson are repeatable without credentials or network access.
+
+### Previous lesson: model proposal vs Runtime authority
 
 **M1** is a Model Gateway, not an executor. It returns untrusted text. **P1**
 parses and validates that text before Runtime can resolve or call any Tool. The
@@ -441,7 +474,7 @@ Engineering contract:
 - Raw model text and the parsed proposal remain in Trace for audit. Neither can
   directly call a Python function, mutate state, or create an order.
 - The safe demo shows the architectural seam for a future real model adapter.
-  Provider routing, token budgets and model fallbacks belong to the next lesson.
+  The current MR1 lesson now adds provider routing, token budgets and bounded fallback.
 
 Source file: `rate_model_planner.py`. The rate strategy and all Tool side-effect
 boundaries are unchanged.

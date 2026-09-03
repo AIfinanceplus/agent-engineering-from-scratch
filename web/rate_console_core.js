@@ -15,6 +15,7 @@
   ];
   const PARALLEL_NODES = [
     NODES[0],
+    { id: 'MR1', title: 'Model router', description: '选路 · token 预算 · 有界 fallback' },
     { id: 'M1', title: 'Model gateway', description: '生成提议 · 无执行权限' },
     NODES[1],
     { id: 'R1', title: 'Runtime', description: '调度 · 容错 · 单线程归集事件' },
@@ -27,7 +28,7 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -54,6 +55,17 @@
     const id = event.task_id;
     switch (event.event) {
       case 'goal_received': state.nodes.G1 = 'completed'; break;
+      case 'model_routing_bypassed': state.nodes.MR1 = 'completed'; break;
+      case 'model_routing_started': state.nodes.MR1 = 'running'; break;
+      case 'model_route_selected': state.nodes.MR1 = 'selected'; break;
+      case 'model_budget_reserved': state.nodes.MR1 = 'reserved'; break;
+      case 'model_provider_failed':
+        state.nodes.M1 = 'failed';
+        break;
+      case 'model_fallback_requested': state.nodes.MR1 = 'fallback'; break;
+      case 'model_budget_rejected': state.nodes.MR1 = 'budget_blocked'; break;
+      case 'model_route_abstained': state.nodes.MR1 = 'failed'; break;
+      case 'model_route_completed': state.nodes.MR1 = 'completed'; break;
       case 'model_bypassed': state.nodes.M1 = 'completed'; break;
       case 'model_request_started': state.nodes.M1 = 'running'; break;
       case 'model_response_received': state.nodes.M1 = 'proposed'; break;
@@ -203,6 +215,16 @@
     const common = { kind: 'node', label: 'NODE', title: event.event, description: '', detailLabel: '完整事件', payload: event };
     switch (event.event) {
       case 'goal_received': return { ...common, label: 'INPUT', title: 'Goal received', description: event.goal, detailLabel: '目标与运行参数' };
+      case 'model_routing_bypassed': return { ...common, kind: 'route', label: 'ROUTER', title: 'Model routing bypassed', description: event.reason };
+      case 'model_routing_started': return { ...common, kind: 'route', label: 'ROUTE START', title: `Token budget · ${event.budget.total_tokens}`, description: `${event.candidates.join(' → ')} · fallback 最多 ${event.max_fallbacks} 次`, detailLabel: 'Model catalog 与预算', payload: event };
+      case 'model_route_selected': return { ...common, kind: 'route', label: 'SELECT', title: `${event.model} · ${event.tier}`, description: `${event.provider} · ${event.reason}`, detailLabel: '路由决策', payload: event };
+      case 'model_budget_reserved': return { ...common, kind: 'route', label: 'RESERVE', title: `Reserve ${event.reservation.reserved_tokens} tokens`, description: `调用前预留最坏情况；剩余 ${event.reservation.budget.remaining_tokens}。`, detailLabel: 'Token reservation', payload: event.reservation };
+      case 'model_provider_failed': return { ...common, kind: 'error', label: 'PROVIDER FAIL', title: `${event.model} unavailable`, description: `${event.error_message} · 同模型不重试`, detailLabel: '失败与已消耗 token', payload: event };
+      case 'model_budget_settled': return { ...common, kind: 'route', label: 'CHARGE', title: `Charged ${event.settlement.charged_tokens} tokens`, description: `释放 ${event.settlement.released_tokens} · 预算剩余 ${event.settlement.budget.remaining_tokens}`, detailLabel: 'Token ledger', payload: event.settlement };
+      case 'model_fallback_requested': return { ...common, kind: 'route', label: `FALLBACK ${event.fallback_number}/${event.max_fallbacks}`, title: `${event.from_model} → ${event.to_model}`, description: '只切换到 Model Registry 中声明的下一个候选；不会无限升级。', detailLabel: 'Fallback 决策', payload: event };
+      case 'model_budget_rejected': return { ...common, kind: 'error', label: 'BUDGET STOP', title: `${event.model} not called`, description: `需预留 ${event.required_tokens}，仅剩 ${event.remaining_tokens}；调用前 ABSTAIN。`, detailLabel: '预算拒绝', payload: event };
+      case 'model_route_abstained': return { ...common, kind: 'error', label: 'ABSTAIN', title: 'No model call permitted', description: event.reason, detailLabel: '路由终态', payload: event };
+      case 'model_route_completed': return { ...common, kind: 'route', label: 'ROUTE END', title: `${event.selected_model} completed`, description: `fallback ${event.fallback_count} 次 · 已用 ${event.budget.spent_tokens}/${event.budget.total_tokens} token`, detailLabel: '最终路由与预算', payload: event };
       case 'model_bypassed': return { ...common, kind: 'model', label: 'MODEL', title: 'Model gateway bypassed', description: event.reason };
       case 'model_request_started': return { ...common, kind: 'model', label: 'MODEL INPUT', title: `${event.model} · proposal ${event.attempt}`, description: event.is_real_llm ? '真实模型调用；模型只能生成提议。' : '可重复的教学模型；不是外部 LLM，也没有执行权限。', detailLabel: '完整 prompt 与权限声明', payload: event.prompt };
       case 'model_response_received': return { ...common, kind: 'model', label: 'RAW OUTPUT', title: `${event.output_characters} characters received`, description: '这是未经信任的模型文本；尚未成为 Plan。', detailLabel: '原始模型输出', payload: { raw_output: event.raw_output, model: event.model, is_real_llm: event.is_real_llm } };

@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[8], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[9], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -256,4 +256,33 @@ test('unsafe model plan fails P1 and leaves Runtime waiting', () => {
   assert.equal(state.nodes.P1, 'failed');
   assert.equal(state.nodes.R1, 'waiting');
   assert.equal(describe({ event: 'model_plan_rejected', reasons: ['unknown tool'] }).label, 'ABSTAIN');
+});
+
+test('model router exposes reservation, provider failure and bounded fallback', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('model_routing_started', 'MR1', { candidates: ['small', 'large'], max_fallbacks: 1, budget: { total_tokens: 2000 } });
+  emit('model_route_selected', 'MR1', { model: 'small', tier: 'economy', provider: 'local', reason: 'lowest tier' });
+  emit('model_budget_reserved', 'MR1', { reservation: { reserved_tokens: 600, budget: { remaining_tokens: 1400 } } });
+  assert.equal(state.nodes.MR1, 'reserved');
+  emit('model_request_started', 'M1', { model: 'small', attempt: 1, is_real_llm: false, prompt: {} });
+  emit('model_provider_failed', 'M1', { model: 'small', error_message: 'timeout' });
+  emit('model_fallback_requested', 'MR1', { from_model: 'small', to_model: 'large', fallback_number: 1, max_fallbacks: 1 });
+  assert.equal(state.nodes.M1, 'failed');
+  assert.equal(state.nodes.MR1, 'fallback');
+  emit('model_route_selected', 'MR1', { model: 'large', tier: 'capable', provider: 'local', reason: 'fallback' });
+  emit('model_route_completed', 'MR1', { selected_model: 'large', fallback_count: 1, budget: { spent_tokens: 640, total_tokens: 2000 } });
+  assert.equal(state.nodes.MR1, 'completed');
+  assert.equal(describe({ event: 'model_fallback_requested', from_model: 'small', to_model: 'large', fallback_number: 1, max_fallbacks: 1 }).label, 'FALLBACK 1/1');
+});
+
+test('token budget stops fallback before a second model request', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('model_budget_rejected', 'MR1', { model: 'large', required_tokens: 1200, remaining_tokens: 540 });
+  assert.equal(state.nodes.MR1, 'budget_blocked');
+  assert.equal(describe({ event: 'model_budget_rejected', model: 'large', required_tokens: 1200, remaining_tokens: 540 }).label, 'BUDGET STOP');
+  emit('model_route_abstained', 'MR1', { reason: 'budget exhausted' });
+  assert.equal(state.nodes.MR1, 'failed');
+  assert.equal(state.nodes.M1, 'waiting');
 });

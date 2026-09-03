@@ -25,6 +25,9 @@ from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
                                 ModelPlanRejected, ScriptedRatePlanModel,
                                 build_plan_prompt, parse_plan_proposal,
                                 validate_plan_proposal)
+from rate_model_routing import (ModelProviderUnavailable, ModelRouter,
+                                ModelTokenBudget, ModelTokenBudgetExceeded,
+                                ScriptedRoutedModel)
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -33,14 +36,16 @@ from tools import TOOL_REGISTRY, Tool, resolve_tool
 SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result",
              "breaker_open", "breaker_recovery", "backpressure", "overload_rejected",
              "replan_success", "replan_loop", "replan_budget",
-             "model_valid", "model_repair", "model_unsafe"}
+             "model_valid", "model_repair", "model_unsafe",
+             "route_primary", "route_fallback", "route_budget"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
 REPLAN_SCENARIOS = {"replan_success", "replan_loop", "replan_budget"}
 MODEL_SCENARIOS = {"model_valid", "model_repair", "model_unsafe"}
-GRAPH_ROWS = [["G1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
+ROUTING_SCENARIOS = {"route_primary", "route_fallback", "route_budget"}
+GRAPH_ROWS = [["G1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
@@ -177,7 +182,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -194,7 +199,7 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["M1", "C1", "V1", "Q1", *by_id, "E1"]:
+            for task_id in ["MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
@@ -495,17 +500,138 @@ class RateParallelAgent:
                 teaching_pause()
                 run_batch({"D1": arguments})
 
+        def parse_and_validate_model_output(raw_output, *, response_attempt, allowed_tools):
+            """Turn untrusted text into a validated proposal; never execute here."""
+            emit("plan_parse_started", task_id="P1", response_attempt=response_attempt)
+            try:
+                proposal = parse_plan_proposal(raw_output)
+            except ModelPlanParseError as exc:
+                emit("plan_parse_failed", task_id="P1", error_type=type(exc).__name__,
+                     error_message=str(exc), raw_output=raw_output)
+                raise
+            emit("plan_parsed", task_id="P1", proposal=proposal)
+            emit("plan_validation_started", task_id="P1",
+                 checks=["schema", "tool_allowlist", "acyclic", "paper_only", "executable_template"])
+            try:
+                validated = validate_plan_proposal(proposal, allowed_tools=allowed_tools,
+                                                   expected_tasks=SAFE_RATE_TASKS)
+            except ModelPlanRejected as exc:
+                emit("plan_validation_completed", task_id="P1", accepted=False,
+                     reasons=exc.reasons, decision="ABSTAIN")
+                raise
+            emit("plan_validation_completed", task_id="P1", accepted=True,
+                 output=validated, decision="EXECUTE")
+            return proposal
+
         try:
             goal = "one auditable 2s10s paper simulation"
             emit("goal_received", task_id="G1", goal=goal,
                  configuration={**configuration, "start_date": start_date}, demo_scenario=demo_scenario)
             planner_name = "bounded_fanout_all_success_join"
             model_adapter = None
+            model_routing = None
+            allowed_tools = {task["tool_name"] for task in SAFE_RATE_TASKS}
+            prompt = build_plan_prompt(goal, allowed_tools)
+            if demo_scenario in ROUTING_SCENARIOS:
+                current_task = "MR1"
+                router = ModelRouter(max_fallbacks=1)
+                model_budget = ModelTokenBudget(700 if demo_scenario == "route_budget" else
+                                                (1000 if demo_scenario == "route_primary" else 2000))
+                model_routing = {"router": router.snapshot(), "budget": model_budget}
+                candidates = router.candidates(purpose="structured_rate_plan")
+                emit("model_routing_started", task_id="MR1", purpose="structured_rate_plan",
+                     candidates=[spec.model_id for spec in candidates],
+                     max_fallbacks=router.max_fallbacks, budget=model_budget.snapshot(),
+                     usage_source="scripted_teaching_usage")
+                for candidate_index, spec in enumerate(candidates):
+                    emit("model_route_selected", task_id="MR1", model=spec.model_id,
+                         provider=spec.provider, tier=spec.tier,
+                         route_index=candidate_index, reason="lowest sufficient declared tier")
+                    try:
+                        reservation = model_budget.reserve(spec)
+                    except ModelTokenBudgetExceeded as exc:
+                        emit("model_budget_rejected", task_id="MR1", model=exc.model_id,
+                             required_tokens=exc.required_tokens,
+                             remaining_tokens=exc.remaining_tokens,
+                             budget=model_budget.snapshot(), decision="ABSTAIN")
+                        emit("model_route_abstained", task_id="MR1", reason=str(exc),
+                             decision="ABSTAIN", fallback_count=candidate_index)
+                        raise ParallelRunError(str(exc), "MR1", trace, {"MR1": str(exc)},
+                                               code="MODEL_TOKEN_BUDGET_EXCEEDED") from exc
+                    emit("model_budget_reserved", task_id="MR1", model=spec.model_id,
+                         reservation=reservation)
+                    current_task = "M1"
+                    model_adapter = ScriptedRoutedModel(spec, demo_scenario)
+                    emit("model_request_started", task_id="M1", model=model_adapter.model_name,
+                         is_real_llm=model_adapter.is_real_llm, prompt=prompt,
+                         purpose="plan_proposal", attempt=candidate_index + 1,
+                         reservation_id=reservation["reservation_id"])
+                    teaching_pause(0.3)
+                    try:
+                        response = model_adapter.complete(prompt)
+                    except ModelProviderUnavailable as exc:
+                        settlement = model_budget.settle(
+                            reservation["reservation_id"], input_tokens=160, output_tokens=0
+                        )
+                        emit("model_provider_failed", task_id="M1", model=spec.model_id,
+                             provider=spec.provider, error_type=type(exc).__name__,
+                             error_message=str(exc), retry_same_model=False,
+                             usage=settlement["usage"])
+                        emit("model_budget_settled", task_id="MR1", model=spec.model_id,
+                             settlement=settlement)
+                        if candidate_index + 1 < len(candidates):
+                            emit("model_fallback_requested", task_id="MR1",
+                                 from_model=spec.model_id,
+                                 to_model=candidates[candidate_index + 1].model_id,
+                                 reason="declared provider failure", bounded=True,
+                                 fallback_number=candidate_index + 1,
+                                 max_fallbacks=router.max_fallbacks)
+                            teaching_pause(0.45)
+                            continue
+                        raise ParallelRunError(str(exc), "M1", trace, {"M1": str(exc)},
+                                               code="MODEL_PROVIDER_UNAVAILABLE") from exc
+                    settlement = model_budget.settle(
+                        reservation["reservation_id"], **{
+                            "input_tokens": response["usage"]["input_tokens"],
+                            "output_tokens": response["usage"]["output_tokens"],
+                        }
+                    )
+                    raw_output = response["raw_output"]
+                    emit("model_response_received", task_id="M1", model=model_adapter.model_name,
+                         is_real_llm=model_adapter.is_real_llm, raw_output=raw_output,
+                         output_characters=len(raw_output), attempt=candidate_index + 1,
+                         usage=response["usage"])
+                    emit("model_budget_settled", task_id="MR1", model=spec.model_id,
+                         settlement=settlement)
+                    teaching_pause()
+                    try:
+                        proposal = parse_and_validate_model_output(
+                            raw_output, response_attempt=candidate_index + 1,
+                            allowed_tools=allowed_tools
+                        )
+                    except (ModelPlanParseError, ModelPlanRejected) as exc:
+                        reasons = exc.reasons if isinstance(exc, ModelPlanRejected) else [str(exc)]
+                        emit("model_plan_rejected", task_id="P1", reasons=reasons,
+                             decision="ABSTAIN")
+                        raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
+                                               code="MODEL_PLAN_REJECTED") from exc
+                    emit("model_plan_accepted", task_id="P1", model=model_adapter.model_name,
+                         decision="EXECUTE", proposal=proposal)
+                    emit("model_route_completed", task_id="MR1", selected_model=spec.model_id,
+                         fallback_count=candidate_index, budget=model_budget.snapshot())
+                    teaching_pause()
+                    plan = deepcopy(proposal["tasks"])
+                    by_id = {task["task_id"]: task for task in plan}
+                    planner_name = "validated_routed_model_proposal"
+                    completed.update({"MR1", "M1"})
+                    break
+            else:
+                emit("model_routing_bypassed", task_id="MR1",
+                     reason="该历史场景不演示模型选择或 token 预算。")
+                completed.add("MR1")
             if demo_scenario in MODEL_SCENARIOS:
                 current_task = "M1"
                 model_adapter = ScriptedRatePlanModel(demo_scenario)
-                allowed_tools = {task["tool_name"] for task in SAFE_RATE_TASKS}
-                prompt = build_plan_prompt(goal, allowed_tools)
                 repaired = False
                 while True:
                     emit("model_request_started", task_id="M1", model=model_adapter.model_name,
@@ -517,12 +643,12 @@ class RateParallelAgent:
                          is_real_llm=model_adapter.is_real_llm, raw_output=raw_output,
                          output_characters=len(raw_output), attempt=model_adapter.calls)
                     teaching_pause()
-                    emit("plan_parse_started", task_id="P1", response_attempt=model_adapter.calls)
                     try:
-                        proposal = parse_plan_proposal(raw_output)
+                        proposal = parse_and_validate_model_output(
+                            raw_output, response_attempt=model_adapter.calls,
+                            allowed_tools=allowed_tools
+                        )
                     except ModelPlanParseError as exc:
-                        emit("plan_parse_failed", task_id="P1", error_type=type(exc).__name__,
-                             error_message=str(exc), raw_output=raw_output)
                         if demo_scenario == "model_repair" and not repaired:
                             repaired = True
                             emit("model_repair_requested", task_id="M1", error=str(exc),
@@ -532,22 +658,12 @@ class RateParallelAgent:
                         emit("model_plan_rejected", task_id="P1", reasons=[str(exc)], decision="ABSTAIN")
                         raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
                                                code="MODEL_OUTPUT_INVALID") from exc
-                    emit("plan_parsed", task_id="P1", proposal=proposal)
-                    emit("plan_validation_started", task_id="P1",
-                         checks=["schema", "tool_allowlist", "acyclic", "paper_only", "executable_template"])
-                    try:
-                        validated = validate_plan_proposal(proposal, allowed_tools=allowed_tools,
-                                                           expected_tasks=SAFE_RATE_TASKS)
                     except ModelPlanRejected as exc:
-                        emit("plan_validation_completed", task_id="P1", accepted=False,
-                             reasons=exc.reasons, decision="ABSTAIN")
                         emit("model_plan_rejected", task_id="P1", reasons=exc.reasons,
                              decision="ABSTAIN")
                         teaching_pause(0.45)
                         raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
                                                code="MODEL_PLAN_REJECTED") from exc
-                    emit("plan_validation_completed", task_id="P1", accepted=True,
-                         output=validated, decision="EXECUTE")
                     emit("model_plan_accepted", task_id="P1", model=model_adapter.model_name,
                          decision="EXECUTE", proposal=proposal)
                     teaching_pause()
@@ -556,7 +672,7 @@ class RateParallelAgent:
                     planner_name = "validated_model_proposal"
                     completed.add("M1")
                     break
-            else:
+            elif demo_scenario not in ROUTING_SCENARIOS:
                 emit("model_bypassed", task_id="M1",
                      reason="该历史场景使用已验证的确定性 Planner，不调用模型。")
                 completed.add("M1")
@@ -641,15 +757,20 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["M1", "C1", "V1", "Q1", *by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]},
             "architecture": {"planner": planner_name,
                              "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
                              "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
+                             "model_routing": {
+                                 "router": model_routing["router"],
+                                 "budget": model_routing["budget"].snapshot(),
+                             } if model_routing else None,
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
-                       ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"),
+            "lesson": {"topic": "model_routing" if demo_scenario in ROUTING_SCENARIOS else
+                       ("model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
+                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards")),
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,

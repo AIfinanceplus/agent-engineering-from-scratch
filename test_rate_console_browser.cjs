@@ -40,7 +40,7 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 13);
+    assert.equal(await page.locator('.graph-node').count(), 14);
     assert.equal(await page.locator('script').count(), 2);
     await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
@@ -49,7 +49,7 @@ server.serve_forever()
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 13);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 14);
     const eventCount = await page.locator('.event-row').count();
     assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
@@ -71,6 +71,25 @@ server.serve_forever()
     await page.locator('#download').click();
     const download = await downloadWait;
     assert.match(download.suggestedFilename(), /^RATE-RUN-.*\.json$/);
+
+    // Primary failure is charged before one registered fallback is selected.
+    await page.locator('#scenario').selectOption('route_fallback');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const routeKinds = await page.locator('.event-kind').allTextContents();
+    assert.ok(routeKinds.includes('RESERVE'));
+    assert.ok(routeKinds.includes('PROVIDER FAIL'));
+    assert.ok(routeKinds.includes('FALLBACK 1/1'));
+    assert.ok(routeKinds.includes('ROUTE END'));
+    assert.equal(await page.locator('.graph-node[data-node="MR1"]').getAttribute('data-status'), 'completed');
+
+    // Insufficient remaining budget prevents the fallback model call.
+    await page.locator('#scenario').selectOption('route_budget');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.ok((await page.locator('.event-kind').allTextContents()).includes('BUDGET STOP'));
+    assert.equal((await page.locator('.event-kind').allTextContents()).filter(kind => kind === 'MODEL INPUT').length, 1);
+    assert.equal(await page.locator('.graph-node[data-node="P1"]').getAttribute('data-status'), 'blocked');
 
     // The default model response is malformed, repaired once, then validated.
     await page.locator('#scenario').selectOption('model_repair');

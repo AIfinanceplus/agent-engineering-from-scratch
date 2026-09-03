@@ -5,15 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=6">
-  <script defer src="/rate_console_core.js?v=6"></script>
-  <script defer src="/rate_console.js?v=6"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=7">
+  <script defer src="/rate_console_core.js?v=7"></script>
+  <script defer src="/rate_console.js?v=7"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>LLM Planner &amp; Runtime Authority <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Model Routing &amp; Token Budget <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
     <div class="controls">
-      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><optgroup label="本课：LLM Planner Boundary"><option value="model_repair">模型格式错误 · 修复后执行</option><option value="model_valid">模型计划合法 · Runtime 放行</option><option value="model_unsafe">模型越权 · ABSTAIN</option></optgroup><optgroup label="上一课：Bounded Replanning"><option value="replan_success">重规划 · 修订后成功</option><option value="replan_loop">循环检测 · 重复计划停止</option><option value="replan_budget">预算耗尽 · ABSTAIN</option></optgroup><optgroup label="更早：Runtime Guards"><option value="breaker_recovery">熔断 · 冷却后恢复</option><option value="breaker_open">熔断 · 阻止第三次调用</option><option value="backpressure">背压 · 排队后放行</option><option value="overload_rejected">过载 · 队满立即拒绝</option><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></optgroup></select></label>
+      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><optgroup label="本课：Model Routing"><option value="route_fallback">主模型超时 · 有界 Fallback</option><option value="route_primary">经济模型成功 · 不升级</option><option value="route_budget">预算不足 · 调用前 ABSTAIN</option></optgroup><optgroup label="上一课：LLM Planner Boundary"><option value="model_repair">模型格式错误 · 修复后执行</option><option value="model_valid">模型计划合法 · Runtime 放行</option><option value="model_unsafe">模型越权 · ABSTAIN</option></optgroup><optgroup label="更早课程"><option value="replan_success">重规划 · 修订后成功</option><option value="replan_loop">循环检测 · 重复计划停止</option><option value="replan_budget">预算耗尽 · ABSTAIN</option><option value="breaker_recovery">熔断 · 冷却后恢复</option><option value="breaker_open">熔断 · 阻止第三次调用</option><option value="backpressure">背压 · 排队后放行</option><option value="overload_rejected">过载 · 队满立即拒绝</option><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></optgroup></select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
         <form id="parameters" class="parameter-panel">
@@ -34,16 +34,16 @@
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
     <div class="workspace">
       <section class="graph-panel" aria-labelledby="graph-title">
-        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">13 nodes</span></div>
+        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">14 nodes</span></div>
         <div class="graph-canvas"><div class="graph-nodes" id="graph-nodes" aria-label="Agent 工作流节点"></div></div>
-        <div class="graph-caption"><span class="legend-dot"></span><span>M1 只提议 · P1 决定能否执行 · 点击节点筛选</span></div>
+        <div class="graph-caption"><span class="legend-dot"></span><span>MR1 先预留预算 · Fallback 最多 1 次 · 点击节点筛选</span></div>
       </section>
 
       <section class="stream-panel" aria-labelledby="stream-title">
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
         <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
         <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
-          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>模型可以提议，但不能执行</h3><p>默认模型先返回损坏 JSON；P1 拒绝并只允许一次格式修复。<br>修复后的计划仍须通过 Tool allowlist、DAG 与 paper-only 校验。</p><span>Propose. Validate. Execute.</span></div>
+          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>Fallback 不是免费，也不能无限</h3><p>默认经济模型接受 prompt 后超时；MR1 结算已用 token。<br>预算允许时只切换一次能力模型，再由 P1 验证计划。</p><span>Route. Reserve. Settle.</span></div>
           <ol id="event-list" class="event-list" aria-label="运行事件"></ol>
           <p id="filter-empty" class="filter-empty" hidden>此节点尚未产生事件。</p>
         </div>

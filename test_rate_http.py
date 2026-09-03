@@ -99,9 +99,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=6", html)
-        self.assertIn("rate_console_core.js?v=6", html)
-        self.assertIn("LLM Planner", html)
+        self.assertIn("rate_console.js?v=7", html)
+        self.assertIn("rate_console_core.js?v=7", html)
+        self.assertIn("Model Routing", html)
+        self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
         self.assertNotIn("rate_workbench.js", html)
@@ -307,6 +308,27 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(messages[-1]["error"]["code"], "MODEL_PLAN_REJECTED")
         events = [message["event"] for message in messages if message["type"] == "event"]
         self.assertTrue(any(e["event"] == "model_plan_rejected" and e["decision"] == "ABSTAIN" for e in events))
+        self.assertFalse(any(e["event"] in {"runtime_started", "tool_execution_started"} for e in events))
+
+    def test_model_routing_fallback_stream_charges_failure_then_uses_second_model(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "route_fallback"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertEqual([e["model"] for e in events if e["event"] == "model_request_started"],
+                         ["scripted-economy-v1", "scripted-capable-v1"])
+        self.assertEqual(sum(e["event"] == "model_fallback_requested" for e in events), 1)
+        self.assertLess(next(e["sequence"] for e in events if e["event"] == "model_route_completed"),
+                        next(e["sequence"] for e in events if e["event"] == "runtime_started"))
+
+    def test_model_routing_budget_stream_never_calls_fallback(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "route_budget"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["code"], "MODEL_TOKEN_BUDGET_EXCEEDED")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertEqual(sum(e["event"] == "model_request_started" for e in events), 1)
+        self.assertTrue(any(e["event"] == "model_budget_rejected" for e in events))
         self.assertFalse(any(e["event"] in {"runtime_started", "tool_execution_started"} for e in events))
 
     def test_invalid_config_returns_structured_error(self):
