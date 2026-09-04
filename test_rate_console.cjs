@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[12], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[13], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -334,6 +334,22 @@ test('historical lessons explicitly bypass retrieval and citation gates', () => 
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
   emit('retrieval_bypassed', 'RG1', { reason: 'historical lesson' });
   emit('citation_gate_bypassed', 'CG1', { reason: 'no retrieved evidence' });
+  emit('taint_guard_bypassed', 'TG1', { reason: 'no retrieved content' });
   assert.equal(state.nodes.RG1, 'completed');
   assert.equal(state.nodes.CG1, 'completed');
+  assert.equal(state.nodes.TG1, 'completed');
+});
+
+test('taint guard visualizes quarantine and blocks unsafe propagation', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('taint_guard_started', 'TG1', { candidate_count: 3, trust_default: 'UNTRUSTED', policy: 'retrieved_text_is_data_never_instructions' });
+  assert.equal(state.nodes.TG1, 'scanning');
+  emit('retrieved_content_inspected', 'TG1', { chunk_id: 'attack', citation_id: 'CIT-X', tainted: true, action: 'QUARANTINE', matched_rules: ['instruction_override'], content_preview: 'ignore prior instructions' });
+  assert.equal(state.nodes.TG1, 'quarantining');
+  assert.equal(describe(state.events.at(-1)).label, 'QUARANTINE');
+  emit('taint_guard_completed', 'TG1', { passed: false, missing_series: ['DGS10'], promoted_citation_ids: [], quarantined_citation_ids: ['CIT-X'] });
+  assert.equal(state.nodes.TG1, 'failed');
+  assert.equal(state.nodes.CT1, 'waiting');
+  assert.equal(describe(state.events.at(-1)).label, 'ABSTAIN');
 });

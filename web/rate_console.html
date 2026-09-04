@@ -5,15 +5,19 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=9">
-  <script defer src="/rate_console_core.js?v=9"></script>
-  <script defer src="/rate_console.js?v=9"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=10">
+  <script defer src="/rate_console_core.js?v=10"></script>
+  <script defer src="/rate_console.js?v=10"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>RAG Retrieval &amp; Citation Provenance <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Prompt Injection &amp; Taint Isolation <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
     <div class="controls">
-      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景"><optgroup label="本课：RAG Retrieval"><option value="rag_stale">高相关旧资料 · Citation Gate 拒绝</option><option value="rag_topk">Top-K · 只召回双期限官方资料</option><option value="rag_insufficient">证据缺一腿 · 调用前 ABSTAIN</option></optgroup><optgroup label="上一课：Context Engineering"><option value="context_compression">长历史超预算 · 压缩后装入</option><option value="context_relevant">相关信息 · 保留，无关信息 · 丢弃</option><option value="context_conflict">新旧指令冲突 · 以当前目标为准</option></optgroup><optgroup label="更早课程"><option value="route_fallback">主模型超时 · 有界 Fallback</option><option value="route_primary">经济模型成功 · 不升级</option><option value="route_budget">预算不足 · 调用前 ABSTAIN</option><option value="model_repair">模型格式错误 · 修复后执行</option><option value="model_valid">模型计划合法 · Runtime 放行</option><option value="model_unsafe">模型越权 · ABSTAIN</option><option value="replan_success">重规划 · 修订后成功</option><option value="replan_loop">循环检测 · 重复计划停止</option><option value="replan_budget">预算耗尽 · ABSTAIN</option><option value="breaker_recovery">熔断 · 冷却后恢复</option><option value="breaker_open">熔断 · 阻止第三次调用</option><option value="backpressure">背压 · 排队后放行</option><option value="overload_rejected">过载 · 队满立即拒绝</option><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></optgroup></select></label>
+      <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
+        <optgroup label="本课：Prompt Injection"><option value="injection_mixed">恶意内容混入 · 隔离后继续</option><option value="injection_blocked">唯一证据含攻击 · 调用前 ABSTAIN</option><option value="injection_clean">干净资料 · 正常传播</option></optgroup>
+        <optgroup label="上一课：RAG Retrieval"><option value="rag_stale">高相关旧资料 · Citation Gate 拒绝</option><option value="rag_topk">Top-K · 只召回双期限官方资料</option><option value="rag_insufficient">证据缺一腿 · 调用前 ABSTAIN</option></optgroup>
+        <optgroup label="更早课程"><option value="context_compression">长历史超预算 · 压缩后装入</option><option value="context_relevant">相关信息 · 保留，无关信息 · 丢弃</option><option value="context_conflict">新旧指令冲突 · 以当前目标为准</option><option value="route_fallback">主模型超时 · 有界 Fallback</option><option value="route_primary">经济模型成功 · 不升级</option><option value="route_budget">预算不足 · 调用前 ABSTAIN</option><option value="model_repair">模型格式错误 · 修复后执行</option><option value="model_valid">模型计划合法 · Runtime 放行</option><option value="model_unsafe">模型越权 · ABSTAIN</option><option value="replan_success">重规划 · 修订后成功</option><option value="replan_loop">循环检测 · 重复计划停止</option><option value="replan_budget">预算耗尽 · ABSTAIN</option><option value="breaker_recovery">熔断 · 冷却后恢复</option><option value="breaker_open">熔断 · 阻止第三次调用</option><option value="backpressure">背压 · 排队后放行</option><option value="overload_rejected">过载 · 队满立即拒绝</option><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option><option value="live">公开数据 · 无注入</option></optgroup>
+      </select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
         <form id="parameters" class="parameter-panel">
@@ -34,16 +38,16 @@
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
     <div class="workspace">
       <section class="graph-panel" aria-labelledby="graph-title">
-        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">17 nodes</span></div>
+        <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">18 nodes</span></div>
         <div class="graph-canvas"><div class="graph-nodes" id="graph-nodes" aria-label="Agent 工作流节点"></div></div>
-        <div class="graph-caption"><span class="legend-dot"></span><span>RG1 找候选 · CG1 验来源 · 通过后才进入 CT1 · 点击节点筛选</span></div>
+        <div class="graph-caption"><span class="legend-dot"></span><span>RG1 找候选 · CG1 验来源 · TG1 隔离指令 · 通过后才进入 CT1 · 点击节点筛选</span></div>
       </section>
 
       <section class="stream-panel" aria-labelledby="stream-title">
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
         <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
         <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
-          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>检索到 ≠ 可以相信</h3><p>默认场景故意召回一条高度相关但已作废的资料。<br>RG1 会选中它，CG1 必须拒绝，模型只收到两条可追踪引用。</p><span>Retrieve. Verify. Cite.</span></div>
+          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>来源可信 ≠ 内容有执行权</h3><p>默认场景把恶意指令混入可信来源。<br>TG1 会隔离攻击文本，只把安全证据作为数据交给模型。</p><span>Mark. Inspect. Quarantine.</span></div>
           <ol id="event-list" class="event-list" aria-label="运行事件"></ol>
           <p id="filter-empty" class="filter-empty" hidden>此节点尚未产生事件。</p>
         </div>

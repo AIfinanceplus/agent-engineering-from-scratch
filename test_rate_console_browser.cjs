@@ -40,7 +40,7 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 17);
+    assert.equal(await page.locator('.graph-node').count(), 18);
     assert.equal(await page.locator('script').count(), 2);
     await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
@@ -49,7 +49,7 @@ server.serve_forever()
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 17);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 18);
     const eventCount = await page.locator('.event-row').count();
     assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
@@ -97,6 +97,17 @@ server.serve_forever()
     assert.equal(await page.locator('.graph-node[data-node="CT1"]').getAttribute('data-status'), 'blocked');
     assert.equal(await page.locator('.graph-node[data-node="M1"]').getAttribute('data-status'), 'blocked');
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 0);
+
+    // Trusted provenance is not authority: malicious instructions are quarantined at TG1.
+    await page.locator('#scenario').selectOption('injection_mixed');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const injectionKinds = await page.locator('.event-kind').allTextContents();
+    assert.ok(injectionKinds.includes('UNTRUSTED'));
+    assert.ok(injectionKinds.includes('QUARANTINE'));
+    assert.ok(injectionKinds.includes('PROMOTE AS DATA'));
+    assert.ok(injectionKinds.includes('SAFE DATA'));
+    assert.equal(await page.locator('.graph-node[data-node="TG1"]').getAttribute('data-status'), 'completed');
 
     // Context compression is visible and the final pack is attached before M1.
     await page.locator('#scenario').selectOption('context_compression');

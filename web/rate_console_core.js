@@ -17,6 +17,7 @@
     NODES[0],
     { id: 'RG1', title: 'Retriever', description: 'Query · 召回 · 排名 · Top-K' },
     { id: 'CG1', title: 'Citation gate', description: '来源 · 版本 · 双序列覆盖' },
+    { id: 'TG1', title: 'Taint guard', description: '不可信内容 · 指令检测 · 隔离' },
     { id: 'CT1', title: 'Context builder', description: '筛选 · 冲突消解 · 压缩 · 打包' },
     { id: 'MR1', title: 'Model router', description: '选路 · token 预算 · 有界 fallback' },
     { id: 'M1', title: 'Model gateway', description: '生成提议 · 无执行权限' },
@@ -31,7 +32,7 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -67,6 +68,10 @@
       case 'citation_gate_started': state.nodes.CG1 = 'verifying'; break;
       case 'citation_checked': state.nodes.CG1 = event.passed ? 'verifying' : 'rejected'; break;
       case 'citation_gate_completed': state.nodes.CG1 = event.passed ? 'completed' : 'failed'; break;
+      case 'taint_guard_bypassed': state.nodes.TG1 = 'completed'; break;
+      case 'taint_guard_started': state.nodes.TG1 = 'scanning'; break;
+      case 'retrieved_content_inspected': state.nodes.TG1 = event.tainted ? 'quarantining' : 'scanning'; break;
+      case 'taint_guard_completed': state.nodes.TG1 = event.passed ? 'completed' : 'failed'; break;
       case 'context_bypassed': state.nodes.CT1 = 'completed'; break;
       case 'context_collection_started': state.nodes.CT1 = 'running'; break;
       case 'context_item_scored': state.nodes.CT1 = 'selecting'; break;
@@ -243,6 +248,10 @@
       case 'citation_gate_started': return { ...common, kind: 'retrieval', label: 'SOURCE GATE', title: `${event.candidate_count} citations under review`, description: `必须覆盖 ${event.required_series.join(' + ')}，且来源域名、版本、内容哈希完整。`, detailLabel: '门禁规则', payload: event };
       case 'citation_checked': return { ...common, kind: event.passed ? 'retrieval' : 'error', label: event.passed ? 'CITATION PASS' : 'CITATION REJECT', title: `${event.chunk_id} · ${event.domain || 'no source domain'}`, description: event.passed ? `${event.citation_id} · ${event.series.join(' + ')}` : event.reasons.join(' · '), detailLabel: '引用验证结果', payload: event };
       case 'citation_gate_completed': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'EVIDENCE READY' : 'ABSTAIN', title: event.passed ? `${event.accepted_citation_ids.length} verified citations` : `Missing ${event.missing_series.join(' + ')}`, description: event.passed ? `覆盖 ${event.coverage.join(' + ')}，允许进入 CT1。` : '证据不完整；CT1、模型、Runtime 与 Tools 都不会启动。', detailLabel: '来源门禁终态', payload: event };
+      case 'taint_guard_bypassed': return { ...common, kind: 'security', label: 'TRUST GUARD', title: 'Taint guard bypassed', description: event.reason };
+      case 'taint_guard_started': return { ...common, kind: 'security', label: 'UNTRUSTED', title: `${event.candidate_count} retrieved chunks enter the boundary`, description: '来源可信不等于内容有执行权；每个 chunk 默认带 taint 标记。', detailLabel: 'Trust boundary policy', payload: event };
+      case 'retrieved_content_inspected': return { ...common, kind: event.tainted ? 'security-block' : 'security', label: event.tainted ? 'QUARANTINE' : 'PROMOTE AS DATA', title: `${event.chunk_id} · ${event.action}`, description: event.tainted ? `检测到 ${event.matched_rules.join(' · ')}；整段隔离，不做局部删除。` : '未检测到控制指令；仅作为证据数据进入 CT1。', detailLabel: event.tainted ? '原始恶意内容与命中规则' : '通过检查的只读内容', payload: event };
+      case 'taint_guard_completed': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'SAFE DATA' : 'ABSTAIN', title: event.passed ? `${event.promoted_citation_ids.length} promoted · ${event.quarantined_citation_ids.length} quarantined` : 'Safe evidence coverage incomplete', description: event.passed ? '只有 promoted 内容可以进入 Context Pack；隔离内容不再传播。' : `隔离后缺少 ${event.missing_series.join(' + ')}；CT1、Model、Runtime、Tools 全部阻塞。`, detailLabel: 'Taint propagation terminal state', payload: event };
       case 'context_bypassed': return { ...common, kind: 'context', label: 'CONTEXT', title: 'Context builder bypassed', description: event.reason };
       case 'context_collection_started': return { ...common, kind: 'context', label: 'COLLECT', title: `${event.candidate_count} context candidates`, description: `Context budget ${event.max_tokens} teaching tokens · 尚未交给模型`, detailLabel: '候选来源与预算', payload: event };
       case 'context_item_scored': return { ...common, kind: 'context', label: 'SCORE', title: `${event.item_id} · ${event.score}`, description: `相关性 ${event.relevance} · 权威性 ${event.authority} · 新鲜度 ${event.freshness}${event.mandatory ? ' · 必选' : ''}`, detailLabel: '候选内容与评分', payload: event };

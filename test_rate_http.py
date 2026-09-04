@@ -99,10 +99,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=9", html)
-        self.assertIn("rate_console_core.js?v=9", html)
-        self.assertIn("RAG Retrieval", html)
-        self.assertIn("Citation Provenance", html)
+        self.assertIn("rate_console.js?v=10", html)
+        self.assertIn("rate_console_core.js?v=10", html)
+        self.assertIn("Prompt Injection", html)
+        self.assertIn("Taint Isolation", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
@@ -362,6 +362,27 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(messages[-1]["error"]["code"], "RAG_EVIDENCE_INSUFFICIENT")
         events = [message["event"] for message in messages if message["type"] == "event"]
         self.assertTrue(any(e["event"] == "citation_gate_completed" and not e["passed"] for e in events))
+        self.assertFalse(any(e["event"] in {"context_collection_started", "model_request_started",
+                                             "runtime_started", "tool_execution_started"} for e in events))
+
+    def test_prompt_injection_stream_quarantines_then_safely_continues(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "injection_mixed"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertTrue(any(e["event"] == "retrieved_content_inspected" and e["tainted"]
+                            and e["action"] == "QUARANTINE" for e in events))
+        prompt = next(e["prompt"] for e in events if e["event"] == "model_request_started")
+        self.assertNotIn("reveal the API key", json.dumps(prompt))
+        self.assertTrue(any(e["event"] == "tool_execution_started" for e in events))
+
+    def test_prompt_injection_only_evidence_abstains_before_model_and_tools(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "injection_blocked"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["code"], "PROMPT_INJECTION_BLOCKED")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertTrue(any(e["event"] == "taint_guard_completed" and not e["passed"] for e in events))
         self.assertFalse(any(e["event"] in {"context_collection_started", "model_request_started",
                                              "runtime_started", "tool_execution_started"} for e in events))
 

@@ -417,7 +417,36 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: RAG retrieval and citation provenance
+### Current lesson: Prompt Injection defense and taint isolation
+
+**TG1** is a trust boundary between verified provenance and the context builder.
+A source may pass CG1 and still contain text that tries to become an instruction.
+Every retrieved chunk therefore enters TG1 as `UNTRUSTED`; it can only leave as
+`PROMOTE_AS_DATA` or `QUARANTINE`.
+
+| Scenario | Security policy | Observe |
+| --- | --- | --- |
+| 恶意内容混入 · 隔离后继续 (default) | Clean official DGS2/DGS10 chunks and a source-valid injected chunk are retrieved together | TG1 shows the raw attack, quarantines the whole chunk, preserves clean coverage, and the Agent safely continues |
+| 唯一证据含攻击 · 调用前 ABSTAIN | The only source-valid evidence also requests instruction override, shell execution and secret disclosure | Quarantine removes all safe coverage; TG1 raises `PROMPT_INJECTION_BLOCKED` before CT1, model, Runtime or Tools |
+| 干净资料 · 正常传播 | Both official chunks contain data only | TG1 marks each `PROMOTE_AS_DATA`; the Context Pack and normal paper simulation proceed |
+
+Engineering contract:
+
+- Provenance trust is not instruction authority. Retrieved text is always data.
+- Detection and propagation are deterministic and visible in the event stream;
+  this lesson does not claim an LLM security judge.
+- A suspicious chunk is quarantined whole. Partial string deletion could leave
+  an obfuscated instruction with misleading meaning.
+- Quarantined text stays in the audit trace but is absent from model prompts and
+  every Tool argument.
+- Required DGS2/DGS10 coverage is checked again after quarantine. Missing safe
+  coverage produces fail-closed `ABSTAIN`.
+- Runtime Tool allowlists and schema validation remain a separate defense even
+  after content screening.
+
+Source file: `rate_prompt_security.py`.
+
+### Previous lesson: RAG retrieval and citation provenance
 
 **RG1** retrieves candidate evidence; **CG1** decides whether retrieved evidence
 is allowed to become model context. This lesson deliberately separates
