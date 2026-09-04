@@ -15,8 +15,120 @@ V0 → V11 cover the minimal loop, Tool Registry, validation, retry, Policy, Exe
 - R5 — Evidence quality / freshness / contradiction
 - R6 — Investment & policy synthesis + domain evals
 - R7 — Forecast contracts + scenario tracking + settlement
+- R8 — Decision lenses + current-run evals
+- R9 — Observed market-pricing context
+- R10 — Numerical target + scenario EV + instrument risk
+- R11 — Constraint-based position sizing
+- R12 — Strategy opportunities + live public event markets + HITL Strategy Agent
 
-## Current stage: R7 — forecasting + scenario tracking
+## Current stage: Rate Strategy V1 — one complete 2s10s paper simulation
+
+The default learning path is intentionally small. It needs no event search, no
+cross-market identity matching, no human settlement checklist, and no broker
+credentials:
+
+```text
+D1 public FRED DGS2 + DGS10 history
+      ↓ common-date alignment
+S1 60-observation 2s10s spread z-score
+      ↓ explicit steepener / flattener rule
+E1 latest historically completed 20-observation paper trade
+      ↓ DV01 approximation, explicit cost, contract eval, full Tool trace
+```
+
+`RateStrategyAgent` uses a fixed two-Tool DAG. The shared Tool Registry validates
+the public-data and simulation calls before execution. V1 deliberately uses no
+LLM planner: the goal is to make Planner → Runtime → Tool → Observation → Eval
+visible in one click. The current Model Authority lesson adds a deterministic
+scripted model adapter so malformed and unsafe proposals are repeatable; it is
+explicitly not a remote LLM. The full Workbench shell is retained, including the Agent
+flow and Trace / Logic / Evidence / State / Checkpoint / Architecture views; only
+the Strategy workspace is narrowed to the rate strategy. The output is a teaching
+approximation, not an executable bond-price model or investment recommendation.
+
+FRED CSV calls use `native_http.http_get_text`, which keeps certificate verification
+enabled while routing Python TLS through the operating system trust store via
+`truststore`. Do not disable certificate verification to work around local CA errors.
+The D1 public-data Tool declares two retries. The Runtime applies short exponential
+backoff only to connection/time-out failures and records the failed attempt and
+retry in Trace. If FRED remains unavailable after three total attempts, the HTTP
+API returns `503 DATA_SOURCE_UNAVAILABLE` together with the partial Agent trace.
+
+## Advanced experiment retained: R12 Step 9 event-market portfolio
+
+R12 keeps the earlier Runtime, Evidence, forecasting, EV, risk, and sizing layers,
+then adds a five-strategy opportunity registry. The currently deepest live path is
+same-event Kalshi/Polymarket relative value:
+
+```text
+Exact market identifiers
+      ↓
+R12 Planner DAG
+      ↓
+K1 / P1 public market-contract Tools through the shared Agent Runtime
+      ↓
+R1 fingerprint-bound deterministic settlement-rules analysis
+      ↓
+H1 durable WAITING_HUMAN_IDENTITY_APPROVAL checkpoint
+      ↓ explicit six-check human attestation only
+I1 settlement identity Tool
+      ↓
+V1 top-of-book reciprocal complement scan
+      ↓
+E1 depth-aware paper execution quote
+      ↓ explicit user command; quote is never treated as a fill
+Paper intent with zero fills
+      ↓ idempotent simulated fill commands
+Append-only hash-chained event ledger
+      ↓ deterministic replay
+Partial-leg risk / matched quantity / MTM P&L
+      ↓ replay every trade ledger
+Paper portfolio aggregation
+      ↓ atomic preflight before every new intent / fill
+Unsettled trade / acquisition cost / leg risk / provider / identity limits
+      ↓ explicit YES or NO settlement
+Realized paper P&L
+```
+
+The Strategy Agent persists an append-only checkpoint view after every boundary.
+Resume skips durably completed tasks. No parser or model can check H1 boxes, and no
+R12 component places orders. Step 7 deliberately separates the read/compute Agent
+DAG from state-changing commands: E1 remains a quote, while every simulated fill,
+mark, cancel/expire, and settlement requires an idempotency key and is recorded as
+an fsync'd JSONL event under `.r12_paper_ledger/`.
+
+Step 8 reorganizes the operator surface without changing those backend contracts:
+
+```text
+Agent Run          default linear acceptance path
+Manual Lab         structural scan + one-tool-at-a-time diagnostics
+Strategy Roadmap   five strategy families + current implementation boundary
+```
+
+The Agent Run workspace now follows user task order rather than implementation
+history: discover pair → lock exact IDs → configure explicit costs → start/resume
+Agent → review H1 beside the six checkboxes → inspect I1/V1/E1 → paper ledger.
+
+Step 9 keeps each ledger immutable and adds a separate portfolio read model. It
+replays every `.r12_paper_ledger/*.jsonl` stream, aggregates unsettled cost,
+unmatched leg quantity, provider notional, same-settlement-identity concentration,
+MTM completeness, and realized P&L. New intents and fills are serialized through
+an atomic preflight; a rejected command appends no event. The current teaching
+limits are explicit code configuration, not calibrated investment advice.
+Exposure is conservatively added across trades; Step 9 gives no correlation,
+diversification, or cross-trade netting credit.
+
+Current five-strategy roadmap:
+
+```text
+1. Structural / logic arbitrage        deterministic scanner active
+2. Same-event cross-market RV          live public data + HITL agent active
+3. FOMC probability RV                 planned
+4. CPI / macro-data RV                 research engine ready, calibration pending
+5. Options vs event-market RV          planned
+```
+
+## R7 forecasting foundation retained
 
 ```text
 Research Question
@@ -258,11 +370,11 @@ Checks include:
 
 CI remains network-independent by injecting API-shaped source responses while exercising the same production parser, Runtime, Evidence, synthesis, forecast, and settlement contracts.
 
-## Run the workbench
+## Run the Agent Graph & Live Stream console
 
 ```bash
 python3 -m pip install -r requirements.txt
-python3 serve_visualizer.py
+python3 serve_rates.py
 ```
 
 Open:
@@ -271,20 +383,420 @@ Open:
 http://127.0.0.1:8000
 ```
 
-Suggested flow:
+The default page has only two work areas: **Agent Graph** and **Agent Live Stream**.
+
+1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
+   20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
+   default scenario pauses the live stream at a real H1 human-approval boundary.
+   Use the visible Approve/Deny buttons to resolve that same running task.
+2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → H1 Human Approval → AZ1 Capability Gate → C1 → D1 → V1 →
+   Q1 → **A2 / A10** → J1 → S1 → E1.
+   D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
+   and 10Y series; J1 checks that both came from the same run and source batch.
+   S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
+3. The stream includes the approval request, human decision and scoped elevation,
+   followed by capability minting, claim verification, consumption or
+   denial, plus retrieval query construction, citation checks, final Context
+   Pack, route selection, token reservation/settlement, the model prompt, raw
+   output, parse/validation decision, every emitted node event, registry lookup,
+   Tool call (full arguments), Tool result (full output), retry and Eval result.
+   Expand a row to inspect JSON; no observations are truncated.
+4. Click a Graph node to filter events; click it again or “显示全部” to reset.
+   “跟随最新” controls scrolling without discarding earlier events.
+5. D1 discloses the actual provider, source date and offline-snapshot status.
+   Failures retain received events and mark downstream nodes as unexecuted.
+6. Export JSON to retain the completed run or a partial failure trace.
+
+The `POST /api/rates/stream` transport uses `rate-ndjson-v1` for every frame,
+one unique run ID per request and consecutive event sequence numbers. A closed
+connection without a terminal result/error is not considered success. Source
+attempt details are reported when D1 returns, not during individual network reads.
+The console observes execution; closing its browser does not provide a durable
+cancel/resume contract. The UI now requests `execution_mode="parallel"`; omitted
+mode retains the previous serial API for compatibility. Existing serial
+checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
+recovery is not implemented in this lesson.
+
+### Current lesson: Human approval and permission elevation
+
+**H1** is a real pause, not a prerecorded event. The streaming request remains
+open while the browser displays Approve and Deny buttons. A second HTTP request
+resolves the pending decision, after which the same run either continues or
+terminates without issuing a capability.
+
+| Human decision | Runtime behavior | Observe |
+| --- | --- | --- |
+| Approve once | Authorize only the current `simulate_one_curve_trade` request, `paper:simulate` scope and parameter fingerprint | `WAITING HUMAN → APPROVED → ELEVATE ONCE → MINT → AUTH CHECK → TOOL CALL` |
+| Deny | Do not mint any elevated capability | H1 fails with `HUMAN_APPROVAL_DENIED`; no Tool function starts |
+| No response for 90 seconds | Expire the approval request | H1 fails with `HUMAN_APPROVAL_TIMEOUT`; downstream remains blocked |
+
+Engineering contract:
+
+- The Agent and model cannot approve their own privilege escalation.
+- Approval binds the current run, target Tool, scope and SHA-256 parameter
+  fingerprint; it is not reusable consent for later runs.
+- Approval is not execution. It permits the Runtime to mint a short-lived,
+  single-use Capability, which AZ1 must still verify.
+- Denial and timeout happen before capability issuance and before every Tool
+  call, making zero side effects directly auditable.
+- Approval state is process-local in this teaching implementation. A production
+  system would persist it transactionally and authenticate the human identity.
+
+Source file: `rate_approval.py`.
+
+### Previous lesson: Least privilege and capability tickets
+
+**AZ1** separates knowing a Tool from being authorized to call it. For the
+current teaching scenarios the Runtime mints signed, short-lived tickets bound
+to one run, task, Tool, scope and logical use. The function is entered only
+after the ticket passes every check.
+
+| Scenario | Capability policy | Observe |
+| --- | --- | --- |
+| 票据 Tool 不匹配 · 调用前 DENIED (default) | D1 requests `fetch_public_rate_history`, but its signed ticket names `simulate_one_curve_trade` and `paper:simulate` | AZ1 reports `tool_not_authorized` and `scope_not_authorized`; no `TOOL CALL` exists |
+| 最小权限票据 · 单次完整运行 | Every planned task receives exactly its required Tool and scope for one logical use | `MINT → AUTH CHECK → VERIFIED → CONSUMED` precedes each of five Tool calls |
+| 票据已过期 · 调用前 DENIED | D1 receives an otherwise valid ticket whose expiry is in the past | AZ1 reports `capability_expired`; D1 function and all downstream work remain unexecuted |
+
+Engineering contract:
+
+- Default authorization is deny. A Tool Registry entry is discoverability, not
+  permission.
+- Tickets are HMAC-SHA256 signed and bind `run_id`, `task_id`, `tool_name`,
+  `scope`, `expires_at` and `max_uses`.
+- The signing secret never appears in a ticket, event, model prompt or Tool
+  argument. The UI shows only an abbreviated signature.
+- A ticket cannot be reused across runs, tasks or Tools, widened to another
+  scope, modified without invalidating its signature, used after expiry or
+  consumed twice.
+- One ticket authorizes one logical Tool call. Runtime retries remain inside
+  that already-authorized call and do not mint broader permission.
+- Denial occurs before `tool_execution_started`, making the zero-side-effect
+  boundary visible and testable.
+
+Source file: `rate_capabilities.py`.
+
+### Previous lesson: Prompt Injection defense and taint isolation
+
+**TG1** is a trust boundary between verified provenance and the context builder.
+A source may pass CG1 and still contain text that tries to become an instruction.
+Every retrieved chunk therefore enters TG1 as `UNTRUSTED`; it can only leave as
+`PROMOTE_AS_DATA` or `QUARANTINE`.
+
+| Scenario | Security policy | Observe |
+| --- | --- | --- |
+| 恶意内容混入 · 隔离后继续 (default) | Clean official DGS2/DGS10 chunks and a source-valid injected chunk are retrieved together | TG1 shows the raw attack, quarantines the whole chunk, preserves clean coverage, and the Agent safely continues |
+| 唯一证据含攻击 · 调用前 ABSTAIN | The only source-valid evidence also requests instruction override, shell execution and secret disclosure | Quarantine removes all safe coverage; TG1 raises `PROMPT_INJECTION_BLOCKED` before CT1, model, Runtime or Tools |
+| 干净资料 · 正常传播 | Both official chunks contain data only | TG1 marks each `PROMOTE_AS_DATA`; the Context Pack and normal paper simulation proceed |
+
+Engineering contract:
+
+- Provenance trust is not instruction authority. Retrieved text is always data.
+- Detection and propagation are deterministic and visible in the event stream;
+  this lesson does not claim an LLM security judge.
+- A suspicious chunk is quarantined whole. Partial string deletion could leave
+  an obfuscated instruction with misleading meaning.
+- Quarantined text stays in the audit trace but is absent from model prompts and
+  every Tool argument.
+- Required DGS2/DGS10 coverage is checked again after quarantine. Missing safe
+  coverage produces fail-closed `ABSTAIN`.
+- Runtime Tool allowlists and schema validation remain a separate defense even
+  after content screening.
+
+Source file: `rate_prompt_security.py`.
+
+### Previous lesson: RAG retrieval and citation provenance
+
+**RG1** retrieves candidate evidence; **CG1** decides whether retrieved evidence
+is allowed to become model context. This lesson deliberately separates
+relevance from trust. A text chunk can be highly related to the user goal and
+still be unusable if it is stale, missing provenance or fails to cover both
+required rate series.
+
+The retriever is deterministic lexical overlap only. There are no embeddings,
+vector databases, network calls or hidden LLM judges in this lesson, so the
+ranking is easy to audit in tests and in the live stream.
+
+| Scenario | Retrieval policy | Observe |
+| --- | --- | --- |
+| 高相关旧资料 · Citation Gate 拒绝 (default) | Top-K includes official DGS2, official DGS10 and one highly relevant but superseded note claiming direct tradeability | RG1 selects the stale chunk; CG1 marks it `rejected`; CT1 and M1 receive only verified citation IDs |
+| Top-K · 只召回双期限官方资料 | Query asks for 2s10s evidence and Top-K is limited to two official sources | Both required series pass provenance checks; the context pack carries two stable citations |
+| 证据缺一腿 · 调用前 ABSTAIN | DGS2 is official but DGS10 lacks attribution/provenance | CG1 raises `RAG_EVIDENCE_INSUFFICIENT`; CT1, model routing, Runtime and Tools never start |
+
+Engineering contract:
+
+- Retrieval recall is not evidence approval. RG1 may surface bad or stale text;
+  CG1 is the trust boundary.
+- Every chunk has a stable content hash and citation ID, plus source URL,
+  source title, as-of date, covered series and status.
+- The Citation Gate currently accepts only the official FRED/Federal Reserve
+  domains used by this teaching strategy.
+- A chunk marked `superseded` is rejected even when its lexical score is high.
+- Both required legs, DGS2 and DGS10, must be covered by accepted citations.
+  Missing coverage yields `ABSTAIN` before any model or Tool call.
+- Rejected chunks remain visible in the audit stream but never enter
+  `model_request_started.prompt`.
+- CT1 still owns token-budget selection after CG1; RAG determines what is
+  trustworthy enough to be considered as context, not how many tokens fit.
+
+Source file: `rate_rag.py`. The fixtures are intentionally small and disclosed;
+this is an auditable RAG control lesson, not a production retrieval stack.
+
+### Previous lesson: Context Engineering and context budget
+
+**CT1** makes model input explicit. The Agent may own policies, current
+instructions, verified observations and a long conversation history, but only
+the selected candidate context enters the model-input envelope as a final Context Pack. Selection resolves authoritative
+conflicts first, then uses relevance and a finite context budget. Teaching token
+counts are deterministic and labelled `scripted_teaching_tokens`; they are not
+real tokenizer output or billing units.
+
+| Scenario | Context policy | Observe |
+| --- | --- | --- |
+| 长历史超预算 · 压缩后装入 (default) | Mandatory policy/goal/Tool contract use 110 of 150 tokens; relevant 160-token history cannot fit | The declared lossy summary uses 40 tokens; old event notes and UI preference are dropped; PACK is exactly 150/150 |
+| 相关信息 · 保留，无关信息 · 丢弃 | Budget 180; current rate evidence is relevant while old event-market and UI notes are not plan input | Four items are kept; low-relevance candidates are scored and explicitly dropped |
+| 新旧指令冲突 · 以当前目标为准 | Stale event-market goal conflicts with the current 2s10s instruction | Authority and freshness select `current_goal`; the stale goal is excluded before token allocation and never reaches the prompt |
+
+Engineering contract:
+
+- Context is not “all available memory.” Every candidate has attribution,
+  relevance, authority, freshness and a disclosed size before selection.
+- Mandatory system policy, current goal and Runtime Tool contract cannot be
+  silently removed to make the budget fit. If mandatory context alone is too
+  large, CT1 fails closed.
+- Conflicts are resolved before token packing. A stale instruction cannot win
+  merely because its wording is highly relevant to the topic.
+- Compression is explicit and lossy: the stream preserves original and summary
+  for audit, while the model prompt contains only the summary.
+- Dropped text appears in the audit decision but not in `model_request_started.prompt`.
+  The PACK event equals the context attached to the model request.
+- Context budget and model-call token budget are different controls. CT1 limits
+  what enters the prompt; MR1 still reserves and settles the complete call.
+- The routed model remains a deterministic non-LLM teaching adapter. Its output
+  still passes P1 authority validation before Runtime or Tools can start.
+
+Source file: `rate_context_engineering.py`. This is model-input context, not the
+trusted `ExecutionContext` identity object and not a durable recovery checkpoint.
+
+### Previous lesson: model routing, token budget and bounded fallback
+
+**MR1** selects from a declared Model Registry before M1 can receive a prompt.
+Every call reserves its worst-case teaching token allowance first. After the
+call, MR1 charges the disclosed usage and releases the unused reservation. The
+demo values are labelled `scripted_teaching_usage`; they are deterministic
+teaching units, not output from a real tokenizer or billing API.
+
+| Scenario | Routing policy | Observe |
+| --- | --- | --- |
+| 主模型超时 · 有界 Fallback (default) | Economy endpoint fails after accepting the prompt; one capable fallback is declared | Reserve 600 → charge 160 → FALLBACK 1/1 → reserve 1200 → charge 480 → route completes |
+| 经济模型成功 · 不升级 | Lowest sufficient tier returns a valid proposal | One model call, 440 tokens charged, zero fallback; larger model is never called |
+| 预算不足 · 调用前 ABSTAIN | Total budget 700; primary failure spends 160, leaving 540; fallback needs 1200 reserved | MR1 blocks the capable model before its call; P1, Runtime and all Tools remain unstarted |
+
+Engineering contract:
+
+- Routing chooses from a finite, registered candidate list. A model name emitted
+  by another model cannot silently become a provider endpoint.
+- Worst-case tokens are reserved before each call. Settlement happens even when
+  the provider fails after accepting the prompt, so failure is not treated as free.
+- Fallback is bounded to one declared transition. There is no recursive “try a
+  bigger model forever” behavior.
+- The same model is not retried for the injected provider timeout. Router moves
+  to the next declared candidate; Tool retry and plan replanning remain separate policies.
+- Budget rejection occurs before the second model request and yields explicit
+  `ABSTAIN`, never an unbudgeted call.
+- A successful routed response still passes the previous P1 schema, Tool
+  allowlist, DAG, paper-only and executable-template checks.
+
+Source file: `rate_model_routing.py`. The adapters remain scripted and explicitly
+non-LLM so CI and the lesson are repeatable without credentials or network access.
+
+### Previous lesson: model proposal vs Runtime authority
+
+**M1** is a Model Gateway, not an executor. It returns untrusted text. **P1**
+parses and validates that text before Runtime can resolve or call any Tool. The
+default adapter is `scripted-teaching-model-v1`, which is deliberately
+deterministic and marked `is_real_llm=false`; no API key or external model call
+is hidden inside the demo.
+
+| Scenario | Model output | Observe |
+| --- | --- | --- |
+| 模型格式错误 · 修复后执行 (default) | First response is truncated JSON; second response is valid | PARSE FAILED → one `REPAIR 1/1` → five authority checks → PLAN ACCEPTED → Runtime starts |
+| 模型计划合法 · Runtime 放行 | Valid JSON matching the approved rate DAG | Raw output remains a proposal until schema, allowlist, DAG, paper-only and template checks pass |
+| 模型越权 · ABSTAIN | Valid JSON adds `place_real_order` and claims automatic execution | P1 rejects the unknown capability and unsafe claims; Runtime and every Tool remain unstarted |
+
+Engineering contract:
+
+- JSON parsing is not authorization. A syntactically valid model response can
+  still be unsafe.
+- The model sees an explicit allowlist and proposal-only authority, but Runtime
+  independently enforces both; prompt instructions are not a security boundary.
+- P1 checks exact fields, unique task IDs, known dependencies, acyclicity,
+  registered Tool names, paper-only claims and the executable strategy template.
+- Format repair is bounded to one extra model response and cannot add Tool
+  permissions. There is no open-ended “keep asking until it works” loop.
+- Raw model text and the parsed proposal remain in Trace for audit. Neither can
+  directly call a Python function, mutate state, or create an order.
+- The safe demo shows the architectural seam for a future real model adapter.
+  The current MR1 lesson now adds provider routing, token budgets and bounded fallback.
+
+Source file: `rate_model_planner.py`. The rate strategy and all Tool side-effect
+boundaries are unchanged.
+
+### Previous lesson: bounded replanning and loop detection
+
+**V1** is an Observation Gate. It separates “the Tool returned successfully”
+from “the returned artifact is safe and sufficient for downstream use.” When
+V1 rejects D1, Runtime removes the observation from active state, preserves it
+in the audit trace, and sends structured feedback to P1.
+
+| Scenario | Planner behavior | Observe |
+| --- | --- | --- |
+| 重规划 · 修订后成功 (default) | First result has only 40 rows; P1 expands the start date once | D1 complete → V1 reject → D1 invalidated → P1 revision → D1 rerun → V1 pass |
+| 循环检测 · 重复计划停止 | P1 proposes the same D1 arguments again | Canonical plan fingerprint matches; no second Tool call; ABSTAIN |
+| 预算耗尽 · ABSTAIN | One novel revision is allowed but its result is still insufficient | Second V1 rejection cannot create another plan; downstream remains blocked |
+
+Engineering contract:
+
+- Retry repeats the same Tool call after a transient execution failure.
+  Replanning creates a different plan only after a successful Tool result fails
+  an Observation-quality gate.
+- The initial plan is fingerprinted but does not consume the revision budget.
+  Only novel revised plans spend the budget.
+- Fingerprints use canonical JSON, so key ordering cannot disguise a repeated
+  plan. Duplicate detection runs before the budget check.
+- An invalidated Observation remains visible for audit, but is removed from
+  active Runtime state and can never reach A2/A10.
+- Exhausting the budget or repeating a rejected plan produces an explicit
+  `ABSTAIN`, not a fabricated result and not an infinite loop.
+- The teaching Planner is deterministic and does not use an LLM. In a model-led
+  Agent, the model may propose revisions, but Runtime must still enforce these
+  fingerprints, budgets and downstream boundaries.
+
+Source file: `rate_replanning.py`. The three teaching modes use disclosed
+snapshot injection and never create real orders or external writes.
+
+### Previous lessons: Circuit Breaker and bounded admission
+
+The two new Runtime guards are visible as real graph nodes. **C1** protects an
+external Tool from repeated calls while its dependency is unhealthy. **Q1**
+controls how quickly work may enter Tools and keeps waiting work bounded.
+
+| Scenario | Policy | Observe |
+| --- | --- | --- |
+| 熔断 · 冷却后恢复 | Open after 2 consecutive D1 failures; 300ms cooldown | CLOSED → OPEN → HALF-OPEN; one probe succeeds; CLOSED; workflow continues |
+| 熔断 · 阻止第三次调用 | Open after 2 failures; long cooldown | Third request is rejected before `tool_execution_started`; D1 and downstream fail closed |
+| 背压 · 排队后放行 | 1 active Tool, queue capacity 1, 500ms admission interval | A2 gets a permit; A10 is QUEUED; after capacity and interval allow it, A10 is DEQUEUED and called |
+| 过载 · 队满立即拒绝 | 1 active Tool, queue capacity 0 | A10 is rejected before any Tool call; Join and downstream remain blocked |
+
+Engineering contract:
+
+- Tool argument validation occurs before the circuit counts an execution
+  failure. Two retryable upstream failures open C1. An OPEN rejection does not
+  call the Tool and is not counted as another upstream failure.
+- Cooldown does not prove recovery. OPEN becomes HALF-OPEN and permits one
+  probe. Only a successful probe closes the circuit and resets its failure
+  count; a failed probe reopens it.
+- Q1 separates arrival from admission. A queued task has no Tool call or Tool
+  result yet. FIFO promotion happens only after capacity is released and the
+  minimum admission interval passes.
+- The waiting room is finite. Full queues reject work immediately instead of
+  consuming unbounded memory. Rejected work is never fabricated as a branch
+  result, so the all-success Join remains blocked.
+- Circuit and admission state are Runtime policy, not strategy logic. Teaching
+  failures, cooldowns and queue sizes are disclosed in stream events. No broker
+  or external write is added.
+- For deterministic teaching, C1 and Q1 are scoped to one Run. A production
+  deployment must share admission/circuit state per upstream dependency across
+  concurrent Runs (and coordinate it across processes); this demo makes no
+  claim of service-wide protection.
+
+Source file: `rate_resilience.py`. The Runtime in `rate_parallel.py` remains the
+single owner that orders guard, Tool, Observation and terminal stream events.
+
+### Previous lesson: time budget and cooperative cancellation
+
+The one new concept is a **run-level stop boundary**. A deadline and a user's
+Stop click signal the same `RunControl`. A stop request is not a confirmation
+that a Tool has stopped; it is not a thread kill and does not undo earlier work.
+
+| Scenario | Budget / behavior | Observe |
+| --- | --- | --- |
+| 演示 · 1 秒预算 (default) | 1s budget; cooperative A2 would wait 2s | Deadline → stop request → A2 exits → run timed out; completed A10 stays complete |
+| 演示 · 手动停止 | 30s budget; both branches wait up to 8s | Click Stop; keep the stream connected until both Tools acknowledge exit |
+| 演示 · 晚到结果 | 1s budget; A2 deliberately ignores the stop signal for 2.4s | Remain in “停止中”; late output is shown as DISCARDED, never sent to Join |
+
+The graph topology is unchanged. Amber dashed nodes mean **stop requested**,
+not **already stopped**. The stream retains the budget, reason, request,
+per-Tool acknowledgment, discarded output and final stop confirmation.
+Connection loss without confirmation yields **状态未知**, not “已取消”.
+
+Engineering contract:
+
+- The budget uses a monotonic clock and covers the whole run, including D1.
+  It limits acceptance of results and scheduling of later work; it is **not a
+  hard upper bound on how long a blocking Tool takes to return**.
+- All Tool calls run in bounded worker pools; the owner polls controls and
+  writes the ordered stream. Cooperative waits, retries, series preparation
+  and source-switch boundaries check the same run scope.
+- A blocking network read retains its transport timeout and may not stop
+  immediately. There is no claim that Python threads are forcibly terminated.
+- `POST /api/rates/cancel` with `{ "run_id": "..." }` returns 202 for a stop
+  request, 409 for a known terminal run and 404 for an unknown/expired run.
+  Repeated requests do not create additional effects. Old run IDs cannot stop
+  a new run. Controls are process-local with bounded terminal history.
+- Success and cancellation are ordered at a locked terminal boundary. Late
+  output stays audit-only; completed work is not rolled back. Serial legacy
+  APIs and their checkpoint/idempotency contracts are unchanged.
+- Keep the stream open after pressing Stop. `run_stopped` and the final error
+  frame confirm termination only after submitted callables have exited.
+
+Source files: `rate_control.py` holds the scope and registry; `rate_parallel.py`
+owns execution and result acceptance. No broker or external writes are added.
+
+### Previous lesson: concurrency and the all-success Join
+
+Only one new concept is introduced: independent tasks may run together, but a
+dependent task must wait for **all required successful results**. Runtime uses at
+most two worker threads per run. Workers send events through a queue; one owner
+assigns event sequence numbers, updates run state and writes the HTTP stream.
+This is concurrent scheduling, not a claim of CPU speedup under the Python GIL.
+
+The previous lesson's four choices remain available:
+
+| Scenario | Data / timing | Observe |
+| --- | --- | --- |
+| 演示 · 2Y 较慢 | Official bundled snapshot; A2 waits 2s, A10 waits 0.4s | Both run; A10 completes; Join waits 1/2 for A2 |
+| 演示 · 10Y 较慢 | Same snapshot; reverse the delays | Completion order reverses; Join still waits for both |
+| 演示 · 10Y 失败 | Same snapshot; explicit A10 fault after 0.4s | A2 finishes; J1/S1/E1 never execute |
+| 公开数据 · 无注入 | Original FRED → Treasury → disclosed snapshot fallback | No injected delay or failure; fast branches may finish too quickly to see overlap |
+
+The delays and injected failures are recorded as `demo_*` events. Tools really
+execute; the UI never replays an animation as a live run. On branch failure we
+drain the already-running read-only sibling, then return a failure with its
+completed results still in the trace. We do not claim to cancel a running Tool.
+
+Core check: **“One branch finished” is not the same as “Join may proceed.”**
+Try both speed orders, then the failure scenario, without changing the strategy.
+
+Visualization is a required design consideration for every new Agent lesson:
+show real state transitions and inspectable inputs/outputs, keep the default
+view focused, and never animate a simulated process as live execution.
+
+Current UI:
 
 ```text
-1. 测试数据源 API
-2. 运行 R7 研究
-3. 查看 F1 Forecast Pack
-4. 运行 R7 Evals
-5. 之后选择 Saved Forecast
-6. 点击 检查 Forecast
+web/rate_console.html        focused default page
+web/rate_console.css         responsive Graph / Stream layout
+web/rate_console_core.js     pure event and protocol reducer
+web/rate_console.js          incremental DOM updates and stream reader
+web/index.html               retained historical Workbench shell
+web/rate_workbench.js        retained historical rate overlay
 ```
 
-Active UI scripts:
+To revisit the advanced event-market experiment, run `python3 serve_r12.py`.
 
-```text
-web/r7_app.js
-web/r4_health.js
-```
+Console checks: `node --test test_rate_console.cjs` and
+`python3 -m unittest test_rate_http test_rate_agent test_rate_parallel test_rate_control test_rate_ui_contract`.
+For the optional real-browser smoke test, install Playwright in your test
+environment and run `CHROMIUM_EXECUTABLE=/path/to/chromium node test_rate_console_browser.cjs`.
+That test starts a temporary local HTTP server with explicitly labelled fixture
+data; it tests rendering and streaming, not public-source availability.
