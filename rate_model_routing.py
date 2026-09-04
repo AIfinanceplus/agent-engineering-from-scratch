@@ -129,8 +129,10 @@ class ScriptedRoutedModel:
             )
         raw_output = ScriptedRatePlanModel("model_valid").complete(prompt)
         output_tokens = 280 if self.spec.tier == "economy" else 320
+        context_tokens = prompt.get("context_pack", {}).get("total_tokens", 0)
+        input_tokens = 80 + context_tokens if context_tokens else 160
         return {
             "raw_output": raw_output,
-            "usage": {"input_tokens": 160, "output_tokens": output_tokens,
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens,
                       "source": "scripted_teaching_usage"},
         }

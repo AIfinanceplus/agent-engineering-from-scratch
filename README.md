@@ -387,15 +387,16 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario demonstrates an economy-model timeout, token settlement and
-   one budget-approved capable-model fallback before the rate workflow runs.
-2. Follow Goal → MR1 Model Router → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
+   default scenario demonstrates context scoring, mandatory constraints and a
+   disclosed lossy compression before the model sees any history.
+2. Follow Goal → CT1 Context Builder → MR1 Model Router → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
    Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
-3. The stream includes route selection, token reservation/settlement, fallback,
-   the model prompt, raw output, parse/validation decision,
+3. The stream includes every context candidate, score and keep/compress/drop
+   decision, the final model-visible Context Pack, route selection, token
+   reservation/settlement, the model prompt, raw output, parse/validation decision,
    every emitted node event, registry lookup, Tool call (full arguments), Tool
    result (full output), retry and Eval result.
    Expand a row to inspect JSON; no observations are truncated.
@@ -415,7 +416,43 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: model routing, token budget and bounded fallback
+### Current lesson: Context Engineering and context budget
+
+**CT1** makes model input explicit. The Agent may own policies, current
+instructions, verified observations and a long conversation history, but only
+the selected candidate context enters the model-input envelope as a final Context Pack. Selection resolves authoritative
+conflicts first, then uses relevance and a finite context budget. Teaching token
+counts are deterministic and labelled `scripted_teaching_tokens`; they are not
+real tokenizer output or billing units.
+
+| Scenario | Context policy | Observe |
+| --- | --- | --- |
+| 长历史超预算 · 压缩后装入 (default) | Mandatory policy/goal/Tool contract use 110 of 150 tokens; relevant 160-token history cannot fit | The declared lossy summary uses 40 tokens; old event notes and UI preference are dropped; PACK is exactly 150/150 |
+| 相关信息 · 保留，无关信息 · 丢弃 | Budget 180; current rate evidence is relevant while old event-market and UI notes are not plan input | Four items are kept; low-relevance candidates are scored and explicitly dropped |
+| 新旧指令冲突 · 以当前目标为准 | Stale event-market goal conflicts with the current 2s10s instruction | Authority and freshness select `current_goal`; the stale goal is excluded before token allocation and never reaches the prompt |
+
+Engineering contract:
+
+- Context is not “all available memory.” Every candidate has attribution,
+  relevance, authority, freshness and a disclosed size before selection.
+- Mandatory system policy, current goal and Runtime Tool contract cannot be
+  silently removed to make the budget fit. If mandatory context alone is too
+  large, CT1 fails closed.
+- Conflicts are resolved before token packing. A stale instruction cannot win
+  merely because its wording is highly relevant to the topic.
+- Compression is explicit and lossy: the stream preserves original and summary
+  for audit, while the model prompt contains only the summary.
+- Dropped text appears in the audit decision but not in `model_request_started.prompt`.
+  The PACK event equals the context attached to the model request.
+- Context budget and model-call token budget are different controls. CT1 limits
+  what enters the prompt; MR1 still reserves and settles the complete call.
+- The routed model remains a deterministic non-LLM teaching adapter. Its output
+  still passes P1 authority validation before Runtime or Tools can start.
+
+Source file: `rate_context_engineering.py`. This is model-input context, not the
+trusted `ExecutionContext` identity object and not a durable recovery checkpoint.
+
+### Previous lesson: model routing, token budget and bounded fallback
 
 **MR1** selects from a declared Model Registry before M1 can receive a prompt.
 Every call reserves its worst-case teaching token allowance first. After the

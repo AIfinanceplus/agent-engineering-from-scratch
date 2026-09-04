@@ -99,8 +99,8 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=7", html)
-        self.assertIn("rate_console_core.js?v=7", html)
+        self.assertIn("rate_console.js?v=8", html)
+        self.assertIn("rate_console_core.js?v=8", html)
         self.assertIn("Model Routing", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
@@ -330,6 +330,18 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(sum(e["event"] == "model_request_started" for e in events), 1)
         self.assertTrue(any(e["event"] == "model_budget_rejected" for e in events))
         self.assertFalse(any(e["event"] in {"runtime_started", "tool_execution_started"} for e in events))
+
+    def test_context_engineering_stream_packs_before_model_and_preserves_full_run(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "context_compression"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        packed = next(e for e in events if e["event"] == "context_pack_created")
+        model_input = next(e for e in events if e["event"] == "model_request_started")
+        self.assertLess(packed["sequence"], model_input["sequence"])
+        self.assertEqual(packed["context_pack"], model_input["prompt"]["context_pack"])
+        self.assertTrue(any(e["event"] == "context_item_compressed" for e in events))
+        self.assertTrue(any(e["event"] == "tool_execution_started" for e in events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

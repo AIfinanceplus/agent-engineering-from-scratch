@@ -40,7 +40,7 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 14);
+    assert.equal(await page.locator('.graph-node').count(), 15);
     assert.equal(await page.locator('script').count(), 2);
     await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
@@ -49,7 +49,7 @@ server.serve_forever()
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 14);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 15);
     const eventCount = await page.locator('.event-row').count();
     assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
@@ -71,6 +71,17 @@ server.serve_forever()
     await page.locator('#download').click();
     const download = await downloadWait;
     assert.match(download.suggestedFilename(), /^RATE-RUN-.*\.json$/);
+
+    // Context compression is visible and the final pack is attached before M1.
+    await page.locator('#scenario').selectOption('context_compression');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const contextKinds = await page.locator('.event-kind').allTextContents();
+    assert.ok(contextKinds.includes('SCORE'));
+    assert.ok(contextKinds.includes('COMPRESS'));
+    assert.ok(contextKinds.includes('DROP'));
+    assert.ok(contextKinds.includes('PACK'));
+    assert.equal(await page.locator('.graph-node[data-node="CT1"]').getAttribute('data-status'), 'completed');
 
     // Primary failure is charged before one registered fallback is selected.
     await page.locator('#scenario').selectOption('route_fallback');

@@ -15,6 +15,7 @@
   ];
   const PARALLEL_NODES = [
     NODES[0],
+    { id: 'CT1', title: 'Context builder', description: '筛选 · 冲突消解 · 压缩 · 打包' },
     { id: 'MR1', title: 'Model router', description: '选路 · token 预算 · 有界 fallback' },
     { id: 'M1', title: 'Model gateway', description: '生成提议 · 无执行权限' },
     NODES[1],
@@ -28,7 +29,7 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -55,6 +56,13 @@
     const id = event.task_id;
     switch (event.event) {
       case 'goal_received': state.nodes.G1 = 'completed'; break;
+      case 'context_bypassed': state.nodes.CT1 = 'completed'; break;
+      case 'context_collection_started': state.nodes.CT1 = 'running'; break;
+      case 'context_item_scored': state.nodes.CT1 = 'selecting'; break;
+      case 'context_item_selected': state.nodes.CT1 = 'selecting'; break;
+      case 'context_item_compressed': state.nodes.CT1 = 'compressing'; break;
+      case 'context_item_dropped': state.nodes.CT1 = 'selecting'; break;
+      case 'context_pack_created': state.nodes.CT1 = 'completed'; break;
       case 'model_routing_bypassed': state.nodes.MR1 = 'completed'; break;
       case 'model_routing_started': state.nodes.MR1 = 'running'; break;
       case 'model_route_selected': state.nodes.MR1 = 'selected'; break;
@@ -215,6 +223,16 @@
     const common = { kind: 'node', label: 'NODE', title: event.event, description: '', detailLabel: '完整事件', payload: event };
     switch (event.event) {
       case 'goal_received': return { ...common, label: 'INPUT', title: 'Goal received', description: event.goal, detailLabel: '目标与运行参数' };
+      case 'context_bypassed': return { ...common, kind: 'context', label: 'CONTEXT', title: 'Context builder bypassed', description: event.reason };
+      case 'context_collection_started': return { ...common, kind: 'context', label: 'COLLECT', title: `${event.candidate_count} context candidates`, description: `Context budget ${event.max_tokens} teaching tokens · 尚未交给模型`, detailLabel: '候选来源与预算', payload: event };
+      case 'context_item_scored': return { ...common, kind: 'context', label: 'SCORE', title: `${event.item_id} · ${event.score}`, description: `相关性 ${event.relevance} · 权威性 ${event.authority} · 新鲜度 ${event.freshness}${event.mandatory ? ' · 必选' : ''}`, detailLabel: '候选内容与评分', payload: event };
+      case 'context_item_selected': return { ...common, kind: 'context', label: 'KEEP', title: `${event.item_id} · ${event.used_tokens} tokens`, description: `完整保留 · Context 剩余 ${event.remaining_tokens}`, detailLabel: '保留决策', payload: event };
+      case 'context_item_compressed': return { ...common, kind: 'context', label: 'COMPRESS', title: `${event.item_id} · ${event.full_tokens} → ${event.used_tokens}`, description: `使用声明的有损摘要 · 释放 ${event.released_tokens} teaching tokens`, detailLabel: '压缩前后与决策', payload: event };
+      case 'context_item_dropped': {
+        const reasons = { low_relevance: '相关性不足', context_budget_exceeded: '剩余预算不足', superseded_by_fresher_authoritative_context: `与 ${event.winner} 冲突且已过期` };
+        return { ...common, kind: 'context', label: 'DROP', title: `${event.item_id} excluded`, description: reasons[event.reason] || event.reason, detailLabel: '丢弃决策', payload: event };
+      }
+      case 'context_pack_created': return { ...common, kind: 'context', label: 'PACK', title: `${event.used_tokens}/${event.max_tokens} context tokens`, description: `只把 ${event.context_pack.items.length} 项交给模型 · 排除 ${event.excluded_item_ids.length} 项`, detailLabel: '模型实际收到的 Context Pack', payload: event.context_pack };
       case 'model_routing_bypassed': return { ...common, kind: 'route', label: 'ROUTER', title: 'Model routing bypassed', description: event.reason };
       case 'model_routing_started': return { ...common, kind: 'route', label: 'ROUTE START', title: `Token budget · ${event.budget.total_tokens}`, description: `${event.candidates.join(' → ')} · fallback 最多 ${event.max_fallbacks} 次`, detailLabel: 'Model catalog 与预算', payload: event };
       case 'model_route_selected': return { ...common, kind: 'route', label: 'SELECT', title: `${event.model} · ${event.tier}`, description: `${event.provider} · ${event.reason}`, detailLabel: '路由决策', payload: event };

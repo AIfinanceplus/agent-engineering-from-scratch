@@ -28,6 +28,8 @@ from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
 from rate_model_routing import (ModelProviderUnavailable, ModelRouter,
                                 ModelTokenBudget, ModelTokenBudgetExceeded,
                                 ScriptedRoutedModel)
+from rate_context_engineering import (ContextBuilder, context_policy_snapshot,
+                                      teaching_context_candidates)
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -37,15 +39,17 @@ SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadlin
              "breaker_open", "breaker_recovery", "backpressure", "overload_rejected",
              "replan_success", "replan_loop", "replan_budget",
              "model_valid", "model_repair", "model_unsafe",
-             "route_primary", "route_fallback", "route_budget"}
+             "route_primary", "route_fallback", "route_budget",
+             "context_relevant", "context_compression", "context_conflict"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
 REPLAN_SCENARIOS = {"replan_success", "replan_loop", "replan_budget"}
 MODEL_SCENARIOS = {"model_valid", "model_repair", "model_unsafe"}
 ROUTING_SCENARIOS = {"route_primary", "route_fallback", "route_budget"}
-GRAPH_ROWS = [["G1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
+CONTEXT_SCENARIOS = {"context_relevant", "context_compression", "context_conflict"}
+GRAPH_ROWS = [["G1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
@@ -182,7 +186,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -199,7 +203,7 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]:
+            for task_id in ["CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
@@ -530,11 +534,52 @@ class RateParallelAgent:
             planner_name = "bounded_fanout_all_success_join"
             model_adapter = None
             model_routing = None
+            context_engineering = None
             allowed_tools = {task["tool_name"] for task in SAFE_RATE_TASKS}
             prompt = build_plan_prompt(goal, allowed_tools)
-            if demo_scenario in ROUTING_SCENARIOS:
+            if demo_scenario in CONTEXT_SCENARIOS:
+                current_task = "CT1"
+                context_budget = 150 if demo_scenario == "context_compression" else 180
+                context_builder = ContextBuilder(context_budget)
+                context_candidates = teaching_context_candidates(demo_scenario)
+                emit("context_collection_started", task_id="CT1", max_tokens=context_budget,
+                     candidate_count=len(context_candidates),
+                     sources=[item.source for item in context_candidates],
+                     usage_source="scripted_teaching_tokens")
+                context_pack = context_builder.build(context_candidates)
+                candidate_by_id = {item.item_id: item for item in context_candidates}
+                for decision in context_pack["decisions"]:
+                    item = candidate_by_id[decision["item_id"]]
+                    emit("context_item_scored", task_id="CT1", item_id=item.item_id,
+                         source=item.source, text=item.text, score=item.score,
+                         relevance=item.relevance, authority=item.authority,
+                         freshness=item.freshness, mandatory=item.mandatory)
+                    if decision["decision"] == "selected":
+                        emit("context_item_selected", task_id="CT1", **decision)
+                    elif decision["decision"] == "compressed":
+                        emit("context_item_compressed", task_id="CT1", **decision,
+                             original_text=item.text, compressed_text=item.compressed_text)
+                    else:
+                        emit("context_item_dropped", task_id="CT1", **decision)
+                    teaching_pause(0.12)
+                emit("context_pack_created", task_id="CT1",
+                     context_pack=context_pack["model_input"],
+                     excluded_item_ids=context_pack["excluded_item_ids"],
+                     max_tokens=context_pack["max_tokens"],
+                     used_tokens=context_pack["used_tokens"],
+                     remaining_tokens=context_pack["remaining_tokens"],
+                     policy="authority + freshness conflict resolution, then relevance + budget")
+                context_engineering = context_policy_snapshot(context_builder, context_pack)
+                prompt = {**prompt, "context_pack": context_pack["model_input"]}
+                completed.add("CT1")
+                teaching_pause()
+            else:
+                emit("context_bypassed", task_id="CT1",
+                     reason="该历史场景不演示上下文选择；沿用原有显式 Planner 输入。")
+                completed.add("CT1")
+            if demo_scenario in ROUTING_SCENARIOS | CONTEXT_SCENARIOS:
                 current_task = "MR1"
-                router = ModelRouter(max_fallbacks=1)
+                router = ModelRouter(max_fallbacks=0 if demo_scenario in CONTEXT_SCENARIOS else 1)
                 model_budget = ModelTokenBudget(700 if demo_scenario == "route_budget" else
                                                 (1000 if demo_scenario == "route_primary" else 2000))
                 model_routing = {"router": router.snapshot(), "budget": model_budget}
@@ -672,7 +717,7 @@ class RateParallelAgent:
                     planner_name = "validated_model_proposal"
                     completed.add("M1")
                     break
-            elif demo_scenario not in ROUTING_SCENARIOS:
+            elif demo_scenario not in ROUTING_SCENARIOS | CONTEXT_SCENARIOS:
                 emit("model_bypassed", task_id="M1",
                      reason="该历史场景使用已验证的确定性 Planner，不调用模型。")
                 completed.add("M1")
@@ -757,7 +802,7 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]},
             "architecture": {"planner": planner_name,
                              "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
                              "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
@@ -765,12 +810,14 @@ class RateParallelAgent:
                                  "router": model_routing["router"],
                                  "budget": model_routing["budget"].snapshot(),
                              } if model_routing else None,
+                             "context_engineering": context_engineering,
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "model_routing" if demo_scenario in ROUTING_SCENARIOS else
+            "lesson": {"topic": "context_engineering" if demo_scenario in CONTEXT_SCENARIOS else
+                       ("model_routing" if demo_scenario in ROUTING_SCENARIOS else
                        ("model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
-                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards")),
+                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"))),
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,

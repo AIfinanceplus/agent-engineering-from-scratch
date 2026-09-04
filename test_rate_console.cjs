@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[9], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[10], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -285,4 +285,27 @@ test('token budget stops fallback before a second model request', () => {
   emit('model_route_abstained', 'MR1', { reason: 'budget exhausted' });
   assert.equal(state.nodes.MR1, 'failed');
   assert.equal(state.nodes.M1, 'waiting');
+});
+
+test('context builder shows score, compression, drop and final pack before model input', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('context_collection_started', 'CT1', { candidate_count: 5, max_tokens: 150, sources: ['system'] });
+  emit('context_item_scored', 'CT1', { item_id: 'history', score: 0.84, relevance: 0.86, authority: 0.75, freshness: 0.9 });
+  assert.equal(state.nodes.CT1, 'selecting');
+  emit('context_item_compressed', 'CT1', { item_id: 'history', full_tokens: 160, used_tokens: 40, released_tokens: 120 });
+  assert.equal(state.nodes.CT1, 'compressing');
+  emit('context_item_dropped', 'CT1', { item_id: 'noise', reason: 'low_relevance' });
+  emit('context_pack_created', 'CT1', { used_tokens: 150, max_tokens: 150, excluded_item_ids: ['noise'], context_pack: { items: [{ item_id: 'history' }] } });
+  assert.equal(state.nodes.CT1, 'completed');
+  assert.equal(describe({ event: 'context_item_compressed', item_id: 'history', full_tokens: 160, used_tokens: 40, released_tokens: 120 }).label, 'COMPRESS');
+  assert.equal(describe({ event: 'context_item_dropped', item_id: 'noise', reason: 'low_relevance' }).label, 'DROP');
+  assert.equal(describe({ event: 'context_pack_created', used_tokens: 150, max_tokens: 150, excluded_item_ids: ['noise'], context_pack: { items: [{ item_id: 'history' }] } }).label, 'PACK');
+});
+
+test('historical lessons explicitly bypass the context builder', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('context_bypassed', 'CT1', { reason: 'historical lesson' });
+  assert.equal(state.nodes.CT1, 'completed');
 });
