@@ -34,6 +34,7 @@ from rate_rag import (CitationGate, LexicalRateRetriever, RAGEvidenceInsufficien
                       rag_context_candidates, rag_snapshot, teaching_rag_fixture)
 from rate_prompt_security import (PromptInjectionBlocked, RetrievedContentGuard,
                                   prompt_security_snapshot)
+from rate_capabilities import (CapabilityAuthority, CapabilityRejected, TOOL_SCOPES)
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -46,7 +47,8 @@ SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadlin
              "route_primary", "route_fallback", "route_budget",
              "context_relevant", "context_compression", "context_conflict",
              "rag_topk", "rag_stale", "rag_insufficient",
-             "injection_mixed", "injection_blocked", "injection_clean"}
+             "injection_mixed", "injection_blocked", "injection_clean",
+             "capability_valid", "capability_wrong_tool", "capability_expired"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
@@ -57,8 +59,9 @@ CONTEXT_SCENARIOS = {"context_relevant", "context_compression", "context_conflic
 RAG_SCENARIOS = {"rag_topk", "rag_stale", "rag_insufficient"}
 INJECTION_SCENARIOS = {"injection_mixed", "injection_blocked", "injection_clean"}
 RETRIEVAL_SCENARIOS = RAG_SCENARIOS | INJECTION_SCENARIOS
-GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "TG1"], ["TG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
+CAPABILITY_SCENARIOS = {"capability_valid", "capability_wrong_tool", "capability_expired"}
+GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "TG1"], ["TG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "AZ1"], ["AZ1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
@@ -184,6 +187,8 @@ class RateParallelAgent:
         injected_source_failures = 0
         replan_source_calls = 0
         revision_guard = PlanRevisionGuard(max_revisions=1) if demo_scenario in REPLAN_SCENARIOS else None
+        capability_authority = CapabilityAuthority() if demo_scenario in CAPABILITY_SCENARIOS else None
+        capability_tickets = {}
 
         def emit(event, **payload):
             row = deepcopy({"sequence": len(trace) + 1, "run_id": run_id,
@@ -195,7 +200,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RAG_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | CAPABILITY_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -212,7 +217,7 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["RG1", "CG1", "CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]:
+            for task_id in ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
@@ -231,6 +236,27 @@ class RateParallelAgent:
                     passed=validation.get("ok") is True, validation=validation)
             if not validation.get("ok"):
                 raise ValueError(validation["error"]["message"])
+            if capability_authority:
+                ticket = capability_tickets[task_id]
+                required_scope = TOOL_SCOPES[name]
+                publish("capability_check_started", task_id="AZ1", target_task=task_id,
+                        tool_name=name, required_scope=required_scope,
+                        capability=ticket.public_record())
+                try:
+                    authorization = capability_authority.authorize(
+                        ticket, run_id=run_id, task_id=task_id,
+                        tool_name=name, required_scope=required_scope,
+                    )
+                except CapabilityRejected as exc:
+                    publish("capability_rejected", task_id="AZ1", target_task=task_id,
+                            tool_name=name, required_scope=required_scope,
+                            reasons=exc.reasons, decision="DENY_BEFORE_TOOL")
+                    raise
+                publish("capability_verified", task_id="AZ1", target_task=task_id,
+                        tool_name=name, required_scope=required_scope,
+                        cap_id=ticket.cap_id, decision="ALLOW_ONCE")
+                publish("capability_consumed", task_id="AZ1", target_task=task_id,
+                        tool_name=name, **authorization)
             function = self.overrides.get(name, tool.function)
             if task_id == "D1" and demo_scenario != "live":
                 if demo_scenario in BREAKER_SCENARIOS:
@@ -338,7 +364,7 @@ class RateParallelAgent:
             """The owner stays responsive while Tools work; only it accepts results."""
             control.check()
             queue = Queue()
-            finished, failures = set(), {}
+            finished, failures, failure_objects = set(), {}, {}
 
             def worker(task_id, arguments):
                 def publish(event, **payload):
@@ -378,6 +404,7 @@ class RateParallelAgent:
                              worker_stopped=True)
                     elif error:
                         failures[key] = str(error)
+                        failure_objects[key] = error
                         emit("task_failed", task_id=key, error_type=type(error).__name__, error_message=str(error))
                         if fan_in:
                             emit("join_blocked", task_id="J1", failed_dependencies=list(failures),
@@ -406,7 +433,11 @@ class RateParallelAgent:
                 pool.shutdown(wait=True)
             control.check()
             if failures:
-                raise ParallelRunError("Tool 失败；依赖它的下游未执行。", next(iter(failures)), trace, failures)
+                failed_task = next(iter(failures))
+                failure = failure_objects[failed_task]
+                code = "CAPABILITY_REJECTED" if isinstance(failure, CapabilityRejected) else None
+                raise ParallelRunError("Tool 失败；依赖它的下游未执行。", failed_task, trace,
+                                       failures, code=code)
 
         def run_admission_demo(arguments_by_id):
             """Make overload handling visible without creating fake Tool results."""
@@ -826,13 +857,39 @@ class RateParallelAgent:
                     planner_name = "validated_model_proposal"
                     completed.add("M1")
                     break
-            elif demo_scenario not in ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RAG_SCENARIOS:
+            elif demo_scenario not in ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS:
                 emit("model_bypassed", task_id="M1",
                      reason="该历史场景使用已验证的确定性 Planner，不调用模型。")
                 completed.add("M1")
             current_task = "P1"
             emit("plan_created", task_id="P1", planner=planner_name,
                  task_ids=list(by_id), tasks=plan, graph={"rows": GRAPH_ROWS, "edges": GRAPH_EDGES})
+            if capability_authority:
+                current_task = "AZ1"
+                emit("capability_policy_started", task_id="AZ1",
+                     policy="deny_by_default_least_privilege", signing="HMAC-SHA256",
+                     bindings=["run_id", "task_id", "tool_name", "scope", "expires_at", "max_uses"])
+                for task_id, task in by_id.items():
+                    actual_tool = task["tool_name"]
+                    granted_tool = ("simulate_one_curve_trade"
+                                    if demo_scenario == "capability_wrong_tool" and task_id == "D1"
+                                    else actual_tool)
+                    issued_at = (datetime.now(timezone.utc) - timedelta(seconds=120)
+                                 if demo_scenario == "capability_expired" and task_id == "D1"
+                                 else datetime.now(timezone.utc))
+                    ticket = capability_authority.mint(
+                        run_id=run_id, task_id=task_id, tool_name=granted_tool,
+                        scope=TOOL_SCOPES[granted_tool], ttl_seconds=60, now=issued_at,
+                    )
+                    capability_tickets[task_id] = ticket
+                    emit("capability_minted", task_id="AZ1", target_task=task_id,
+                         requested_tool=actual_tool, capability=ticket.public_record(),
+                         secret_exposed=False)
+                teaching_pause(0.3)
+            else:
+                emit("capability_bypassed", task_id="AZ1",
+                     reason="该历史课程未启用 capability ticket；不伪造授权检查。")
+                completed.add("AZ1")
             initial_d1_arguments = {"start_date": start_date}
             if revision_guard:
                 revision = revision_guard.seed({"task_id": "D1", "tool_name": "fetch_public_rate_history",
@@ -911,7 +968,7 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]},
             "architecture": {"planner": planner_name,
                              "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
                              "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
@@ -922,18 +979,21 @@ class RateParallelAgent:
                              "context_engineering": context_engineering,
                              "rag": rag_engineering,
                              "prompt_security": prompt_security,
+                             "capability_authority": capability_authority.snapshot() if capability_authority else None,
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "prompt_injection_defense" if demo_scenario in INJECTION_SCENARIOS else
+            "lesson": {"topic": "capability_security" if demo_scenario in CAPABILITY_SCENARIOS else
+                       ("prompt_injection_defense" if demo_scenario in INJECTION_SCENARIOS else
                        ("rag_retrieval" if demo_scenario in RAG_SCENARIOS else
                        ("context_engineering" if demo_scenario in CONTEXT_SCENARIOS else
                        ("model_routing" if demo_scenario in ROUTING_SCENARIOS else
                        ("model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
-                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"))))),
+                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards")))))),
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,
-                           "partial_join_allowed": False, "concurrent_external_writes": False},
+                           "partial_join_allowed": False, "concurrent_external_writes": False,
+                           "capability_default": "deny" if capability_authority else "lesson_bypassed"},
             "run_control": control.snapshot(),
         }

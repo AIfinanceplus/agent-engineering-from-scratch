@@ -20,7 +20,10 @@ class RateUIContractTests(unittest.TestCase):
         self.assertNotIn('data-detail-tab', html)
         self.assertNotIn('r12_', html)
         self.assertNotIn('rate_workbench', html)
-        self.assertIn('Prompt Injection &amp; Taint Isolation', html)
+        self.assertIn('Least Privilege &amp; Capability Tokens', html)
+        self.assertIn('value="capability_wrong_tool"', html)
+        self.assertIn('value="capability_valid"', html)
+        self.assertIn('value="capability_expired"', html)
         self.assertIn('value="injection_mixed"', html)
         self.assertIn('value="injection_blocked"', html)
         self.assertIn('value="injection_clean"', html)
@@ -30,7 +33,7 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn('value="context_compression"', html)
         self.assertIn('value="context_relevant"', html)
         self.assertIn('value="context_conflict"', html)
-        self.assertIn('来源可信 ≠ 内容有执行权', html)
+        self.assertIn('知道 Tool ≠ 有权调用 Tool', html)
 
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")

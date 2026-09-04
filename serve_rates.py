@@ -23,7 +23,7 @@ RUN_CONTROLS = RunControlRegistry()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V10-PROMPT-INJECTION"
+    version_label = "RATE-CONSOLE-V11-CAPABILITY-SECURITY"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -265,12 +265,12 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V10-PROMPT-INJECTION")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V11-CAPABILITY-SECURITY")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Graph: G1 -> RG1 retrieves -> CG1 verifies citations -> CT1 packs -> model -> Runtime")
     print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
-    print("New lesson: prompt injection defense + taint propagation + quarantine")
+    print("New lesson: least privilege + signed capability tickets + deny before Tool")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

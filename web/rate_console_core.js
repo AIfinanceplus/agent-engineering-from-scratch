@@ -23,6 +23,7 @@
     { id: 'M1', title: 'Model gateway', description: '生成提议 · 无执行权限' },
     NODES[1],
     { id: 'R1', title: 'Runtime', description: '调度 · 容错 · 单线程归集事件' },
+    { id: 'AZ1', title: 'Capability gate', description: '签名票据 · 最小 scope · 单次使用' },
     { id: 'C1', title: 'Circuit breaker', description: '连续失败时阻止新 Tool 调用' },
     NODES[3],
     { id: 'V1', title: 'Observation gate', description: '不通过 ↺ P1 · 通过 ↓ Q1' },
@@ -32,7 +33,7 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -72,6 +73,13 @@
       case 'taint_guard_started': state.nodes.TG1 = 'scanning'; break;
       case 'retrieved_content_inspected': state.nodes.TG1 = event.tainted ? 'quarantining' : 'scanning'; break;
       case 'taint_guard_completed': state.nodes.TG1 = event.passed ? 'completed' : 'failed'; break;
+      case 'capability_bypassed': state.nodes.AZ1 = 'completed'; break;
+      case 'capability_policy_started': state.nodes.AZ1 = 'issuing'; break;
+      case 'capability_minted': state.nodes.AZ1 = 'issued'; break;
+      case 'capability_check_started': state.nodes.AZ1 = 'authorizing'; break;
+      case 'capability_verified': state.nodes.AZ1 = 'verified'; break;
+      case 'capability_consumed': state.nodes.AZ1 = 'completed'; break;
+      case 'capability_rejected': state.nodes.AZ1 = 'failed'; break;
       case 'context_bypassed': state.nodes.CT1 = 'completed'; break;
       case 'context_collection_started': state.nodes.CT1 = 'running'; break;
       case 'context_item_scored': state.nodes.CT1 = 'selecting'; break;
@@ -252,6 +260,13 @@
       case 'taint_guard_started': return { ...common, kind: 'security', label: 'UNTRUSTED', title: `${event.candidate_count} retrieved chunks enter the boundary`, description: '来源可信不等于内容有执行权；每个 chunk 默认带 taint 标记。', detailLabel: 'Trust boundary policy', payload: event };
       case 'retrieved_content_inspected': return { ...common, kind: event.tainted ? 'security-block' : 'security', label: event.tainted ? 'QUARANTINE' : 'PROMOTE AS DATA', title: `${event.chunk_id} · ${event.action}`, description: event.tainted ? `检测到 ${event.matched_rules.join(' · ')}；整段隔离，不做局部删除。` : '未检测到控制指令；仅作为证据数据进入 CT1。', detailLabel: event.tainted ? '原始恶意内容与命中规则' : '通过检查的只读内容', payload: event };
       case 'taint_guard_completed': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'SAFE DATA' : 'ABSTAIN', title: event.passed ? `${event.promoted_citation_ids.length} promoted · ${event.quarantined_citation_ids.length} quarantined` : 'Safe evidence coverage incomplete', description: event.passed ? '只有 promoted 内容可以进入 Context Pack；隔离内容不再传播。' : `隔离后缺少 ${event.missing_series.join(' + ')}；CT1、Model、Runtime、Tools 全部阻塞。`, detailLabel: 'Taint propagation terminal state', payload: event };
+      case 'capability_bypassed': return { ...common, kind: 'capability', label: 'AUTHZ', title: 'Capability gate bypassed', description: event.reason };
+      case 'capability_policy_started': return { ...common, kind: 'capability', label: 'DENY DEFAULT', title: 'Runtime starts capability authority', description: `票据绑定 ${event.bindings.join(' · ')}`, detailLabel: '授权政策', payload: event };
+      case 'capability_minted': return { ...common, kind: 'capability', label: 'MINT', title: `${event.target_task} · ${event.capability.tool_name}`, description: `${event.capability.scope} · max ${event.capability.max_uses} use · secret 不进入票据`, detailLabel: '签名 Capability claims', payload: event };
+      case 'capability_check_started': return { ...common, kind: 'capability', label: 'AUTH CHECK', title: `${event.target_task} requests ${event.tool_name}`, description: `需要 ${event.required_scope}；校验签名、run、task、tool、scope、有效期与使用次数。`, detailLabel: '请求与票据对照', payload: event };
+      case 'capability_verified': return { ...common, kind: 'capability', label: 'VERIFIED', title: `${event.cap_id} permits ${event.tool_name}`, description: `${event.required_scope} · ALLOW_ONCE；仍未调用函数。`, detailLabel: '授权决定', payload: event };
+      case 'capability_consumed': return { ...common, kind: 'capability', label: 'CONSUMED', title: `${event.target_task} · ${event.consumed_uses}/${event.max_uses}`, description: '逻辑调用权已消费；后续 Runtime retry 沿用同一已授权调用，不重新签发。', detailLabel: '使用计数', payload: event };
+      case 'capability_rejected': return { ...common, kind: 'capability-block', label: 'DENIED', title: `${event.target_task} cannot call ${event.tool_name}`, description: `${event.reasons.join(' · ')}；函数尚未执行，副作用为零。`, detailLabel: '拒绝原因', payload: event };
       case 'context_bypassed': return { ...common, kind: 'context', label: 'CONTEXT', title: 'Context builder bypassed', description: event.reason };
       case 'context_collection_started': return { ...common, kind: 'context', label: 'COLLECT', title: `${event.candidate_count} context candidates`, description: `Context budget ${event.max_tokens} teaching tokens · 尚未交给模型`, detailLabel: '候选来源与预算', payload: event };
       case 'context_item_scored': return { ...common, kind: 'context', label: 'SCORE', title: `${event.item_id} · ${event.score}`, description: `相关性 ${event.relevance} · 权威性 ${event.authority} · 新鲜度 ${event.freshness}${event.mandatory ? ' · 必选' : ''}`, detailLabel: '候选内容与评分', payload: event };

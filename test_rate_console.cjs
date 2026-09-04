@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[13], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[14], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -352,4 +352,17 @@ test('taint guard visualizes quarantine and blocks unsafe propagation', () => {
   assert.equal(state.nodes.TG1, 'failed');
   assert.equal(state.nodes.CT1, 'waiting');
   assert.equal(describe(state.events.at(-1)).label, 'ABSTAIN');
+});
+
+test('capability gate denies before Tool execution and exposes exact reason', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('capability_policy_started', 'AZ1', { bindings: ['run_id', 'tool_name', 'scope'] });
+  emit('capability_minted', 'AZ1', { target_task: 'D1', requested_tool: 'fetch_public_rate_history', capability: { tool_name: 'simulate_one_curve_trade', scope: 'paper:simulate', max_uses: 1 } });
+  emit('capability_check_started', 'AZ1', { target_task: 'D1', tool_name: 'fetch_public_rate_history', required_scope: 'rates:read', capability: {} });
+  assert.equal(state.nodes.AZ1, 'authorizing');
+  emit('capability_rejected', 'AZ1', { target_task: 'D1', tool_name: 'fetch_public_rate_history', required_scope: 'rates:read', reasons: ['tool_not_authorized'], decision: 'DENY_BEFORE_TOOL' });
+  assert.equal(state.nodes.AZ1, 'failed');
+  assert.equal(state.nodes.D1, 'waiting');
+  assert.equal(describe(state.events.at(-1)).label, 'DENIED');
 });

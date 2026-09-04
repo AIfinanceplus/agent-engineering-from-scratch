@@ -387,16 +387,15 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario demonstrates retrieval ranking, Top-K selection and a
-   Citation Gate that rejects a highly relevant but superseded source before the
-   model sees any evidence.
-2. Follow Goal → RG1 Retriever → CG1 Citation Gate → CT1 Context Builder → MR1 Model Router → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
+   default scenario demonstrates a signed capability ticket bound to the wrong
+   Tool and scope, which the Runtime denies before any Tool function starts.
+2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → AZ1 Capability Gate → C1 → D1 → V1 →
    Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
-3. The stream includes retrieval query construction, every candidate score,
-   Top-K selection, citation verification/rejection, final model-visible Context
+3. The stream includes capability minting, claim verification, consumption or
+   denial, plus retrieval query construction, citation checks, final Context
    Pack, route selection, token reservation/settlement, the model prompt, raw
    output, parse/validation decision, every emitted node event, registry lookup,
    Tool call (full arguments), Tool result (full output), retry and Eval result.
@@ -417,7 +416,38 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: Prompt Injection defense and taint isolation
+### Current lesson: Least privilege and capability tickets
+
+**AZ1** separates knowing a Tool from being authorized to call it. For the
+current teaching scenarios the Runtime mints signed, short-lived tickets bound
+to one run, task, Tool, scope and logical use. The function is entered only
+after the ticket passes every check.
+
+| Scenario | Capability policy | Observe |
+| --- | --- | --- |
+| 票据 Tool 不匹配 · 调用前 DENIED (default) | D1 requests `fetch_public_rate_history`, but its signed ticket names `simulate_one_curve_trade` and `paper:simulate` | AZ1 reports `tool_not_authorized` and `scope_not_authorized`; no `TOOL CALL` exists |
+| 最小权限票据 · 单次完整运行 | Every planned task receives exactly its required Tool and scope for one logical use | `MINT → AUTH CHECK → VERIFIED → CONSUMED` precedes each of five Tool calls |
+| 票据已过期 · 调用前 DENIED | D1 receives an otherwise valid ticket whose expiry is in the past | AZ1 reports `capability_expired`; D1 function and all downstream work remain unexecuted |
+
+Engineering contract:
+
+- Default authorization is deny. A Tool Registry entry is discoverability, not
+  permission.
+- Tickets are HMAC-SHA256 signed and bind `run_id`, `task_id`, `tool_name`,
+  `scope`, `expires_at` and `max_uses`.
+- The signing secret never appears in a ticket, event, model prompt or Tool
+  argument. The UI shows only an abbreviated signature.
+- A ticket cannot be reused across runs, tasks or Tools, widened to another
+  scope, modified without invalidating its signature, used after expiry or
+  consumed twice.
+- One ticket authorizes one logical Tool call. Runtime retries remain inside
+  that already-authorized call and do not mint broader permission.
+- Denial occurs before `tool_execution_started`, making the zero-side-effect
+  boundary visible and testable.
+
+Source file: `rate_capabilities.py`.
+
+### Previous lesson: Prompt Injection defense and taint isolation
 
 **TG1** is a trust boundary between verified provenance and the context builder.
 A source may pass CG1 and still contain text that tries to become an instruction.

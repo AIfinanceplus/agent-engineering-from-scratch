@@ -99,10 +99,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=10", html)
-        self.assertIn("rate_console_core.js?v=10", html)
-        self.assertIn("Prompt Injection", html)
-        self.assertIn("Taint Isolation", html)
+        self.assertIn("rate_console.js?v=11", html)
+        self.assertIn("rate_console_core.js?v=11", html)
+        self.assertIn("Least Privilege", html)
+        self.assertIn("Capability Tokens", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
@@ -385,6 +385,24 @@ class RateHTTPTests(unittest.TestCase):
         self.assertTrue(any(e["event"] == "taint_guard_completed" and not e["passed"] for e in events))
         self.assertFalse(any(e["event"] in {"context_collection_started", "model_request_started",
                                              "runtime_started", "tool_execution_started"} for e in events))
+
+    def test_valid_capability_stream_authorizes_before_tool_calls(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "capability_valid"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        first_auth = next(e for e in events if e["event"] == "capability_consumed")
+        first_call = next(e for e in events if e["event"] == "tool_execution_started")
+        self.assertLess(first_auth["sequence"], first_call["sequence"])
+
+    def test_invalid_capability_stream_denies_without_tool_call(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "capability_wrong_tool"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["code"], "CAPABILITY_REJECTED")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertTrue(any(e["event"] == "capability_rejected" for e in events))
+        self.assertFalse(any(e["event"] == "tool_execution_started" for e in events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

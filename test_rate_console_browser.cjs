@@ -40,7 +40,7 @@ server.serve_forever()
     page.on('pageerror', error => errors.push(error.message));
     const url = `http://127.0.0.1:${port}`;
     await page.goto(url);
-    assert.equal(await page.locator('.graph-node').count(), 18);
+    assert.equal(await page.locator('.graph-node').count(), 19);
     assert.equal(await page.locator('script').count(), 2);
     await page.locator('#scenario').selectOption('live');
     if (process.env.SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.SCREENSHOT_DIR}/rate-console-idle.png`, fullPage: true });
@@ -49,7 +49,7 @@ server.serve_forever()
     assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 1);
     assert.equal(await page.locator('#run-button').isDisabled(), true);
     await page.waitForSelector('#run-status[data-phase="completed"]');
-    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 18);
+    assert.equal(await page.locator('.graph-node[data-status="completed"]').count(), 19);
     const eventCount = await page.locator('.event-row').count();
     assert.ok(eventCount > 35);
     assert.match(await page.locator('.event-time').first().innerText(), /^\d{2}:\d{2}:\d{2}\.\d{3}$/);
@@ -108,6 +108,25 @@ server.serve_forever()
     assert.ok(injectionKinds.includes('PROMOTE AS DATA'));
     assert.ok(injectionKinds.includes('SAFE DATA'));
     assert.equal(await page.locator('.graph-node[data-node="TG1"]').getAttribute('data-status'), 'completed');
+
+    // Capability claims are checked and consumed before every Tool call.
+    await page.locator('#scenario').selectOption('capability_valid');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const capabilityKinds = await page.locator('.event-kind').allTextContents();
+    assert.ok(capabilityKinds.includes('MINT'));
+    assert.ok(capabilityKinds.includes('AUTH CHECK'));
+    assert.ok(capabilityKinds.includes('VERIFIED'));
+    assert.ok(capabilityKinds.includes('CONSUMED'));
+    assert.equal(await page.locator('.graph-node[data-node="AZ1"]').getAttribute('data-status'), 'completed');
+
+    // A ticket bound to another Tool is denied before a Tool Call exists.
+    await page.locator('#scenario').selectOption('capability_wrong_tool');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="failed"]');
+    assert.ok((await page.locator('.event-kind').allTextContents()).includes('DENIED'));
+    assert.equal(await page.locator('.graph-node[data-node="AZ1"]').getAttribute('data-status'), 'failed');
+    assert.equal(await page.locator('.event-row[data-kind="call"]').count(), 0);
 
     // Context compression is visible and the final pack is attached before M1.
     await page.locator('#scenario').selectOption('context_compression');
