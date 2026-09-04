@@ -20,11 +20,14 @@ class RateUIContractTests(unittest.TestCase):
         self.assertNotIn('data-detail-tab', html)
         self.assertNotIn('r12_', html)
         self.assertNotIn('rate_workbench', html)
-        self.assertIn('Context Engineering &amp; Context Budget', html)
+        self.assertIn('RAG Retrieval &amp; Citation Provenance', html)
+        self.assertIn('value="rag_stale"', html)
+        self.assertIn('value="rag_topk"', html)
+        self.assertIn('value="rag_insufficient"', html)
         self.assertIn('value="context_compression"', html)
         self.assertIn('value="context_relevant"', html)
         self.assertIn('value="context_conflict"', html)
-        self.assertIn('系统知道 ≠ 模型看到', html)
+        self.assertIn('检索到 ≠ 可以相信', html)
 
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")

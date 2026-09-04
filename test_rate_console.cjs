@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[10], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[12], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -308,4 +308,32 @@ test('historical lessons explicitly bypass the context builder', () => {
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
   emit('context_bypassed', 'CT1', { reason: 'historical lesson' });
   assert.equal(state.nodes.CT1, 'completed');
+});
+
+test('RAG makes ranking, Top-K and citation rejection visible before context', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('retrieval_query_created', 'RG1', { query: 'DGS2 DGS10', top_k: 3, corpus_size: 4, embedding_model: null });
+  emit('retrieval_candidate_scored', 'RG1', { rank: 1, chunk_id: 'stale', lexical_score: 0.9, matched_terms: ['dgs2'], selected_top_k: true });
+  assert.equal(state.nodes.RG1, 'ranking');
+  emit('retrieval_topk_selected', 'RG1', { top_k: 3, selected_chunk_ids: ['stale'], selected_citation_ids: ['CIT-1'] });
+  assert.equal(state.nodes.RG1, 'topk');
+  emit('retrieval_completed', 'RG1', { result_count: 1, algorithm: 'deterministic_lexical_overlap' });
+  emit('citation_gate_started', 'CG1', { candidate_count: 1, required_series: ['DGS2', 'DGS10'], allowed_domains: ['fred.stlouisfed.org'] });
+  emit('citation_checked', 'CG1', { passed: false, chunk_id: 'stale', domain: 'fred.stlouisfed.org', reasons: ['source_version_superseded'], series: ['DGS2'] });
+  assert.equal(state.nodes.CG1, 'rejected');
+  emit('citation_gate_completed', 'CG1', { passed: false, missing_series: ['DGS10'], accepted_citation_ids: [] });
+  assert.equal(state.nodes.CG1, 'failed');
+  assert.equal(state.nodes.CT1, 'waiting');
+  assert.equal(describe({ event: 'retrieval_topk_selected', top_k: 3, selected_chunk_ids: ['stale'], selected_citation_ids: ['CIT-1'] }).label, 'TOP-K');
+  assert.equal(describe({ event: 'citation_checked', passed: false, chunk_id: 'stale', domain: 'fred.stlouisfed.org', reasons: ['source_version_superseded'], series: ['DGS2'] }).label, 'CITATION REJECT');
+});
+
+test('historical lessons explicitly bypass retrieval and citation gates', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('retrieval_bypassed', 'RG1', { reason: 'historical lesson' });
+  emit('citation_gate_bypassed', 'CG1', { reason: 'no retrieved evidence' });
+  assert.equal(state.nodes.RG1, 'completed');
+  assert.equal(state.nodes.CG1, 'completed');
 });

@@ -99,9 +99,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=8", html)
-        self.assertIn("rate_console_core.js?v=8", html)
-        self.assertIn("Model Routing", html)
+        self.assertIn("rate_console.js?v=9", html)
+        self.assertIn("rate_console_core.js?v=9", html)
+        self.assertIn("RAG Retrieval", html)
+        self.assertIn("Citation Provenance", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
@@ -342,6 +343,27 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(packed["context_pack"], model_input["prompt"]["context_pack"])
         self.assertTrue(any(e["event"] == "context_item_compressed" for e in events))
         self.assertTrue(any(e["event"] == "tool_execution_started" for e in events))
+
+    def test_rag_stream_verifies_sources_before_context_and_model(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "rag_stale"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        gate = next(e for e in events if e["event"] == "citation_gate_completed")
+        context = next(e for e in events if e["event"] == "context_pack_created")
+        self.assertTrue(gate["passed"])
+        self.assertLess(gate["sequence"], context["sequence"])
+        self.assertTrue(any(e["event"] == "citation_checked" and not e["passed"] for e in events))
+
+    def test_rag_incomplete_evidence_stream_abstains_before_model(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "demo_scenario": "rag_insufficient"})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["code"], "RAG_EVIDENCE_INSUFFICIENT")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertTrue(any(e["event"] == "citation_gate_completed" and not e["passed"] for e in events))
+        self.assertFalse(any(e["event"] in {"context_collection_started", "model_request_started",
+                                             "runtime_started", "tool_execution_started"} for e in events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

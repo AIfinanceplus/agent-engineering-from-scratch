@@ -23,7 +23,7 @@ RUN_CONTROLS = RunControlRegistry()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V8-CONTEXT-ENGINEERING"
+    version_label = "RATE-CONSOLE-V9-RAG-PROVENANCE"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -265,12 +265,12 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V8-CONTEXT-ENGINEERING")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V9-RAG-PROVENANCE")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
-    print("Graph: G1 -> CT1 builds model context -> MR1 routes -> M1 proposes -> P1 validates -> Runtime")
-    print("Default UI: context scoring -> explicit compression/drop -> model-visible pack")
-    print("New lesson: context engineering + conflict resolution + context budget")
+    print("Graph: G1 -> RG1 retrieves -> CG1 verifies citations -> CT1 packs -> model -> Runtime")
+    print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
+    print("New lesson: RAG retrieval + Top-K + citation provenance gate")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

@@ -387,18 +387,19 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario demonstrates context scoring, mandatory constraints and a
-   disclosed lossy compression before the model sees any history.
-2. Follow Goal → CT1 Context Builder → MR1 Model Router → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
+   default scenario demonstrates retrieval ranking, Top-K selection and a
+   Citation Gate that rejects a highly relevant but superseded source before the
+   model sees any evidence.
+2. Follow Goal → RG1 Retriever → CG1 Citation Gate → CT1 Context Builder → MR1 Model Router → M1 Model Gateway → P1 Plan Validator → Runtime → C1 → D1 → V1 →
    Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
-3. The stream includes every context candidate, score and keep/compress/drop
-   decision, the final model-visible Context Pack, route selection, token
-   reservation/settlement, the model prompt, raw output, parse/validation decision,
-   every emitted node event, registry lookup, Tool call (full arguments), Tool
-   result (full output), retry and Eval result.
+3. The stream includes retrieval query construction, every candidate score,
+   Top-K selection, citation verification/rejection, final model-visible Context
+   Pack, route selection, token reservation/settlement, the model prompt, raw
+   output, parse/validation decision, every emitted node event, registry lookup,
+   Tool call (full arguments), Tool result (full output), retry and Eval result.
    Expand a row to inspect JSON; no observations are truncated.
 4. Click a Graph node to filter events; click it again or “显示全部” to reset.
    “跟随最新” controls scrolling without discarding earlier events.
@@ -416,7 +417,44 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: Context Engineering and context budget
+### Current lesson: RAG retrieval and citation provenance
+
+**RG1** retrieves candidate evidence; **CG1** decides whether retrieved evidence
+is allowed to become model context. This lesson deliberately separates
+relevance from trust. A text chunk can be highly related to the user goal and
+still be unusable if it is stale, missing provenance or fails to cover both
+required rate series.
+
+The retriever is deterministic lexical overlap only. There are no embeddings,
+vector databases, network calls or hidden LLM judges in this lesson, so the
+ranking is easy to audit in tests and in the live stream.
+
+| Scenario | Retrieval policy | Observe |
+| --- | --- | --- |
+| 高相关旧资料 · Citation Gate 拒绝 (default) | Top-K includes official DGS2, official DGS10 and one highly relevant but superseded note claiming direct tradeability | RG1 selects the stale chunk; CG1 marks it `rejected`; CT1 and M1 receive only verified citation IDs |
+| Top-K · 只召回双期限官方资料 | Query asks for 2s10s evidence and Top-K is limited to two official sources | Both required series pass provenance checks; the context pack carries two stable citations |
+| 证据缺一腿 · 调用前 ABSTAIN | DGS2 is official but DGS10 lacks attribution/provenance | CG1 raises `RAG_EVIDENCE_INSUFFICIENT`; CT1, model routing, Runtime and Tools never start |
+
+Engineering contract:
+
+- Retrieval recall is not evidence approval. RG1 may surface bad or stale text;
+  CG1 is the trust boundary.
+- Every chunk has a stable content hash and citation ID, plus source URL,
+  source title, as-of date, covered series and status.
+- The Citation Gate currently accepts only the official FRED/Federal Reserve
+  domains used by this teaching strategy.
+- A chunk marked `superseded` is rejected even when its lexical score is high.
+- Both required legs, DGS2 and DGS10, must be covered by accepted citations.
+  Missing coverage yields `ABSTAIN` before any model or Tool call.
+- Rejected chunks remain visible in the audit stream but never enter
+  `model_request_started.prompt`.
+- CT1 still owns token-budget selection after CG1; RAG determines what is
+  trustworthy enough to be considered as context, not how many tokens fit.
+
+Source file: `rate_rag.py`. The fixtures are intentionally small and disclosed;
+this is an auditable RAG control lesson, not a production retrieval stack.
+
+### Previous lesson: Context Engineering and context budget
 
 **CT1** makes model input explicit. The Agent may own policies, current
 instructions, verified observations and a long conversation history, but only

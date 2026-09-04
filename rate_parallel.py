@@ -30,6 +30,8 @@ from rate_model_routing import (ModelProviderUnavailable, ModelRouter,
                                 ScriptedRoutedModel)
 from rate_context_engineering import (ContextBuilder, context_policy_snapshot,
                                       teaching_context_candidates)
+from rate_rag import (CitationGate, LexicalRateRetriever, RAGEvidenceInsufficient,
+                      rag_context_candidates, rag_snapshot, teaching_rag_fixture)
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -40,7 +42,8 @@ SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadlin
              "replan_success", "replan_loop", "replan_budget",
              "model_valid", "model_repair", "model_unsafe",
              "route_primary", "route_fallback", "route_budget",
-             "context_relevant", "context_compression", "context_conflict"}
+             "context_relevant", "context_compression", "context_conflict",
+             "rag_topk", "rag_stale", "rag_insufficient"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
@@ -48,8 +51,9 @@ REPLAN_SCENARIOS = {"replan_success", "replan_loop", "replan_budget"}
 MODEL_SCENARIOS = {"model_valid", "model_repair", "model_unsafe"}
 ROUTING_SCENARIOS = {"route_primary", "route_fallback", "route_budget"}
 CONTEXT_SCENARIOS = {"context_relevant", "context_compression", "context_conflict"}
-GRAPH_ROWS = [["G1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
+RAG_SCENARIOS = {"rag_topk", "rag_stale", "rag_insufficient"}
+GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
@@ -186,7 +190,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RAG_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -203,7 +207,7 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]:
+            for task_id in ["RG1", "CG1", "CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
@@ -527,6 +531,40 @@ class RateParallelAgent:
                  output=validated, decision="EXECUTE")
             return proposal
 
+        def build_and_emit_context(context_candidates, context_budget, policy):
+            """Build CT1 once and make every candidate decision observable."""
+            context_builder = ContextBuilder(context_budget)
+            emit("context_collection_started", task_id="CT1", max_tokens=context_budget,
+                 candidate_count=len(context_candidates),
+                 sources=[item.source for item in context_candidates],
+                 usage_source="scripted_teaching_tokens")
+            context_pack = context_builder.build(context_candidates)
+            candidate_by_id = {item.item_id: item for item in context_candidates}
+            for decision in context_pack["decisions"]:
+                item = candidate_by_id[decision["item_id"]]
+                emit("context_item_scored", task_id="CT1", item_id=item.item_id,
+                     source=item.source, text=item.text, score=item.score,
+                     relevance=item.relevance, authority=item.authority,
+                     freshness=item.freshness, mandatory=item.mandatory)
+                if decision["decision"] == "selected":
+                    emit("context_item_selected", task_id="CT1", **decision)
+                elif decision["decision"] == "compressed":
+                    emit("context_item_compressed", task_id="CT1", **decision,
+                         original_text=item.text, compressed_text=item.compressed_text)
+                else:
+                    emit("context_item_dropped", task_id="CT1", **decision)
+                teaching_pause(0.12)
+            emit("context_pack_created", task_id="CT1",
+                 context_pack=context_pack["model_input"],
+                 excluded_item_ids=context_pack["excluded_item_ids"],
+                 max_tokens=context_pack["max_tokens"],
+                 used_tokens=context_pack["used_tokens"],
+                 remaining_tokens=context_pack["remaining_tokens"],
+                 policy=policy)
+            completed.add("CT1")
+            teaching_pause()
+            return context_pack, context_policy_snapshot(context_builder, context_pack)
+
         try:
             goal = "one auditable 2s10s paper simulation"
             emit("goal_received", task_id="G1", goal=goal,
@@ -535,51 +573,82 @@ class RateParallelAgent:
             model_adapter = None
             model_routing = None
             context_engineering = None
+            rag_engineering = None
             allowed_tools = {task["tool_name"] for task in SAFE_RATE_TASKS}
             prompt = build_plan_prompt(goal, allowed_tools)
+            if demo_scenario in RAG_SCENARIOS:
+                current_task = "RG1"
+                fixture = teaching_rag_fixture(demo_scenario)
+                retriever = LexicalRateRetriever(fixture["top_k"])
+                emit("retrieval_query_created", task_id="RG1", query=fixture["query"],
+                     algorithm="deterministic_lexical_overlap", top_k=fixture["top_k"],
+                     corpus_size=len(fixture["chunks"]), embedding_model=None,
+                     fixture_disclosed=True)
+                retrieval = retriever.retrieve(fixture["query"], fixture["chunks"])
+                for chunk in retrieval["ranked"]:
+                    emit("retrieval_candidate_scored", task_id="RG1", **chunk)
+                    teaching_pause(0.12)
+                emit("retrieval_topk_selected", task_id="RG1", top_k=retrieval["top_k"],
+                     selected_chunk_ids=[chunk["chunk_id"] for chunk in retrieval["selected"]],
+                     selected_citation_ids=[chunk["citation_id"] for chunk in retrieval["selected"]])
+                emit("retrieval_completed", task_id="RG1", result_count=len(retrieval["selected"]),
+                     algorithm=retrieval["algorithm"])
+                completed.add("RG1")
+                current_task = "CG1"
+                citation_gate = CitationGate()
+                emit("citation_gate_started", task_id="CG1",
+                     required_series=list(citation_gate.required_series),
+                     allowed_domains=sorted(citation_gate.allowed_domains),
+                     candidate_count=len(retrieval["selected"]))
+                try:
+                    verified_evidence = citation_gate.validate(retrieval["selected"])
+                except RAGEvidenceInsufficient as exc:
+                    for decision in exc.decisions:
+                        emit("citation_checked", task_id="CG1", **decision)
+                        teaching_pause(0.12)
+                    emit("citation_gate_completed", task_id="CG1", passed=False,
+                         missing_series=exc.missing_series, decision="ABSTAIN",
+                         accepted_citation_ids=[])
+                    raise ParallelRunError(str(exc), "CG1", trace, {"CG1": str(exc)},
+                                           code="RAG_EVIDENCE_INSUFFICIENT") from exc
+                for decision in verified_evidence["decisions"]:
+                    emit("citation_checked", task_id="CG1", **decision)
+                    teaching_pause(0.12)
+                emit("citation_gate_completed", task_id="CG1", passed=True,
+                     missing_series=[], decision="BUILD_CONTEXT",
+                     coverage=verified_evidence["coverage"],
+                     accepted_citation_ids=[chunk["citation_id"]
+                                            for chunk in verified_evidence["accepted"]])
+                completed.add("CG1")
+                current_task = "CT1"
+                context_pack, context_engineering = build_and_emit_context(
+                    rag_context_candidates(verified_evidence), 180,
+                    "verified citations are mandatory; then authority + relevance + budget",
+                )
+                prompt = {**prompt, "context_pack": context_pack["model_input"]}
+                rag_engineering = rag_snapshot(retrieval, verified_evidence)
+            else:
+                emit("retrieval_bypassed", task_id="RG1",
+                     reason="该历史场景不演示检索；没有伪造 RAG 召回过程。")
+                emit("citation_gate_bypassed", task_id="CG1",
+                     reason="没有检索证据需要进入来源门禁。")
+                completed.update({"RG1", "CG1"})
             if demo_scenario in CONTEXT_SCENARIOS:
                 current_task = "CT1"
                 context_budget = 150 if demo_scenario == "context_compression" else 180
-                context_builder = ContextBuilder(context_budget)
                 context_candidates = teaching_context_candidates(demo_scenario)
-                emit("context_collection_started", task_id="CT1", max_tokens=context_budget,
-                     candidate_count=len(context_candidates),
-                     sources=[item.source for item in context_candidates],
-                     usage_source="scripted_teaching_tokens")
-                context_pack = context_builder.build(context_candidates)
-                candidate_by_id = {item.item_id: item for item in context_candidates}
-                for decision in context_pack["decisions"]:
-                    item = candidate_by_id[decision["item_id"]]
-                    emit("context_item_scored", task_id="CT1", item_id=item.item_id,
-                         source=item.source, text=item.text, score=item.score,
-                         relevance=item.relevance, authority=item.authority,
-                         freshness=item.freshness, mandatory=item.mandatory)
-                    if decision["decision"] == "selected":
-                        emit("context_item_selected", task_id="CT1", **decision)
-                    elif decision["decision"] == "compressed":
-                        emit("context_item_compressed", task_id="CT1", **decision,
-                             original_text=item.text, compressed_text=item.compressed_text)
-                    else:
-                        emit("context_item_dropped", task_id="CT1", **decision)
-                    teaching_pause(0.12)
-                emit("context_pack_created", task_id="CT1",
-                     context_pack=context_pack["model_input"],
-                     excluded_item_ids=context_pack["excluded_item_ids"],
-                     max_tokens=context_pack["max_tokens"],
-                     used_tokens=context_pack["used_tokens"],
-                     remaining_tokens=context_pack["remaining_tokens"],
-                     policy="authority + freshness conflict resolution, then relevance + budget")
-                context_engineering = context_policy_snapshot(context_builder, context_pack)
+                context_pack, context_engineering = build_and_emit_context(
+                    context_candidates, context_budget,
+                    "authority + freshness conflict resolution, then relevance + budget",
+                )
                 prompt = {**prompt, "context_pack": context_pack["model_input"]}
-                completed.add("CT1")
-                teaching_pause()
-            else:
+            elif demo_scenario not in RAG_SCENARIOS:
                 emit("context_bypassed", task_id="CT1",
                      reason="该历史场景不演示上下文选择；沿用原有显式 Planner 输入。")
                 completed.add("CT1")
-            if demo_scenario in ROUTING_SCENARIOS | CONTEXT_SCENARIOS:
+            if demo_scenario in ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RAG_SCENARIOS:
                 current_task = "MR1"
-                router = ModelRouter(max_fallbacks=0 if demo_scenario in CONTEXT_SCENARIOS else 1)
+                router = ModelRouter(max_fallbacks=0 if demo_scenario in CONTEXT_SCENARIOS | RAG_SCENARIOS else 1)
                 model_budget = ModelTokenBudget(700 if demo_scenario == "route_budget" else
                                                 (1000 if demo_scenario == "route_primary" else 2000))
                 model_routing = {"router": router.snapshot(), "budget": model_budget}
@@ -717,7 +786,7 @@ class RateParallelAgent:
                     planner_name = "validated_model_proposal"
                     completed.add("M1")
                     break
-            elif demo_scenario not in ROUTING_SCENARIOS | CONTEXT_SCENARIOS:
+            elif demo_scenario not in ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RAG_SCENARIOS:
                 emit("model_bypassed", task_id="M1",
                      reason="该历史场景使用已验证的确定性 Planner，不调用模型。")
                 completed.add("M1")
@@ -802,7 +871,7 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "CT1", "MR1", "M1", "C1", "V1", "Q1", *by_id, "E1"]},
             "architecture": {"planner": planner_name,
                              "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
                              "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
@@ -811,13 +880,15 @@ class RateParallelAgent:
                                  "budget": model_routing["budget"].snapshot(),
                              } if model_routing else None,
                              "context_engineering": context_engineering,
+                             "rag": rag_engineering,
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "context_engineering" if demo_scenario in CONTEXT_SCENARIOS else
+            "lesson": {"topic": "rag_retrieval" if demo_scenario in RAG_SCENARIOS else
+                       ("context_engineering" if demo_scenario in CONTEXT_SCENARIOS else
                        ("model_routing" if demo_scenario in ROUTING_SCENARIOS else
                        ("model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
-                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"))),
+                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards")))),
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,
