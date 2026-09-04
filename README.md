@@ -387,14 +387,15 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
 
 1. Click **Run Agent**. The default parameters remain 60 observations, z=1,
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
-   default scenario demonstrates a signed capability ticket bound to the wrong
-   Tool and scope, which the Runtime denies before any Tool function starts.
-2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → AZ1 Capability Gate → C1 → D1 → V1 →
+   default scenario pauses the live stream at a real H1 human-approval boundary.
+   Use the visible Approve/Deny buttons to resolve that same running task.
+2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → H1 Human Approval → AZ1 Capability Gate → C1 → D1 → V1 →
    Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
-3. The stream includes capability minting, claim verification, consumption or
+3. The stream includes the approval request, human decision and scoped elevation,
+   followed by capability minting, claim verification, consumption or
    denial, plus retrieval query construction, citation checks, final Context
    Pack, route selection, token reservation/settlement, the model prompt, raw
    output, parse/validation decision, every emitted node event, registry lookup,
@@ -416,7 +417,34 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: Least privilege and capability tickets
+### Current lesson: Human approval and permission elevation
+
+**H1** is a real pause, not a prerecorded event. The streaming request remains
+open while the browser displays Approve and Deny buttons. A second HTTP request
+resolves the pending decision, after which the same run either continues or
+terminates without issuing a capability.
+
+| Human decision | Runtime behavior | Observe |
+| --- | --- | --- |
+| Approve once | Authorize only the current `simulate_one_curve_trade` request, `paper:simulate` scope and parameter fingerprint | `WAITING HUMAN → APPROVED → ELEVATE ONCE → MINT → AUTH CHECK → TOOL CALL` |
+| Deny | Do not mint any elevated capability | H1 fails with `HUMAN_APPROVAL_DENIED`; no Tool function starts |
+| No response for 90 seconds | Expire the approval request | H1 fails with `HUMAN_APPROVAL_TIMEOUT`; downstream remains blocked |
+
+Engineering contract:
+
+- The Agent and model cannot approve their own privilege escalation.
+- Approval binds the current run, target Tool, scope and SHA-256 parameter
+  fingerprint; it is not reusable consent for later runs.
+- Approval is not execution. It permits the Runtime to mint a short-lived,
+  single-use Capability, which AZ1 must still verify.
+- Denial and timeout happen before capability issuance and before every Tool
+  call, making zero side effects directly auditable.
+- Approval state is process-local in this teaching implementation. A production
+  system would persist it transactionally and authenticate the human identity.
+
+Source file: `rate_approval.py`.
+
+### Previous lesson: Least privilege and capability tickets
 
 **AZ1** separates knowing a Tool from being authorized to call it. For the
 current teaching scenarios the Runtime mints signed, short-lived tickets bound

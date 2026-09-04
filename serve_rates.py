@@ -13,6 +13,7 @@ from rate_checkpoint import RateCheckpointStore
 from rate_commands import RateIdempotencyStore
 from rate_parallel import RateParallelAgent, SCENARIOS
 from rate_control import RunControl, RunControlRegistry
+from rate_approval import ApprovalRegistry
 from r7_streaming import encode_stream_message
 from serve_r12 import R12VisualizerHandler
 
@@ -20,10 +21,11 @@ from serve_r12 import R12VisualizerHandler
 RATE_AGENT = RateStrategyAgent()
 PARALLEL_RATE_AGENT = RateParallelAgent()
 RUN_CONTROLS = RunControlRegistry()
+APPROVALS = ApprovalRegistry()
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V11-CAPABILITY-SECURITY"
+    version_label = "RATE-CONSOLE-V12-HUMAN-APPROVAL"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -37,7 +39,7 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/cancel"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/cancel", "/api/rates/approval"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
@@ -51,6 +53,15 @@ class RateStrategyHandler(R12VisualizerHandler):
                 return self._send_eval_json(404, {"ok": False, "error": {"message": "run_id not found in this server process"}})
             return self._send_eval_json(202 if outcome["accepted"] else 409,
                                         {"ok": outcome["accepted"], "control": outcome})
+        if self.path == "/api/rates/approval":
+            run_id = request_data.get("run_id")
+            decision = request_data.get("decision")
+            if not isinstance(run_id, str) or not run_id or decision not in {"approve", "deny"}:
+                return self._send_eval_json(400, {"ok": False, "error": {
+                    "message": "run_id and approve/deny decision are required"}})
+            outcome = APPROVALS.decide(run_id, decision)
+            return self._send_eval_json(202 if outcome["accepted"] else 409,
+                                        {"ok": outcome["accepted"], "approval": outcome})
         if self.path == "/api/rates/stream":
             return self._stream_run(request_data)
         if self.path != "/api/rates/run-once":
@@ -226,7 +237,8 @@ class RateStrategyHandler(R12VisualizerHandler):
             send("start", strategy="2s10s", execution_mode="parallel" if parallel else "serial",
                  cancel_supported=parallel, budget_ms=control.budget_ms if control else None)
             agent = PARALLEL_RATE_AGENT if parallel else RATE_AGENT
-            options = {"demo_scenario": scenario, "control": control} if parallel else {}
+            options = {"demo_scenario": scenario, "control": control,
+                       "approval_registry": APPROVALS} if parallel else {}
             run = agent.run_once(
                 run_id=run_id,
                 lookback_days=request_data.get("lookback_days", 60),
@@ -257,6 +269,7 @@ class RateStrategyHandler(R12VisualizerHandler):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
         finally:
+            APPROVALS.discard(run_id)
             if control and not control.snapshot()["terminal"]:
                 control.finish("failed")
 
@@ -265,12 +278,12 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V11-CAPABILITY-SECURITY")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V12-HUMAN-APPROVAL")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Graph: G1 -> RG1 retrieves -> CG1 verifies citations -> CT1 packs -> model -> Runtime")
     print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
-    print("New lesson: least privilege + signed capability tickets + deny before Tool")
+    print("New lesson: real Human Approval pause + approve/deny + scoped elevation")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

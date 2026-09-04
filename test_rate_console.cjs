@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[14], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[15], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -365,4 +365,18 @@ test('capability gate denies before Tool execution and exposes exact reason', ()
   assert.equal(state.nodes.AZ1, 'failed');
   assert.equal(state.nodes.D1, 'waiting');
   assert.equal(describe(state.events.at(-1)).label, 'DENIED');
+});
+
+test('human approval creates a real waiting state before capability minting', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('human_approval_requested', 'H1', { approval_id: 'APR-1', tool_name: 'simulate_one_curve_trade', scope: 'paper:simulate', arguments_sha256: 'abcdef1234567890', paper_only: true });
+  assert.equal(state.nodes.H1, 'waiting_human');
+  assert.equal(state.approval.pending, true);
+  assert.equal(describe(state.events.at(-1)).label, 'WAITING HUMAN');
+  emit('human_approval_resolved', 'H1', { approval_id: 'APR-1', decision: 'approve', arguments_sha256: 'abcdef1234567890' });
+  assert.equal(state.nodes.H1, 'approved');
+  assert.equal(state.approval.pending, false);
+  emit('permission_elevation_approved', 'H1', { approval_id: 'APR-1', tool_name: 'simulate_one_curve_trade', scope: 'paper:simulate' });
+  assert.equal(state.nodes.H1, 'completed');
 });

@@ -72,6 +72,29 @@ class RateHTTPTests(unittest.TestCase):
         connection.close()
         return response.status, raw
 
+    def interactive_approval_stream(self, decision):
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=10)
+        body = json.dumps({"execution_mode": "parallel", "demo_scenario": "approval_interactive",
+                           "budget_ms": 10000}).encode("utf-8")
+        connection.request("POST", "/api/rates/stream", body=body,
+                           headers={"Content-Type": "application/json",
+                                    "Accept": "application/x-ndjson"})
+        response = connection.getresponse()
+        messages = []
+        while True:
+            message = json.loads(response.readline())
+            messages.append(message)
+            if message.get("event", {}).get("event") == "human_approval_requested":
+                break
+        run_id = messages[0]["run_id"]
+        status, _, approval = self.post({"run_id": run_id, "decision": decision},
+                                        path="/api/rates/approval")
+        self.assertEqual(status, 202)
+        self.assertTrue(approval["approval"]["accepted"])
+        messages.extend(json.loads(line) for line in response.read().splitlines())
+        connection.close()
+        return messages
+
     def test_run_once_returns_one_closed_trade_trace_and_eval(self):
         status, headers, payload = self.post({})
         self.assertEqual(status, 200)
@@ -99,10 +122,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=11", html)
-        self.assertIn("rate_console_core.js?v=11", html)
-        self.assertIn("Least Privilege", html)
-        self.assertIn("Capability Tokens", html)
+        self.assertIn("rate_console.js?v=12", html)
+        self.assertIn("rate_console_core.js?v=12", html)
+        self.assertIn("Human Approval", html)
+        self.assertIn("Permission Elevation", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
@@ -403,6 +426,25 @@ class RateHTTPTests(unittest.TestCase):
         events = [message["event"] for message in messages if message["type"] == "event"]
         self.assertTrue(any(e["event"] == "capability_rejected" for e in events))
         self.assertFalse(any(e["event"] == "tool_execution_started" for e in events))
+
+    def test_real_http_human_approval_resumes_same_open_stream(self):
+        messages = self.interactive_approval_stream("approve")
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        requested = next(e for e in events if e["event"] == "human_approval_requested")
+        elevated = next(e for e in events if e["event"] == "permission_elevation_approved")
+        minted = next(e for e in events if e["event"] == "capability_minted")
+        self.assertLess(requested["sequence"], elevated["sequence"])
+        self.assertLess(elevated["sequence"], minted["sequence"])
+        self.assertTrue(any(e["event"] == "tool_execution_started" for e in events))
+
+    def test_real_http_human_denial_ends_stream_without_capability_or_tool(self):
+        messages = self.interactive_approval_stream("deny")
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["code"], "HUMAN_APPROVAL_DENIED")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertFalse(any(e["event"] in {"capability_minted", "tool_execution_started"}
+                             for e in events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

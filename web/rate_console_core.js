@@ -23,6 +23,7 @@
     { id: 'M1', title: 'Model gateway', description: '生成提议 · 无执行权限' },
     NODES[1],
     { id: 'R1', title: 'Runtime', description: '调度 · 容错 · 单线程归集事件' },
+    { id: 'H1', title: 'Human approval', description: '高风险权限升级 · 人工决定' },
     { id: 'AZ1', title: 'Capability gate', description: '签名票据 · 最小 scope · 单次使用' },
     { id: 'C1', title: 'Circuit breaker', description: '连续失败时阻止新 Tool 调用' },
     NODES[3],
@@ -33,10 +34,10 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
-    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
+    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
   }
   function failState(state, error) {
     const uncertain = state.phase === 'cancelling' && !state.stopConfirmed;
@@ -80,6 +81,16 @@
       case 'capability_verified': state.nodes.AZ1 = 'verified'; break;
       case 'capability_consumed': state.nodes.AZ1 = 'completed'; break;
       case 'capability_rejected': state.nodes.AZ1 = 'failed'; break;
+      case 'human_approval_bypassed': state.nodes.H1 = 'completed'; break;
+      case 'human_approval_requested':
+        state.nodes.H1 = 'waiting_human';
+        state.approval = { ...event, pending: true };
+        break;
+      case 'human_approval_resolved':
+        state.nodes.H1 = event.decision === 'approve' ? 'approved' : 'failed';
+        state.approval = { ...(state.approval || {}), ...event, pending: false };
+        break;
+      case 'permission_elevation_approved': state.nodes.H1 = 'completed'; break;
       case 'context_bypassed': state.nodes.CT1 = 'completed'; break;
       case 'context_collection_started': state.nodes.CT1 = 'running'; break;
       case 'context_item_scored': state.nodes.CT1 = 'selecting'; break;
@@ -267,6 +278,10 @@
       case 'capability_verified': return { ...common, kind: 'capability', label: 'VERIFIED', title: `${event.cap_id} permits ${event.tool_name}`, description: `${event.required_scope} · ALLOW_ONCE；仍未调用函数。`, detailLabel: '授权决定', payload: event };
       case 'capability_consumed': return { ...common, kind: 'capability', label: 'CONSUMED', title: `${event.target_task} · ${event.consumed_uses}/${event.max_uses}`, description: '逻辑调用权已消费；后续 Runtime retry 沿用同一已授权调用，不重新签发。', detailLabel: '使用计数', payload: event };
       case 'capability_rejected': return { ...common, kind: 'capability-block', label: 'DENIED', title: `${event.target_task} cannot call ${event.tool_name}`, description: `${event.reasons.join(' · ')}；函数尚未执行，副作用为零。`, detailLabel: '拒绝原因', payload: event };
+      case 'human_approval_bypassed': return { ...common, kind: 'approval', label: 'HITL', title: 'Human approval bypassed', description: event.reason };
+      case 'human_approval_requested': return { ...common, kind: 'approval-wait', label: 'WAITING HUMAN', title: `${event.tool_name} requests elevated scope`, description: `${event.scope} · 参数指纹 ${event.arguments_sha256.slice(0, 12)}… · 请使用页面 Approve/Deny 按钮。`, detailLabel: '完整审批请求', payload: event };
+      case 'human_approval_resolved': return { ...common, kind: event.decision === 'approve' ? 'approval' : 'error', label: event.decision === 'approve' ? 'APPROVED' : event.decision === 'deny' ? 'DENIED BY HUMAN' : 'APPROVAL TIMEOUT', title: `${event.approval_id} · ${event.decision}`, description: event.decision === 'approve' ? '批准只绑定当前 run、Tool、scope 与参数指纹。' : '未签发高风险 Capability；后续 Tool 不执行。', detailLabel: '人工决定', payload: event };
+      case 'permission_elevation_approved': return { ...common, kind: 'approval', label: 'ELEVATE ONCE', title: `${event.tool_name} · ${event.scope}`, description: '允许 Runtime 为本次 paper-only 运行签发一次性 Capability。', detailLabel: '权限提升边界', payload: event };
       case 'context_bypassed': return { ...common, kind: 'context', label: 'CONTEXT', title: 'Context builder bypassed', description: event.reason };
       case 'context_collection_started': return { ...common, kind: 'context', label: 'COLLECT', title: `${event.candidate_count} context candidates`, description: `Context budget ${event.max_tokens} teaching tokens · 尚未交给模型`, detailLabel: '候选来源与预算', payload: event };
       case 'context_item_scored': return { ...common, kind: 'context', label: 'SCORE', title: `${event.item_id} · ${event.score}`, description: `相关性 ${event.relevance} · 权威性 ${event.authority} · 新鲜度 ${event.freshness}${event.mandatory ? ' · 必选' : ''}`, detailLabel: '候选内容与评分', payload: event };

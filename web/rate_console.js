@@ -2,7 +2,7 @@
   'use strict';
   const { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
-  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
+  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
   let state = createState('parallel');
   let inFlight = false;
   let filter = null;
@@ -11,7 +11,7 @@
   const rows = [];
   const nodeElements = new Map();
   const edgeElements = [];
-  const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : byId('scenario').value === 'live' ? 120000 : 30000;
+  const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'approval_interactive'].includes(byId('scenario').value) ? 120000 : 30000;
 
   function element(tag, className, text) {
     const el = document.createElement(tag);
@@ -118,6 +118,12 @@
     byId('stop-button').disabled = cancelPending || state.phase === 'cancelling';
     byId('stop-button').textContent = state.phase === 'cancelling' ? '停止中…' : cancelPending ? '已请求…' : 'Stop';
     byId('scenario').disabled = inFlight;
+    const approval = state.approval;
+    byId('approval-panel').hidden = !approval?.pending;
+    if (approval?.pending) {
+      byId('approval-tool').textContent = `${approval.tool_name} · ${approval.scope}`;
+      byId('approval-fingerprint').textContent = `参数指纹 ${approval.arguments_sha256.slice(0, 16)}… · 仅当前 Run · Paper only`;
+    }
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
     byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? '事件流已完成 · 完整输入与输出已保留' : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
@@ -165,6 +171,20 @@
       cancelNote = `取消尚未确认：${error.message}；可以重试。`;
     } finally {
       if (state.runId === runId) update();
+    }
+  }
+  async function decideApproval(decision) {
+    if (!state.approval?.pending || !state.runId) return;
+    byId('approve-button').disabled = true;
+    byId('deny-button').disabled = true;
+    try {
+      const response = await fetch('/api/rates/approval', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ run_id: state.runId, decision }) });
+      const body = await response.json();
+      if (!response.ok || !body.approval?.accepted) throw new Error(body.error?.message || body.approval?.reason || '审批未被接受');
+    } catch (error) {
+      byId('stream-footer').textContent = `审批失败：${error.message}`;
+      byId('approve-button').disabled = false;
+      byId('deny-button').disabled = false;
     }
   }
   async function run() {
@@ -230,6 +250,8 @@
   }
   byId('run-button').addEventListener('click', run);
   byId('stop-button').addEventListener('click', requestStop);
+  byId('approve-button').addEventListener('click', () => decideApproval('approve'));
+  byId('deny-button').addEventListener('click', () => decideApproval('deny'));
   byId('scenario').addEventListener('change', () => {
     if (!state.runId) byId('source-note').textContent = byId('scenario').value === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
     update();
