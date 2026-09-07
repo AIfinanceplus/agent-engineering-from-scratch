@@ -420,3 +420,20 @@ test('lease graph visualizes takeover and fences the stale runtime', () => {
   emit('lease_released', 'L1', { resource: 'rate-run', owner: 'runtime-B', fencing_token: 2 });
   assert.equal(state.nodes.L1, 'completed');
 });
+
+test('outbox graph visualizes retry, deduplication and fenced side-effect boundary', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('outbox_enqueued', 'O1', { idempotency_key: 'run-fill-1', status: 'ENQUEUED' });
+  emit('outbox_dispatch_started', 'O1', { attempt: 1, owner: 'runtime-B' });
+  emit('outbox_ack_lost', 'O1', { attempt: 1 });
+  assert.equal(state.nodes.O1, 'retrying');
+  emit('outbox_dispatch_started', 'O1', { attempt: 2, owner: 'runtime-B' });
+  emit('outbox_effect_deduplicated', 'O1', { effect_count: 1 });
+  assert.equal(state.nodes.O1, 'deduplicated');
+  emit('outbox_acknowledged', 'O1', { attempts: 2, effect_count: 1 });
+  emit('outbox_completed', 'O1', { effect_count: 1, exactly_once_claim: false });
+  assert.equal(state.nodes.O1, 'completed');
+  assert.equal(describe({ event: 'outbox_ack_lost', attempt: 1 }).label, 'ACK LOST');
+  assert.equal(describe({ event: 'outbox_effect_deduplicated', effect_count: 1 }).label, 'DEDUPLICATED');
+});

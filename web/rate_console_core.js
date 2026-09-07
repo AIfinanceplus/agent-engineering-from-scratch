@@ -33,9 +33,11 @@
     { id: 'A2', title: '2Y series', description: 'Tool · 校验 2Y 序列' },
     { id: 'A10', title: '10Y series', description: 'Tool · 校验 10Y 序列' },
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
-    ...NODES.slice(4)
+    NODES[4],
+    { id: 'O1', title: 'Outbox dispatcher', description: '持久化命令 · 重试 · 幂等 Sink' },
+    NODES[5]
   ];
-  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['O1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -144,6 +146,16 @@
       case 'lease_fence_verified': state.nodes.L1 = 'verified'; break;
       case 'lease_side_effect_blocked': state.nodes.L1 = 'fenced'; break;
       case 'lease_released': state.nodes.L1 = 'completed'; break;
+      case 'outbox_bypassed': state.nodes.O1 = 'completed'; break;
+      case 'outbox_enqueued': state.nodes.O1 = 'running'; break;
+      case 'outbox_dispatch_started': state.nodes.O1 = 'running'; break;
+      case 'outbox_ack_lost': state.nodes.O1 = 'retrying'; break;
+      case 'outbox_dispatch_rejected': state.nodes.O1 = 'fenced'; break;
+      case 'outbox_side_effect_blocked': state.nodes.O1 = 'fenced'; break;
+      case 'outbox_effect_applied': state.nodes.O1 = 'writing'; break;
+      case 'outbox_effect_deduplicated': state.nodes.O1 = 'deduplicated'; break;
+      case 'outbox_acknowledged': state.nodes.O1 = 'writing'; break;
+      case 'outbox_completed': state.nodes.O1 = 'completed'; break;
       case 'task_started':
       case 'tool_execution_started':
       case 'eval_started':
@@ -346,6 +358,16 @@
       case 'lease_fence_verified': return { ...common, kind: 'lease', label: 'FENCE PASS', title: `${event.owner} · token ${event.fencing_token}`, description: '当前 owner 与 token 匹配；允许进入下一步 Tool 边界。', detailLabel: 'Fencing 校验', payload: event };
       case 'lease_side_effect_blocked': return { ...common, kind: 'lease-block', label: 'SIDE EFFECT BLOCKED', title: 'Stale Runtime cannot write', description: '旧 Runtime 被 Fencing Token 拦截，没有执行 Tool 或写入结果。', detailLabel: '副作用边界', payload: event };
       case 'lease_released': return { ...common, kind: 'lease', label: 'RELEASE', title: `${event.owner} released token ${event.fencing_token}`, description: 'Run 结束，主动释放所有权。', detailLabel: '释放结果', payload: event };
+      case 'outbox_bypassed': return { ...common, kind: 'outbox', label: 'OUTBOX', title: 'Outbox bypassed', description: event.reason };
+      case 'outbox_enqueued': return { ...common, kind: 'outbox', label: 'ENQUEUE', title: `${event.idempotency_key} · PENDING`, description: '先持久化要做什么，再由 Dispatcher 异步发送；不会把调用当作已成功。', detailLabel: 'Outbox command', payload: event };
+      case 'outbox_dispatch_started': return { ...common, kind: 'outbox', label: 'DISPATCH', title: `${event.owner} · attempt ${event.attempt}`, description: `at-least-once delivery · fencing token ${event.fencing_token}`, detailLabel: '发送尝试', payload: event };
+      case 'outbox_ack_lost': return { ...common, kind: 'outbox', label: 'ACK LOST', title: 'Effect may already be applied', description: '模拟崩溃发生在 Sink 成功与 Outbox ACK 之间；恢复时必须用同一个 idempotency key 重试。', detailLabel: '崩溃窗口', payload: event };
+      case 'outbox_dispatch_rejected': return { ...common, kind: 'outbox-block', label: 'FENCED', title: `${event.owner} cannot dispatch`, description: `旧 token ${event.fencing_token} < 当前 token ${event.current_fencing_token}；Sink 尚未执行。`, detailLabel: 'Outbox 发送拒绝', payload: event };
+      case 'outbox_side_effect_blocked': return { ...common, kind: 'outbox-block', label: 'SIDE EFFECT BLOCKED', title: 'No sink write', description: '旧 Runtime 被挡在副作用边界之外。', detailLabel: '副作用边界', payload: event };
+      case 'outbox_effect_applied': return { ...common, kind: 'outbox', label: 'EFFECT APPLIED', title: `${event.owner} · effect count ${event.effect_count}`, description: '幂等 Sink 首次应用这条命令。', detailLabel: 'Sink 结果', payload: event };
+      case 'outbox_effect_deduplicated': return { ...common, kind: 'outbox', label: 'DEDUPLICATED', title: `${event.idempotency_key} · effect count ${event.effect_count}`, description: '第二次投递被 Sink 识别为同一个命令；没有产生第二个副作用。', detailLabel: '去重结果', payload: event };
+      case 'outbox_acknowledged': return { ...common, kind: 'outbox', label: 'ACK', title: `${event.status} · ${event.attempts} attempts`, description: `Sink effect count = ${event.effect_count}；发送可以重复，效果只保留一份。`, detailLabel: '确认结果', payload: event };
+      case 'outbox_completed': return { ...common, kind: 'result', label: 'OUTBOX DONE', title: `effect count ${event.effect_count}`, description: '本课不宣称分布式 exactly-once；保证的是 at-least-once + 幂等目标。', detailLabel: 'Outbox 终态', payload: event };
       case 'task_started': return { ...common, title: 'Node started', description: event.tool_name };
       case 'tool_lookup': return { ...common, label: 'REGISTRY', title: event.tool_name, description: event.found ? 'Tool 已在注册表找到' : 'Tool 未注册' };
       case 'tool_validation': return { ...common, kind: event.passed ? 'node' : 'error', label: 'VALIDATION', title: event.passed ? 'Arguments validated' : 'Arguments rejected', description: event.tool_name, detailLabel: '参数校验结果' };

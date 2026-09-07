@@ -13,6 +13,7 @@ import hashlib
 import json
 from math import isfinite
 from queue import Empty, Queue
+import tempfile
 import time
 from uuid import uuid4
 
@@ -37,6 +38,7 @@ from rate_prompt_security import (PromptInjectionBlocked, RetrievedContentGuard,
 from rate_capabilities import (CapabilityAuthority, CapabilityRejected, TOOL_SCOPES)
 from rate_approval import ApprovalUnavailable
 from rate_leases import LeaseCoordinator, LeaseFenced, LeaseHeld
+from rate_outbox import IdempotentEffectSink, OutboxCrash, OutboxFenced, OutboxStore
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -52,7 +54,7 @@ SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadlin
              "injection_mixed", "injection_blocked", "injection_clean",
              "capability_valid", "capability_wrong_tool", "capability_expired",
              "approval_interactive", "approval_durable_restart", "approval_durable_stale",
-             "lease_failover", "lease_renewal"}
+             "lease_failover", "lease_renewal", "outbox_retry", "outbox_fenced"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
@@ -68,10 +70,11 @@ APPROVAL_SCENARIOS = {"approval_interactive", "approval_durable_restart", "appro
 DURABLE_APPROVAL_SCENARIOS = {"approval_durable_restart", "approval_durable_stale"}
 AUTHORIZATION_SCENARIOS = CAPABILITY_SCENARIOS | APPROVAL_SCENARIOS
 LEASE_SCENARIOS = {"lease_failover", "lease_renewal"}
-GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["L1"], ["H1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+OUTBOX_SCENARIOS = {"outbox_retry", "outbox_fenced"}
+GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["L1"], ["H1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["O1"], ["E1"]]
 GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "TG1"], ["TG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "L1"], ["L1", "H1"], ["H1", "AZ1"], ["AZ1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
-               ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
+               ["A10", "J1"], ["J1", "S1"], ["S1", "O1"], ["O1", "E1"]]
 
 
 def prepare_rate_series(history: dict, series_id: str, batch_id: str) -> dict:
@@ -201,6 +204,8 @@ class RateParallelAgent:
         lease_coordinator = LeaseCoordinator() if demo_scenario in LEASE_SCENARIOS else None
         lease_owner = None
         lease_token = None
+        outbox_store = None
+        effect_sink = None
 
         def emit(event, **payload):
             row = deepcopy({"sequence": len(trace) + 1, "run_id": run_id,
@@ -212,7 +217,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | AUTHORIZATION_SCENARIOS | LEASE_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | AUTHORIZATION_SCENARIOS | LEASE_SCENARIOS | OUTBOX_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -1082,6 +1087,75 @@ class RateParallelAgent:
             run_batch({"J1": {"two_year": observations["A2"], "ten_year": observations["A10"]}})
             current_task = "S1"
             run_batch({"S1": {"history": observations["J1"], **configuration}})
+            if demo_scenario in OUTBOX_SCENARIOS:
+                current_task = "O1"
+                outbox_directory = tempfile.mkdtemp(prefix="rate-outbox-demo-")
+                outbox_store = OutboxStore(outbox_directory)
+                effect_sink = IdempotentEffectSink(f"{outbox_directory}/effects")
+                trade = observations["S1"]["completed_trade"]
+                idempotency_key = f"{run_id}-paper-fill-{trade['paper_trade_id']}"
+                command = {"action": "record_paper_fill", "paper_trade_id": trade["paper_trade_id"],
+                           "net_pnl_usd": trade["net_pnl_usd"]}
+                enqueue = outbox_store.enqueue(idempotency_key, command, fencing_token=2)
+                emit("outbox_enqueued", task_id="O1", idempotency_key=idempotency_key,
+                     command=command, fencing_token=2, status=enqueue["status"],
+                     delivery="at_least_once")
+                if demo_scenario == "outbox_retry":
+                    emit("outbox_dispatch_started", task_id="O1", idempotency_key=idempotency_key,
+                         owner="runtime-B", fencing_token=2, attempt=1)
+                    try:
+                        outbox_store.dispatch(idempotency_key, owner="runtime-B", fencing_token=2,
+                                             sink=effect_sink, crash_after_apply=True)
+                    except OutboxCrash as exc:
+                        emit("outbox_ack_lost", task_id="O1", idempotency_key=idempotency_key,
+                             owner="runtime-B", attempt=1, effect_already_applied=True,
+                             reason=str(exc), recovery="retry_same_idempotency_key")
+                    emit("outbox_dispatch_started", task_id="O1", idempotency_key=idempotency_key,
+                         owner="runtime-B", fencing_token=2, attempt=2)
+                    retry = outbox_store.dispatch(idempotency_key, owner="runtime-B", fencing_token=2,
+                                                  sink=effect_sink)
+                    if not retry["applied"]:
+                        emit("outbox_effect_deduplicated", task_id="O1",
+                             idempotency_key=idempotency_key, attempt=2,
+                             effect_count=retry["sink"]["effect_count"],
+                             reason="sink already applied the first attempt")
+                    emit("outbox_acknowledged", task_id="O1", idempotency_key=idempotency_key,
+                         status=retry["status"], attempts=retry["record"]["attempts"],
+                         effect_count=retry["sink"]["effect_count"])
+                else:
+                    emit("outbox_dispatch_started", task_id="O1", idempotency_key=idempotency_key,
+                         owner="runtime-A", fencing_token=1, attempt=1)
+                    try:
+                        outbox_store.dispatch(
+                            idempotency_key, owner="runtime-A", fencing_token=1, sink=effect_sink,
+                            fence_check=lambda owner, token: (_ for _ in ()).throw(
+                                OutboxFenced("fencing token 1 is stale; current token is 2")
+                            ),
+                        )
+                    except OutboxFenced as exc:
+                        emit("outbox_dispatch_rejected", task_id="O1", idempotency_key=idempotency_key,
+                             owner="runtime-A", fencing_token=1, current_fencing_token=2,
+                             reason=str(exc), decision="DENY_BEFORE_SINK")
+                        emit("outbox_side_effect_blocked", task_id="O1", idempotency_key=idempotency_key,
+                             owner="runtime-A", fencing_token=1, side_effects=[])
+                    emit("outbox_dispatch_started", task_id="O1", idempotency_key=idempotency_key,
+                         owner="runtime-B", fencing_token=2, attempt=2)
+                    applied = outbox_store.dispatch(idempotency_key, owner="runtime-B", fencing_token=2,
+                                                    sink=effect_sink)
+                    emit("outbox_effect_applied", task_id="O1", idempotency_key=idempotency_key,
+                         owner="runtime-B", fencing_token=2, applied=applied["applied"],
+                         effect_count=applied["sink"]["effect_count"])
+                    emit("outbox_acknowledged", task_id="O1", idempotency_key=idempotency_key,
+                         status=applied["status"], attempts=applied["record"]["attempts"],
+                         effect_count=applied["sink"]["effect_count"])
+                emit("outbox_completed", task_id="O1", idempotency_key=idempotency_key,
+                     effect_count=1, exactly_once_claim=False,
+                     contract="at_least_once_delivery_plus_idempotent_sink")
+                completed.add("O1")
+            else:
+                emit("outbox_bypassed", task_id="O1",
+                     reason="该历史场景不演示 Outbox、重试与幂等副作用。")
+                completed.add("O1")
             current_task = "E1"
             control.check()
             inflight.add("E1")
@@ -1125,7 +1199,7 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "O1", "E1"]},
             "architecture": {"planner": planner_name,
                              "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
                              "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
@@ -1142,10 +1216,17 @@ class RateParallelAgent:
                                  "fencing_token_required_before_tool": True,
                                  "implementation": "in_memory_teaching_coordinator",
                              } if lease_coordinator else None,
+                             "outbox": {
+                                 "delivery": "at_least_once",
+                                 "sink": "idempotent_by_idempotency_key",
+                                 "fenced_before_sink": True,
+                                 "implementation": "durable_json_teaching_store",
+                             } if demo_scenario in OUTBOX_SCENARIOS else None,
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "lease_fencing" if demo_scenario in LEASE_SCENARIOS else
+            "lesson": {"topic": "outbox_idempotency" if demo_scenario in OUTBOX_SCENARIOS else
+                       ("lease_fencing" if demo_scenario in LEASE_SCENARIOS else
                        ("human_approval" if demo_scenario in APPROVAL_SCENARIOS else
                        ("capability_security" if demo_scenario in CAPABILITY_SCENARIOS else
                        ("prompt_injection_defense" if demo_scenario in INJECTION_SCENARIOS else
@@ -1153,7 +1234,7 @@ class RateParallelAgent:
                        ("context_engineering" if demo_scenario in CONTEXT_SCENARIOS else
                        ("model_routing" if demo_scenario in ROUTING_SCENARIOS else
                        ("model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
-                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards")))))))),
+                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"))))))))),
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,

@@ -25,7 +25,7 @@ APPROVALS = ApprovalRegistry(os.environ.get("RATE_APPROVAL_DIR", ".rate_approval
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V14-LEASE-FENCING"
+    version_label = "RATE-CONSOLE-V15-OUTBOX-IDEMPOTENCY"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -205,7 +205,8 @@ class RateStrategyHandler(R12VisualizerHandler):
                           else 120000 if scenario in {"live", "approval_interactive",
                                                        "approval_durable_restart",
                                                        "approval_durable_stale",
-                                                       "lease_failover", "lease_renewal"}
+                                                       "lease_failover", "lease_renewal",
+                                                       "outbox_retry", "outbox_fenced"}
                           else 30000)
         control = None
         if parallel:
@@ -283,12 +284,12 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V14-LEASE-FENCING")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V15-OUTBOX-IDEMPOTENCY")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
-    print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> Eval")
+    print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> Eval")
     print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
-    print("New lesson: Lease TTL + takeover + fencing token blocks stale Runtime side effects")
+    print("New lesson: Outbox at-least-once delivery + idempotent Sink + fence before side effect")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

@@ -390,7 +390,7 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
    default scenario pauses the live stream at a real H1 human-approval boundary.
    Use the visible Approve/Deny buttons to resolve that same running task.
 2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → L1 Lease/Fencing → H1 Human Approval → AZ1 Capability Gate → C1 → D1 → V1 →
-   Q1 → **A2 / A10** → J1 → S1 → E1.
+   Q1 → **A2 / A10** → J1 → S1 → O1 Outbox → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
@@ -417,7 +417,34 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: Multi-instance coordination with Lease and Fencing Token
+### Current lesson: Outbox, at-least-once delivery and idempotent side effects
+
+O1 separates “记录要做什么” from “把副作用送到目标”。Runtime first atomically
+writes a pending command to the durable Outbox. The Dispatcher may deliver it more
+than once, so the target Sink must deduplicate by the same `idempotency_key`.
+The demo deliberately crashes after the Sink applies but before the ACK is saved;
+the retry is therefore `DEDUPLICATED` and the effect count remains one. A stale
+fencing token is checked before the Sink, so it produces no side effect.
+
+| Scenario | Failure boundary | Observe |
+| --- | --- | --- |
+| 确认丢失 · 同一 key 重试并去重 | Sink succeeded, ACK was lost, then the same command is retried | `ENQUEUE → DISPATCH → ACK LOST → DISPATCH → DEDUPLICATED → ACK` |
+| 旧 Runtime · 副作用前被 fencing 拦截 | Runtime A presents token 1 after Runtime B owns token 2 | `FENCED → SIDE EFFECT BLOCKED → EFFECT APPLIED` |
+
+Engineering contract:
+
+- Delivery is at-least-once; this lesson does not claim distributed exactly-once.
+- The idempotency key binds one command to one logical effect. Reusing it is safe;
+  changing the command under the same key is rejected.
+- Fencing happens before the side-effect boundary, while the Sink itself is
+  idempotent in case a crash occurs after application but before acknowledgement.
+- The repository implementation is a durable JSON teaching store. Production would
+  use a transactional database outbox, replayable ordered stream and an idempotent
+  target API.
+
+Source files: `rate_outbox.py`, `rate_parallel.py`.
+
+### Previous lesson: Multi-instance coordination with Lease and Fencing Token
 
 L1 models the ownership boundary around one Agent Run. A Runtime must acquire
 the `rate-run` lease, keep it alive before its TTL expires, and present the

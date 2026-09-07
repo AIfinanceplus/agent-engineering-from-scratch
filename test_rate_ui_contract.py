@@ -20,7 +20,9 @@ class RateUIContractTests(unittest.TestCase):
         self.assertNotIn('data-detail-tab', html)
         self.assertNotIn('r12_', html)
         self.assertNotIn('rate_workbench', html)
-        self.assertIn('Lease &amp; Fencing', html)
+        self.assertIn('Outbox &amp; Idempotency', html)
+        self.assertIn('value="outbox_retry"', html)
+        self.assertIn('value="outbox_fenced"', html)
         self.assertIn('value="lease_failover"', html)
         self.assertIn('value="lease_renewal"', html)
         self.assertIn('value="approval_durable_restart"', html)
@@ -41,7 +43,7 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn('value="context_compression"', html)
         self.assertIn('value="context_relevant"', html)
         self.assertIn('value="context_conflict"', html)
-        self.assertIn('Lease ≠ 永久所有权', html)
+        self.assertIn('发送可以重复，副作用只能一次', html)
 
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")

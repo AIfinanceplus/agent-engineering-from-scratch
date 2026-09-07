@@ -122,9 +122,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=14", html)
-        self.assertIn("rate_console_core.js?v=14", html)
-        self.assertIn("Lease &amp; Fencing", html)
+        self.assertIn("rate_console.js?v=15", html)
+        self.assertIn("rate_console_core.js?v=15", html)
+        self.assertIn("Outbox &amp; Idempotency", html)
+        self.assertIn("outbox_retry", html)
         self.assertIn("lease_failover", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
@@ -488,6 +489,31 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(renewed["owner"], acquired["owner"])
         self.assertEqual(renewed["fencing_token"], acquired["fencing_token"])
         self.assertFalse(any(event["event"] == "lease_fence_rejected" for event in events))
+
+    def test_outbox_retry_stream_shows_ack_loss_and_sink_deduplication(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel",
+                                                "demo_scenario": "outbox_retry",
+                                                "budget_ms": 30000})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        names = [event["event"] for event in events]
+        self.assertLess(names.index("outbox_ack_lost"), names.index("outbox_effect_deduplicated"))
+        self.assertEqual(messages[-1]["result"]["lesson"]["topic"], "outbox_idempotency")
+        self.assertEqual(messages[-1]["result"]["architecture"]["outbox"]["sink"],
+                         "idempotent_by_idempotency_key")
+
+    def test_outbox_fenced_stream_blocks_stale_sink_and_allows_new_owner(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel",
+                                                "demo_scenario": "outbox_fenced",
+                                                "budget_ms": 30000})
+        self.assertEqual(status, 200)
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        rejected = next(event for event in events if event["event"] == "outbox_dispatch_rejected")
+        blocked = next(event for event in events if event["event"] == "outbox_side_effect_blocked")
+        applied = next(event for event in events if event["event"] == "outbox_effect_applied")
+        self.assertEqual(blocked["side_effects"], [])
+        self.assertLess(rejected["sequence"], applied["sequence"])
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

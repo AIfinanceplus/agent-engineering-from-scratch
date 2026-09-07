@@ -40,6 +40,30 @@ class RateParallelTests(unittest.TestCase):
         self.assertEqual((acquired["owner"], acquired["fencing_token"]),
                          (renewed["owner"], renewed["fencing_token"]))
 
+    def test_outbox_retry_reuses_key_and_deduplicates_effect(self):
+        run = self.agent().run_once(demo_scenario="outbox_retry")
+        events = run["trace"]
+        names = [event["event"] for event in events]
+        self.assertLess(names.index("outbox_enqueued"), names.index("outbox_ack_lost"))
+        self.assertLess(names.index("outbox_ack_lost"), names.index("outbox_effect_deduplicated"))
+        self.assertLess(names.index("outbox_effect_deduplicated"), names.index("outbox_completed"))
+        self.assertEqual(run["lesson"]["topic"], "outbox_idempotency")
+        self.assertEqual(run["architecture"]["outbox"]["delivery"], "at_least_once")
+        self.assertFalse(any(event["event"] == "outbox_effect_applied" for event in events))
+        self.assertEqual(run["eval"]["passed"], True)
+
+    def test_outbox_fences_stale_dispatch_before_sink(self):
+        run = self.agent().run_once(demo_scenario="outbox_fenced")
+        events = run["trace"]
+        names = [event["event"] for event in events]
+        rejected = next(event for event in events if event["event"] == "outbox_dispatch_rejected")
+        blocked = next(event for event in events if event["event"] == "outbox_side_effect_blocked")
+        applied = next(event for event in events if event["event"] == "outbox_effect_applied")
+        self.assertEqual(blocked["side_effects"], [])
+        self.assertLess(rejected["sequence"], applied["sequence"])
+        self.assertEqual(applied["effect_count"], 1)
+        self.assertEqual(run["lesson"]["topic"], "outbox_idempotency")
+
     def agent(self, **overrides):
         return RateParallelAgent({"fetch_public_rate_history": lambda **_: completed_steepener_history(), **overrides}, sleeper=lambda _: None)
 
