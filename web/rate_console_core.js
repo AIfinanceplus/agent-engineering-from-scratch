@@ -23,6 +23,7 @@
     { id: 'M1', title: 'Model gateway', description: '生成提议 · 无执行权限' },
     NODES[1],
     { id: 'R1', title: 'Runtime', description: '调度 · 容错 · 单线程归集事件' },
+    { id: 'L1', title: 'Lease coordinator', description: '所有权 · TTL · fencing token' },
     { id: 'H1', title: 'Human approval', description: '高风险权限升级 · 人工决定' },
     { id: 'AZ1', title: 'Capability gate', description: '签名票据 · 最小 scope · 单次使用' },
     { id: 'C1', title: 'Circuit breaker', description: '连续失败时阻止新 Tool 调用' },
@@ -34,7 +35,7 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     ...NODES.slice(4)
   ];
-  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
@@ -132,6 +133,17 @@
         break;
       case 'plan_created': state.nodes.P1 = 'completed'; break;
       case 'runtime_started': state.nodes.R1 = 'running'; break;
+      case 'lease_bypassed': state.nodes.L1 = 'completed'; break;
+      case 'lease_acquire_started': state.nodes.L1 = 'running'; break;
+      case 'lease_acquired': state.nodes.L1 = 'acquired'; break;
+      case 'lease_renewal_started': state.nodes.L1 = 'renewing'; break;
+      case 'lease_renewed': state.nodes.L1 = 'acquired'; break;
+      case 'lease_expired': state.nodes.L1 = 'expired'; break;
+      case 'lease_takeover_started': state.nodes.L1 = 'taking_over'; break;
+      case 'lease_fence_rejected': state.nodes.L1 = 'fenced'; break;
+      case 'lease_fence_verified': state.nodes.L1 = 'verified'; break;
+      case 'lease_side_effect_blocked': state.nodes.L1 = 'fenced'; break;
+      case 'lease_released': state.nodes.L1 = 'completed'; break;
       case 'task_started':
       case 'tool_execution_started':
       case 'eval_started':
@@ -323,6 +335,17 @@
       case 'model_plan_rejected': return { ...common, kind: 'error', label: 'ABSTAIN', title: 'Unsafe proposal stopped before Runtime', description: event.reasons.join(' · '), detailLabel: '拒绝原因', payload: event.reasons };
       case 'plan_created': return { ...common, title: 'Plan created', description: event.graph ? 'C1 保护 D1；V1 验证 Observation；Q1 控制分支准入' : '固定计划 · D1 → S1，随后 E1 校验', detailLabel: '完整计划与依赖' };
       case 'runtime_started': return { ...common, title: 'Runtime started', description: '从 Tool Registry 解析能力，并执行参数校验和重试策略。', detailLabel: 'Runtime 与 Tool Registry' };
+      case 'lease_bypassed': return { ...common, kind: 'lease', label: 'LEASE', title: 'Lease coordinator bypassed', description: event.reason };
+      case 'lease_acquire_started': return { ...common, kind: 'lease', label: 'ACQUIRE', title: `${event.owner} requests ${event.resource}`, description: `TTL ${event.ttl_ms}ms；只有持有者才能继续本次 Run。`, detailLabel: 'Lease 请求', payload: event };
+      case 'lease_acquired': return { ...common, kind: 'lease', label: 'LEASE ACQUIRED', title: `${event.owner} · token ${event.fencing_token}`, description: `租约有效至 ${event.expires_at}；后续副作用必须携带当前 fencing token。`, detailLabel: 'Lease 授予', payload: event };
+      case 'lease_renewal_started': return { ...common, kind: 'lease', label: 'RENEW', title: `${event.owner} renews token ${event.fencing_token}`, description: '在 TTL 到期前续租，保持 Runtime 所有权。', detailLabel: '续租请求', payload: event };
+      case 'lease_renewed': return { ...common, kind: 'lease', label: 'RENEWED', title: `${event.owner} · token ${event.fencing_token}`, description: `新的 TTL ${event.ttl_ms}ms。`, detailLabel: '续租结果', payload: event };
+      case 'lease_expired': return { ...common, kind: 'lease', label: 'LEASE EXPIRED', title: `${event.owner} · token ${event.fencing_token}`, description: '旧 Runtime 不再拥有执行权；它即使继续运行也必须被挡住。', detailLabel: '过期边界', payload: event };
+      case 'lease_takeover_started': return { ...common, kind: 'lease', label: 'TAKEOVER', title: `${event.owner} takes over`, description: `新 owner 接管 ${event.resource}，旧 token ${event.previous_fencing_token} 立即变旧。`, detailLabel: '接管请求', payload: event };
+      case 'lease_fence_rejected': return { ...common, kind: 'lease-block', label: 'FENCED', title: `${event.owner} blocked`, description: `token ${event.fencing_token} 已落后于当前 token ${event.current_fencing_token}；副作用为零。`, detailLabel: 'Fencing 拒绝', payload: event };
+      case 'lease_fence_verified': return { ...common, kind: 'lease', label: 'FENCE PASS', title: `${event.owner} · token ${event.fencing_token}`, description: '当前 owner 与 token 匹配；允许进入下一步 Tool 边界。', detailLabel: 'Fencing 校验', payload: event };
+      case 'lease_side_effect_blocked': return { ...common, kind: 'lease-block', label: 'SIDE EFFECT BLOCKED', title: 'Stale Runtime cannot write', description: '旧 Runtime 被 Fencing Token 拦截，没有执行 Tool 或写入结果。', detailLabel: '副作用边界', payload: event };
+      case 'lease_released': return { ...common, kind: 'lease', label: 'RELEASE', title: `${event.owner} released token ${event.fencing_token}`, description: 'Run 结束，主动释放所有权。', detailLabel: '释放结果', payload: event };
       case 'task_started': return { ...common, title: 'Node started', description: event.tool_name };
       case 'tool_lookup': return { ...common, label: 'REGISTRY', title: event.tool_name, description: event.found ? 'Tool 已在注册表找到' : 'Tool 未注册' };
       case 'tool_validation': return { ...common, kind: event.passed ? 'node' : 'error', label: 'VALIDATION', title: event.passed ? 'Arguments validated' : 'Arguments rejected', description: event.tool_name, detailLabel: '参数校验结果' };

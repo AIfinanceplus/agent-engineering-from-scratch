@@ -18,6 +18,28 @@ class RateParallelTests(unittest.TestCase):
         edges = [[left, right] for current, following in zip(rows, rows[1:]) for left in current for right in following]
         self.assertEqual(edges, GRAPH_EDGES)
 
+    def test_lease_failover_fences_stale_owner_before_tools(self):
+        run = self.agent().run_once(demo_scenario="lease_failover")
+        events = run["trace"]
+        names = [event["event"] for event in events]
+        self.assertLess(names.index("lease_expired"), names.index("lease_takeover_started"))
+        self.assertLess(names.index("lease_fence_rejected"), names.index("lease_fence_verified"))
+        self.assertTrue(any(event["event"] == "lease_side_effect_blocked"
+                            and event["side_effects"] == [] for event in events))
+        first_tool = next(event for event in events if event["event"] == "tool_execution_started")
+        fence = next(event for event in events if event["event"] == "lease_fence_verified"
+                      and event.get("before_task") == first_tool["task_id"])
+        self.assertLess(fence["sequence"], first_tool["sequence"])
+        self.assertEqual(run["lesson"]["topic"], "lease_fencing")
+
+    def test_lease_renewal_preserves_current_owner(self):
+        run = self.agent().run_once(demo_scenario="lease_renewal")
+        events = run["trace"]
+        acquired = next(event for event in events if event["event"] == "lease_acquired")
+        renewed = next(event for event in events if event["event"] == "lease_renewed")
+        self.assertEqual((acquired["owner"], acquired["fencing_token"]),
+                         (renewed["owner"], renewed["fencing_token"]))
+
     def agent(self, **overrides):
         return RateParallelAgent({"fetch_public_rate_history": lambda **_: completed_steepener_history(), **overrides}, sleeper=lambda _: None)
 

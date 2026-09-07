@@ -389,7 +389,7 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
    20-observation holding period, $100/bp DV01 and 1bp round-trip cost. The
    default scenario pauses the live stream at a real H1 human-approval boundary.
    Use the visible Approve/Deny buttons to resolve that same running task.
-2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → H1 Human Approval → AZ1 Capability Gate → C1 → D1 → V1 →
+2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → L1 Lease/Fencing → H1 Human Approval → AZ1 Capability Gate → C1 → D1 → V1 →
    Q1 → **A2 / A10** → J1 → S1 → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
@@ -417,7 +417,33 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: Durable approval and restart recovery
+### Current lesson: Multi-instance coordination with Lease and Fencing Token
+
+L1 models the ownership boundary around one Agent Run. A Runtime must acquire
+the `rate-run` lease, keep it alive before its TTL expires, and present the
+current fencing token immediately before a Tool can execute. If Runtime A
+stalls, Runtime B can take over with a larger token; A is fenced even if its
+process is still alive.
+
+| Scenario | Coordination condition | Observe |
+| --- | --- | --- |
+| Runtime A 失联 · Runtime B 接管 (default) | A lease expires, B acquires token 2, A presents stale token 1 | `LEASE ACQUIRED → LEASE EXPIRED → TAKEOVER → FENCED → SIDE EFFECT BLOCKED → FENCE PASS` |
+| Runtime A 续租 · 保持执行权 | The same owner renews before TTL expiry | `ACQUIRE → RENEW → RENEWED → FENCE PASS → TOOL CALL` |
+
+Engineering contract:
+
+- A lease is a time-bounded ownership hint, not a permanent lock.
+- Every takeover increments a fencing token; a stale owner cannot write merely
+  because its thread or process has not stopped.
+- Runtime checks ownership immediately before each Tool boundary. A rejected
+  stale check produces no Tool call and no side effect.
+- The coordinator is intentionally in-memory for this lesson. Production would
+  need an external transactional store, clock/TTL discipline, fencing at the
+  actual write target, and authenticated instance identity.
+
+Source file: `rate_leases.py`.
+
+### Previous lesson: Durable approval and restart recovery
 
 H1 now writes the pending approval request and its parameter fingerprint to an
 fsync'd JSON checkpoint before waiting. After approval, the teaching stream

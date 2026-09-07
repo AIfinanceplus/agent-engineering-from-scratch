@@ -98,7 +98,7 @@ test('calls and results expose full payloads, including all historical observati
 test('parallel reducer tracks both active tasks and a 1/2 Join barrier', () => {
   const { state, emit } = setup();
   Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
-  assert.deepEqual(PARALLEL_ROWS[15], ['A2', 'A10']);
+  assert.deepEqual(PARALLEL_ROWS[16], ['A2', 'A10']);
   emit('task_started', 'A2');
   emit('task_started', 'A10');
   assert.deepEqual(state.activeTasks, ['A2', 'A10']);
@@ -399,4 +399,24 @@ test('durable approval exposes restart, restore and stale-binding states', () =>
   emit('approval_binding_validated', 'H1', { passed: false, decision: 'REJECT_STALE_APPROVAL' });
   assert.equal(state.nodes.H1, 'failed');
   assert.equal(describe(state.events.at(-1)).label, 'STALE APPROVAL');
+});
+
+test('lease graph visualizes takeover and fences the stale runtime', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('lease_acquire_started', 'L1', { resource: 'rate-run', owner: 'runtime-A', ttl_ms: 250 });
+  emit('lease_acquired', 'L1', { resource: 'rate-run', owner: 'runtime-A', fencing_token: 1, expires_at: 100 });
+  assert.equal(state.nodes.L1, 'acquired');
+  emit('lease_expired', 'L1', { resource: 'rate-run', owner: 'runtime-A', fencing_token: 1 });
+  emit('lease_takeover_started', 'L1', { resource: 'rate-run', owner: 'runtime-B', previous_fencing_token: 1 });
+  emit('lease_acquired', 'L1', { resource: 'rate-run', owner: 'runtime-B', fencing_token: 2, expires_at: 200, takeover: true });
+  emit('lease_fence_rejected', 'L1', { resource: 'rate-run', owner: 'runtime-A', fencing_token: 1, current_fencing_token: 2 });
+  assert.equal(state.nodes.L1, 'fenced');
+  assert.equal(describe(state.events.at(-1)).label, 'FENCED');
+  emit('lease_side_effect_blocked', 'L1', { resource: 'rate-run', owner: 'runtime-A', fencing_token: 1, side_effects: [] });
+  emit('lease_fence_verified', 'L1', { resource: 'rate-run', owner: 'runtime-B', fencing_token: 2, before_task: 'D1' });
+  assert.equal(state.nodes.L1, 'verified');
+  assert.equal(describe(state.events.at(-1)).label, 'FENCE PASS');
+  emit('lease_released', 'L1', { resource: 'rate-run', owner: 'runtime-B', fencing_token: 2 });
+  assert.equal(state.nodes.L1, 'completed');
 });

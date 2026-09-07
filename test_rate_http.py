@@ -122,10 +122,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=13", html)
-        self.assertIn("rate_console_core.js?v=13", html)
-        self.assertIn("Durable Approval", html)
-        self.assertIn("Restart Recovery", html)
+        self.assertIn("rate_console.js?v=14", html)
+        self.assertIn("rate_console_core.js?v=14", html)
+        self.assertIn("Lease &amp; Fencing", html)
+        self.assertIn("lease_failover", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
@@ -461,6 +461,33 @@ class RateHTTPTests(unittest.TestCase):
         events = [message["event"] for message in messages if message["type"] == "event"]
         self.assertFalse(any(e["event"] in {"capability_minted", "tool_execution_started"}
                              for e in events))
+
+    def test_lease_failover_fences_stale_runtime_before_any_side_effect(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel",
+                                                "demo_scenario": "lease_failover",
+                                                "budget_ms": 30000})
+        self.assertEqual(status, 200)
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        names = [event["event"] for event in events]
+        self.assertLess(names.index("lease_expired"), names.index("lease_takeover_started"))
+        self.assertLess(names.index("lease_fence_rejected"), names.index("lease_fence_verified"))
+        self.assertTrue(any(event["event"] == "lease_side_effect_blocked"
+                            and event["side_effects"] == [] for event in events))
+        self.assertTrue(any(event["event"] == "tool_execution_started" for event in events))
+        self.assertEqual(messages[-1]["result"]["lesson"]["topic"], "lease_fencing")
+
+    def test_lease_renewal_keeps_same_owner_and_token(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel",
+                                                "demo_scenario": "lease_renewal",
+                                                "budget_ms": 30000})
+        self.assertEqual(status, 200)
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        renewed = next(event for event in events if event["event"] == "lease_renewed")
+        acquired = next(event for event in events if event["event"] == "lease_acquired")
+        self.assertEqual(renewed["owner"], acquired["owner"])
+        self.assertEqual(renewed["fencing_token"], acquired["fencing_token"])
+        self.assertFalse(any(event["event"] == "lease_fence_rejected" for event in events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})

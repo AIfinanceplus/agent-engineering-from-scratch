@@ -36,6 +36,7 @@ from rate_prompt_security import (PromptInjectionBlocked, RetrievedContentGuard,
                                   prompt_security_snapshot)
 from rate_capabilities import (CapabilityAuthority, CapabilityRejected, TOOL_SCOPES)
 from rate_approval import ApprovalUnavailable
+from rate_leases import LeaseCoordinator, LeaseFenced, LeaseHeld
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -50,7 +51,8 @@ SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadlin
              "rag_topk", "rag_stale", "rag_insufficient",
              "injection_mixed", "injection_blocked", "injection_clean",
              "capability_valid", "capability_wrong_tool", "capability_expired",
-             "approval_interactive", "approval_durable_restart", "approval_durable_stale"}
+             "approval_interactive", "approval_durable_restart", "approval_durable_stale",
+             "lease_failover", "lease_renewal"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
@@ -65,8 +67,9 @@ CAPABILITY_SCENARIOS = {"capability_valid", "capability_wrong_tool", "capability
 APPROVAL_SCENARIOS = {"approval_interactive", "approval_durable_restart", "approval_durable_stale"}
 DURABLE_APPROVAL_SCENARIOS = {"approval_durable_restart", "approval_durable_stale"}
 AUTHORIZATION_SCENARIOS = CAPABILITY_SCENARIOS | APPROVAL_SCENARIOS
-GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["H1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
-GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "TG1"], ["TG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "H1"], ["H1", "AZ1"], ["AZ1", "C1"], ["C1", "D1"],
+LEASE_SCENARIOS = {"lease_failover", "lease_renewal"}
+GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["L1"], ["H1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
+GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "TG1"], ["TG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "L1"], ["L1", "H1"], ["H1", "AZ1"], ["AZ1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
                ["A10", "J1"], ["J1", "S1"], ["S1", "E1"]]
 
@@ -195,6 +198,9 @@ class RateParallelAgent:
         revision_guard = PlanRevisionGuard(max_revisions=1) if demo_scenario in REPLAN_SCENARIOS else None
         capability_authority = CapabilityAuthority() if demo_scenario in AUTHORIZATION_SCENARIOS else None
         capability_tickets = {}
+        lease_coordinator = LeaseCoordinator() if demo_scenario in LEASE_SCENARIOS else None
+        lease_owner = None
+        lease_token = None
 
         def emit(event, **payload):
             row = deepcopy({"sequence": len(trace) + 1, "run_id": run_id,
@@ -206,7 +212,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | AUTHORIZATION_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | AUTHORIZATION_SCENARIOS | LEASE_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -223,7 +229,7 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]:
+            for task_id in ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
@@ -242,6 +248,22 @@ class RateParallelAgent:
                     passed=validation.get("ok") is True, validation=validation)
             if not validation.get("ok"):
                 raise ValueError(validation["error"]["message"])
+            if lease_coordinator:
+                try:
+                    lease_coordinator.fence_check("rate-run", lease_owner, lease_token)
+                except LeaseFenced as exc:
+                    publish("lease_fence_rejected", task_id="L1", resource="rate-run",
+                            owner=lease_owner, fencing_token=lease_token,
+                            current_fencing_token=(lease_coordinator.snapshot("rate-run") or {}).get("fencing_token"),
+                            reason=str(exc), decision="DENY_STALE_OWNER")
+                    publish("lease_side_effect_blocked", task_id="L1", resource="rate-run",
+                            owner=lease_owner, fencing_token=lease_token, tool_name=name,
+                            side_effects=[])
+                    raise ParallelRunError(str(exc), "L1", trace, {"L1": str(exc)},
+                                           code="LEASE_FENCED") from exc
+                publish("lease_fence_verified", task_id="L1", resource="rate-run",
+                        owner=lease_owner, fencing_token=lease_token,
+                        before_task=task_id, decision="ALLOW_OWNER")
             if capability_authority:
                 ticket = capability_tickets[task_id]
                 required_scope = TOOL_SCOPES[name]
@@ -870,6 +892,54 @@ class RateParallelAgent:
             current_task = "P1"
             emit("plan_created", task_id="P1", planner=planner_name,
                  task_ids=list(by_id), tasks=plan, graph={"rows": GRAPH_ROWS, "edges": GRAPH_EDGES})
+            if lease_coordinator:
+                current_task = "L1"
+                resource = "rate-run"
+                first_owner = "runtime-A"
+                emit("lease_acquire_started", task_id="L1", resource=resource,
+                     owner=first_owner, ttl_ms=250)
+                first_lease = lease_coordinator.acquire(resource, first_owner, ttl_ms=250)
+                lease_owner, lease_token = first_lease["owner"], first_lease["fencing_token"]
+                emit("lease_acquired", task_id="L1", **first_lease)
+                if demo_scenario == "lease_renewal":
+                    emit("lease_renewal_started", task_id="L1", resource=resource,
+                         owner=lease_owner, fencing_token=lease_token)
+                    renewed = lease_coordinator.renew(resource, lease_owner, lease_token, ttl_ms=120000)
+                    emit("lease_renewed", task_id="L1", **renewed)
+                    emit("lease_fence_verified", task_id="L1", resource=resource,
+                         owner=lease_owner, fencing_token=lease_token,
+                         before_task="H1", decision="ALLOW_OWNER")
+                else:
+                    lease_coordinator.expire(resource)
+                    expired = lease_coordinator.snapshot(resource)
+                    emit("lease_expired", task_id="L1", resource=resource,
+                         owner=first_owner, fencing_token=first_lease["fencing_token"],
+                         expires_at=expired["expires_at"])
+                    next_owner = "runtime-B"
+                    emit("lease_takeover_started", task_id="L1", resource=resource,
+                         owner=next_owner, previous_owner=first_owner,
+                         previous_fencing_token=first_lease["fencing_token"])
+                    new_lease = lease_coordinator.acquire(resource, next_owner, ttl_ms=120000)
+                    lease_owner, lease_token = new_lease["owner"], new_lease["fencing_token"]
+                    emit("lease_acquired", task_id="L1", **new_lease, takeover=True)
+                    try:
+                        lease_coordinator.fence_check(resource, first_owner, first_lease["fencing_token"])
+                    except LeaseFenced as exc:
+                        emit("lease_fence_rejected", task_id="L1", resource=resource,
+                             owner=first_owner, fencing_token=first_lease["fencing_token"],
+                             current_fencing_token=lease_token, reason=str(exc),
+                             decision="DENY_STALE_OWNER")
+                        emit("lease_side_effect_blocked", task_id="L1", resource=resource,
+                             owner=first_owner, fencing_token=first_lease["fencing_token"],
+                             side_effects=[])
+                    lease_coordinator.fence_check(resource, lease_owner, lease_token)
+                    emit("lease_fence_verified", task_id="L1", resource=resource,
+                         owner=lease_owner, fencing_token=lease_token,
+                         before_task="H1", decision="ALLOW_OWNER")
+            else:
+                emit("lease_bypassed", task_id="L1",
+                     reason="该历史场景不演示多实例 Lease 与 Fencing Token。")
+                completed.add("L1")
             if demo_scenario in APPROVAL_SCENARIOS:
                 if approval_registry is None:
                     raise ApprovalUnavailable("interactive approval registry is required")
@@ -1022,6 +1092,10 @@ class RateParallelAgent:
                  artifact_type=evaluation["artifact_type"])
             completed.add("E1")
             inflight.discard("E1")
+            if lease_coordinator:
+                released = lease_coordinator.release("rate-run", lease_owner, lease_token)
+                emit("lease_released", task_id="L1", **released)
+                completed.add("L1")
             control.finish("completed")
             emit("run_completed", task_id="END", status="COMPLETED_ONE_PAPER_SIMULATION")
         except RunStopped as exc:
@@ -1051,7 +1125,7 @@ class RateParallelAgent:
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]},
             "architecture": {"planner": planner_name,
                              "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
                              "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
@@ -1063,17 +1137,23 @@ class RateParallelAgent:
                              "rag": rag_engineering,
                              "prompt_security": prompt_security,
                              "capability_authority": capability_authority.snapshot() if capability_authority else None,
+                             "lease_coordination": {
+                                 "resource": "rate-run", "scenario": demo_scenario,
+                                 "fencing_token_required_before_tool": True,
+                                 "implementation": "in_memory_teaching_coordinator",
+                             } if lease_coordinator else None,
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "human_approval" if demo_scenario in APPROVAL_SCENARIOS else
+            "lesson": {"topic": "lease_fencing" if demo_scenario in LEASE_SCENARIOS else
+                       ("human_approval" if demo_scenario in APPROVAL_SCENARIOS else
                        ("capability_security" if demo_scenario in CAPABILITY_SCENARIOS else
                        ("prompt_injection_defense" if demo_scenario in INJECTION_SCENARIOS else
                        ("rag_retrieval" if demo_scenario in RAG_SCENARIOS else
                        ("context_engineering" if demo_scenario in CONTEXT_SCENARIOS else
                        ("model_routing" if demo_scenario in ROUTING_SCENARIOS else
                        ("model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
-                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"))))))),
+                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards")))))))),
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,
