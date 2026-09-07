@@ -417,7 +417,34 @@ mode retains the previous serial API for compatibility. Existing serial
 checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
 recovery is not implemented in this lesson.
 
-### Current lesson: Human approval and permission elevation
+### Current lesson: Durable approval and restart recovery
+
+H1 now writes the pending approval request and its parameter fingerprint to an
+fsync'd JSON checkpoint before waiting. After approval, the teaching stream
+discards the old in-memory registry, creates a fresh registry instance, restores
+the record from disk and revalidates every binding before AZ1 can mint a ticket.
+
+| Scenario | Recovery condition | Observe |
+| --- | --- | --- |
+| 批准后重启 · 从磁盘恢复并继续 (default) | Stored decision, run, Tool, scope and parameter fingerprint all match | `CHECKPOINT SAVED → RUNTIME RESTART → APPROVAL RESTORED → RESUME SAFE → MINT → TOOL CALL` |
+| 参数已变化 · 旧批准失效 | Resumed holding period produces a different SHA-256 parameter fingerprint | `STALE APPROVAL`; no Capability or Tool call; a new approval is required |
+| Deny from either scenario | Durable record stores the denial | Run ends before restart/elevation and no authority is issued |
+
+Engineering contract:
+
+- The approval record is atomically replaced and both file and directory are
+  fsync'd before the Runtime claims `CHECKPOINT SAVED`.
+- A fresh Registry instance reads the record from disk; tests also launch an
+  independent Python process to verify the checkpoint is not memory-only.
+- Recovery rechecks decision, `run_id`, Tool, scope and parameter fingerprint.
+  Approval is rejected if any command-defining input changed.
+- The one-click UI keeps the HTTP stream open and visualizes a fresh Runtime
+  registry boundary. It does not claim that the teaching web-server process
+  itself exited; cross-process durability is verified separately.
+- Production still needs authenticated approver identity, database transactions,
+  distributed leases and multi-instance coordination.
+
+### Previous lesson: Human approval and permission elevation
 
 **H1** is a real pause, not a prerecorded event. The streaming request remains
 open while the browser displays Approve and Deny buttons. A second HTTP request

@@ -72,9 +72,9 @@ class RateHTTPTests(unittest.TestCase):
         connection.close()
         return response.status, raw
 
-    def interactive_approval_stream(self, decision):
+    def interactive_approval_stream(self, decision, scenario="approval_interactive"):
         connection = http.client.HTTPConnection(self.host, self.port, timeout=10)
-        body = json.dumps({"execution_mode": "parallel", "demo_scenario": "approval_interactive",
+        body = json.dumps({"execution_mode": "parallel", "demo_scenario": scenario,
                            "budget_ms": 10000}).encode("utf-8")
         connection.request("POST", "/api/rates/stream", body=body,
                            headers={"Content-Type": "application/json",
@@ -122,10 +122,10 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=12", html)
-        self.assertIn("rate_console_core.js?v=12", html)
-        self.assertIn("Human Approval", html)
-        self.assertIn("Permission Elevation", html)
+        self.assertIn("rate_console.js?v=13", html)
+        self.assertIn("rate_console_core.js?v=13", html)
+        self.assertIn("Durable Approval", html)
+        self.assertIn("Restart Recovery", html)
         self.assertIn("route_fallback", html)
         self.assertIn("model_repair", html)
         self.assertIn("replan_success", html)
@@ -442,6 +442,22 @@ class RateHTTPTests(unittest.TestCase):
         messages = self.interactive_approval_stream("deny")
         self.assertEqual(messages[-1]["type"], "error")
         self.assertEqual(messages[-1]["error"]["code"], "HUMAN_APPROVAL_DENIED")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        self.assertFalse(any(e["event"] in {"capability_minted", "tool_execution_started"}
+                             for e in events))
+
+    def test_durable_approval_http_stream_restores_before_execution(self):
+        messages = self.interactive_approval_stream("approve", "approval_durable_restart")
+        self.assertEqual(messages[-1]["type"], "result")
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        names = [e["event"] for e in events]
+        self.assertLess(names.index("approval_checkpoint_saved"), names.index("approval_runtime_restarted"))
+        self.assertLess(names.index("approval_checkpoint_loaded"), names.index("capability_minted"))
+
+    def test_stale_durable_approval_http_stream_requires_new_approval(self):
+        messages = self.interactive_approval_stream("approve", "approval_durable_stale")
+        self.assertEqual(messages[-1]["type"], "error")
+        self.assertEqual(messages[-1]["error"]["code"], "STALE_APPROVAL_REJECTED")
         events = [message["event"] for message in messages if message["type"] == "event"]
         self.assertFalse(any(e["event"] in {"capability_minted", "tool_execution_started"}
                              for e in events))

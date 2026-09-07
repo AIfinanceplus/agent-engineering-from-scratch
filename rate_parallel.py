@@ -50,7 +50,7 @@ SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadlin
              "rag_topk", "rag_stale", "rag_insufficient",
              "injection_mixed", "injection_blocked", "injection_clean",
              "capability_valid", "capability_wrong_tool", "capability_expired",
-             "approval_interactive"}
+             "approval_interactive", "approval_durable_restart", "approval_durable_stale"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
@@ -62,7 +62,8 @@ RAG_SCENARIOS = {"rag_topk", "rag_stale", "rag_insufficient"}
 INJECTION_SCENARIOS = {"injection_mixed", "injection_blocked", "injection_clean"}
 RETRIEVAL_SCENARIOS = RAG_SCENARIOS | INJECTION_SCENARIOS
 CAPABILITY_SCENARIOS = {"capability_valid", "capability_wrong_tool", "capability_expired"}
-APPROVAL_SCENARIOS = {"approval_interactive"}
+APPROVAL_SCENARIOS = {"approval_interactive", "approval_durable_restart", "approval_durable_stale"}
+DURABLE_APPROVAL_SCENARIOS = {"approval_durable_restart", "approval_durable_stale"}
 AUTHORIZATION_SCENARIOS = CAPABILITY_SCENARIOS | APPROVAL_SCENARIOS
 GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["H1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["E1"]]
 GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "TG1"], ["TG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "H1"], ["H1", "AZ1"], ["AZ1", "C1"], ["C1", "D1"],
@@ -881,12 +882,18 @@ class RateParallelAgent:
                         json.dumps(configuration, sort_keys=True).encode()).hexdigest(),
                     "expires_in_seconds": 90,
                 }
+                def approval_ready():
+                    emit("human_approval_requested", task_id="H1", **approval_payload,
+                         decision="WAITING_HUMAN", downstream_blocked=["AZ1", "D1", "S1"])
+                    if demo_scenario in DURABLE_APPROVAL_SCENARIOS:
+                        emit("approval_checkpoint_saved", task_id="H1",
+                             approval_id=approval_payload["approval_id"], run_id=run_id,
+                             arguments_sha256=approval_payload["arguments_sha256"],
+                             durable=True, boundary="before_human_wait")
+
                 resolution = approval_registry.await_decision(
                     run_id, approval_payload, timeout_seconds=90, check=control.check,
-                    on_ready=lambda: emit(
-                        "human_approval_requested", task_id="H1", **approval_payload,
-                        decision="WAITING_HUMAN", downstream_blocked=["AZ1", "D1", "S1"],
-                    ),
+                    on_ready=approval_ready,
                 )
                 decision = resolution["decision"]
                 emit("human_approval_resolved", task_id="H1",
@@ -899,6 +906,38 @@ class RateParallelAgent:
                         "H1", trace, {"H1": decision},
                         code="HUMAN_APPROVAL_DENIED" if decision == "deny" else "HUMAN_APPROVAL_TIMEOUT",
                     )
+                if demo_scenario in DURABLE_APPROVAL_SCENARIOS:
+                    emit("approval_runtime_restarted", task_id="H1", run_id=run_id,
+                         old_memory_discarded=True, new_registry_instance=True,
+                         durable_source="fsync_json_checkpoint")
+                    restored = approval_registry.restart_and_restore(run_id)
+                    emit("approval_checkpoint_loaded", task_id="H1", run_id=run_id,
+                         approval_id=restored["request"]["approval_id"],
+                         stored_decision=restored["decision"], durable=True,
+                         arguments_sha256=restored["request"]["arguments_sha256"])
+                    expected_fingerprint = approval_payload["arguments_sha256"]
+                    if demo_scenario == "approval_durable_stale":
+                        changed = {**configuration, "holding_days": holding_days + 1}
+                        expected_fingerprint = hashlib.sha256(
+                            json.dumps(changed, sort_keys=True).encode()).hexdigest()
+                    binding_ok = (
+                        restored["decision"] == "approve"
+                        and restored["request"]["run_id"] == run_id
+                        and restored["request"]["tool_name"] == approval_payload["tool_name"]
+                        and restored["request"]["scope"] == approval_payload["scope"]
+                        and restored["request"]["arguments_sha256"] == expected_fingerprint
+                    )
+                    emit("approval_binding_validated", task_id="H1", passed=binding_ok,
+                         stored_fingerprint=restored["request"]["arguments_sha256"],
+                         resumed_fingerprint=expected_fingerprint,
+                         checks=["decision", "run_id", "tool_name", "scope", "arguments_sha256"],
+                         decision="RESUME" if binding_ok else "REJECT_STALE_APPROVAL")
+                    if not binding_ok:
+                        raise ParallelRunError(
+                            "stored approval does not match resumed parameters; new approval required",
+                            "H1", trace, {"H1": "arguments_sha256 mismatch"},
+                            code="STALE_APPROVAL_REJECTED",
+                        )
                 emit("permission_elevation_approved", task_id="H1",
                      approval_id=approval_payload["approval_id"],
                      tool_name=approval_payload["tool_name"], scope=approval_payload["scope"],

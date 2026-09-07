@@ -91,6 +91,10 @@
         state.approval = { ...(state.approval || {}), ...event, pending: false };
         break;
       case 'permission_elevation_approved': state.nodes.H1 = 'completed'; break;
+      case 'approval_checkpoint_saved': state.nodes.H1 = 'waiting_human'; break;
+      case 'approval_runtime_restarted': state.nodes.H1 = 'restarting'; break;
+      case 'approval_checkpoint_loaded': state.nodes.H1 = 'restoring'; break;
+      case 'approval_binding_validated': state.nodes.H1 = event.passed ? 'approved' : 'failed'; break;
       case 'context_bypassed': state.nodes.CT1 = 'completed'; break;
       case 'context_collection_started': state.nodes.CT1 = 'running'; break;
       case 'context_item_scored': state.nodes.CT1 = 'selecting'; break;
@@ -282,6 +286,10 @@
       case 'human_approval_requested': return { ...common, kind: 'approval-wait', label: 'WAITING HUMAN', title: `${event.tool_name} requests elevated scope`, description: `${event.scope} · 参数指纹 ${event.arguments_sha256.slice(0, 12)}… · 请使用页面 Approve/Deny 按钮。`, detailLabel: '完整审批请求', payload: event };
       case 'human_approval_resolved': return { ...common, kind: event.decision === 'approve' ? 'approval' : 'error', label: event.decision === 'approve' ? 'APPROVED' : event.decision === 'deny' ? 'DENIED BY HUMAN' : 'APPROVAL TIMEOUT', title: `${event.approval_id} · ${event.decision}`, description: event.decision === 'approve' ? '批准只绑定当前 run、Tool、scope 与参数指纹。' : '未签发高风险 Capability；后续 Tool 不执行。', detailLabel: '人工决定', payload: event };
       case 'permission_elevation_approved': return { ...common, kind: 'approval', label: 'ELEVATE ONCE', title: `${event.tool_name} · ${event.scope}`, description: '允许 Runtime 为本次 paper-only 运行签发一次性 Capability。', detailLabel: '权限提升边界', payload: event };
+      case 'approval_checkpoint_saved': return { ...common, kind: 'durable', label: 'CHECKPOINT SAVED', title: `${event.approval_id} · fsync complete`, description: '等待状态与参数指纹已原子写入磁盘；内存丢失后仍可恢复。', detailLabel: '持久化边界', payload: event };
+      case 'approval_runtime_restarted': return { ...common, kind: 'durable', label: 'RUNTIME RESTART', title: 'Fresh ApprovalRegistry instance', description: '教学流中丢弃旧 Registry 内存并创建全新实例；跨进程读取另有自动化验证。', detailLabel: '重启边界', payload: event };
+      case 'approval_checkpoint_loaded': return { ...common, kind: 'durable', label: 'APPROVAL RESTORED', title: `${event.approval_id} · ${event.stored_decision}`, description: `从磁盘恢复批准及参数指纹 ${event.arguments_sha256.slice(0, 12)}…`, detailLabel: '恢复内容', payload: event };
+      case 'approval_binding_validated': return { ...common, kind: event.passed ? 'durable' : 'error', label: event.passed ? 'RESUME SAFE' : 'STALE APPROVAL', title: event.passed ? 'Stored approval matches resumed command' : 'Parameter fingerprint changed', description: event.passed ? 'run、Tool、scope、参数指纹全部一致；允许继续签发 Capability。' : '旧批准不能覆盖新参数；需要重新审批。', detailLabel: '恢复后绑定校验', payload: event };
       case 'context_bypassed': return { ...common, kind: 'context', label: 'CONTEXT', title: 'Context builder bypassed', description: event.reason };
       case 'context_collection_started': return { ...common, kind: 'context', label: 'COLLECT', title: `${event.candidate_count} context candidates`, description: `Context budget ${event.max_tokens} teaching tokens · 尚未交给模型`, detailLabel: '候选来源与预算', payload: event };
       case 'context_item_scored': return { ...common, kind: 'context', label: 'SCORE', title: `${event.item_id} · ${event.score}`, description: `相关性 ${event.relevance} · 权威性 ${event.authority} · 新鲜度 ${event.freshness}${event.mandatory ? ' · 必选' : ''}`, detailLabel: '候选内容与评分', payload: event };

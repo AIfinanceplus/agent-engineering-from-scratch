@@ -21,11 +21,11 @@ from serve_r12 import R12VisualizerHandler
 RATE_AGENT = RateStrategyAgent()
 PARALLEL_RATE_AGENT = RateParallelAgent()
 RUN_CONTROLS = RunControlRegistry()
-APPROVALS = ApprovalRegistry()
+APPROVALS = ApprovalRegistry(os.environ.get("RATE_APPROVAL_DIR", ".rate_approvals"))
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V12-HUMAN-APPROVAL"
+    version_label = "RATE-CONSOLE-V13-DURABLE-APPROVAL"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -201,7 +201,11 @@ class RateStrategyHandler(R12VisualizerHandler):
         if mode not in ("serial", "parallel") or not isinstance(scenario, str) or scenario not in SCENARIOS:
             return self._send_eval_json(400, {"ok": False, "error": {"message": "invalid execution_mode or demo_scenario"}})
         parallel = mode == "parallel"
-        default_budget = 1000 if scenario in {"deadline", "late_result"} else 120000 if scenario == "live" else 30000
+        default_budget = (1000 if scenario in {"deadline", "late_result"}
+                          else 120000 if scenario in {"live", "approval_interactive",
+                                                       "approval_durable_restart",
+                                                       "approval_durable_stale"}
+                          else 30000)
         control = None
         if parallel:
             try:
@@ -278,12 +282,12 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V12-HUMAN-APPROVAL")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V13-DURABLE-APPROVAL")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
-    print("Graph: G1 -> RG1 retrieves -> CG1 verifies citations -> CT1 packs -> model -> Runtime")
+    print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> H1 -> AZ1 -> Tools -> Eval")
     print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
-    print("New lesson: real Human Approval pause + approve/deny + scoped elevation")
+    print("New lesson: durable approval checkpoint + fresh registry restore + stale binding rejection")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

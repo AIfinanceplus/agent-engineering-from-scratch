@@ -380,3 +380,23 @@ test('human approval creates a real waiting state before capability minting', ()
   emit('permission_elevation_approved', 'H1', { approval_id: 'APR-1', tool_name: 'simulate_one_curve_trade', scope: 'paper:simulate' });
   assert.equal(state.nodes.H1, 'completed');
 });
+
+test('durable approval exposes restart, restore and stale-binding states', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  emit('human_approval_requested', 'H1', { approval_id: 'APR-D', tool_name: 'simulate_one_curve_trade', scope: 'paper:simulate', arguments_sha256: 'same', paper_only: true });
+  emit('approval_checkpoint_saved', 'H1', { durable: true, boundary: 'before_human_wait' });
+  assert.equal(state.nodes.H1, 'waiting_human');
+  emit('human_approval_resolved', 'H1', { approval_id: 'APR-D', decision: 'approve', arguments_sha256: 'same' });
+  emit('approval_runtime_restarted', 'H1', { new_registry_instance: true });
+  assert.equal(state.nodes.H1, 'restarting');
+  emit('approval_checkpoint_loaded', 'H1', { stored_decision: 'approve' });
+  assert.equal(state.nodes.H1, 'restoring');
+  emit('approval_binding_validated', 'H1', { passed: true });
+  assert.equal(state.nodes.H1, 'approved');
+  emit('permission_elevation_approved', 'H1', { approval_id: 'APR-D' });
+  assert.equal(state.nodes.H1, 'completed');
+  emit('approval_binding_validated', 'H1', { passed: false, decision: 'REJECT_STALE_APPROVAL' });
+  assert.equal(state.nodes.H1, 'failed');
+  assert.equal(describe(state.events.at(-1)).label, 'STALE APPROVAL');
+});
