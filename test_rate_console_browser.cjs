@@ -131,6 +131,13 @@ server.serve_forever()
     assert.ok(outboxKinds.includes('DEDUPLICATED'));
     assert.ok(outboxKinds.includes('OUTBOX DONE'));
     assert.equal(await page.locator('.graph-node[data-node="O1"]').getAttribute('data-status'), 'completed');
+    const replayEventCount = await page.locator('.event-row').count();
+    assert.equal(await page.locator('#replay-button').isVisible(), true);
+    await page.locator('#replay-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    assert.equal(await page.locator('.event-row').count(), replayEventCount);
+    assert.match(await page.locator('#stream-footer').innerText(), /历史事件已重放/);
+    assert.equal(await page.locator('.graph-node[data-node="O1"]').getAttribute('data-status'), 'completed');
 
     // A stale fencing token is blocked before the Sink; the new owner may apply once.
     await page.locator('#scenario').selectOption('outbox_fenced');

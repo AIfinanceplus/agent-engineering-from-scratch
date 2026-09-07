@@ -411,13 +411,41 @@ The `POST /api/rates/stream` transport uses `rate-ndjson-v1` for every frame,
 one unique run ID per request and consecutive event sequence numbers. A closed
 connection without a terminal result/error is not considered success. Source
 attempt details are reported when D1 returns, not during individual network reads.
-The console observes execution; closing its browser does not provide a durable
-cancel/resume contract. The UI now requests `execution_mode="parallel"`; omitted
-mode retains the previous serial API for compatibility. Existing serial
-checkpoint/recovery and idempotency demos are unchanged. Parallel checkpoint
-recovery is not implemented in this lesson.
+The UI now requests `execution_mode="parallel"`; omitted mode retains the previous
+serial API for compatibility. Every stream envelope is first fsync'd to the
+append-only `RateEventLog` and then delivered. `POST /api/rates/replay` reads that
+log, marks the start frame as `replayed`, and returns the same ordered messages;
+the browser's “重放最近 Run” button feeds them through the same reducer, so no
+Tool is called a second time. `RATE_EVENT_DIR` can point at a durable directory;
+the default is a process-independent temporary teaching directory.
 
-### Current lesson: Outbox, at-least-once delivery and idempotent side effects
+### Current lesson: Replayable Event Stream
+
+This lesson separates **live delivery** from **durable history**. A stream is not
+just a socket: `start → event* → result/error` is an ordered artifact that can be
+recovered after a browser disconnect or Runtime restart. The UI makes the
+distinction explicit: a fresh run says “事件流已完成”, while a replay says
+“历史事件已重放 · 未重新调用 Tool”.
+
+| Boundary | What is persisted | What the learner can verify |
+| --- | --- | --- |
+| Before delivery | Every NDJSON envelope, including full Tool arguments/results | A network failure cannot erase the audit trail |
+| Replay cursor | Events after `after_sequence`, plus start and terminal frame | Recovery resumes in order without re-executing D1/S1/O1 |
+| UI reducer | The same `applyMessage` path for live and replay | Graph states, attempts and raw history converge |
+
+Engineering contract:
+
+- Event sequence numbers are consecutive and bound to one `run_id`; gaps and
+  duplicate starts are rejected by the log.
+- A terminal result/error is persisted before the HTTP request completes.
+- Replay is read-only. The frontend has observation/control permissions, not Tool
+  execution permissions; replay never invokes an Agent.
+- The log is a teaching JSONL store. Production would use a transactional event
+  store with retention, compaction and authenticated cursors.
+
+Source files: `rate_event_log.py`, `serve_rates.py`, `web/rate_console.js`.
+
+### Previous lesson: Outbox, at-least-once delivery and idempotent side effects
 
 O1 separates “记录要做什么” from “把副作用送到目标”。Runtime first atomically
 writes a pending command to the durable Outbox. The Dispatcher may deliver it more

@@ -1,6 +1,7 @@
 import http.client
 import json
 import threading
+import tempfile
 import unittest
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from unittest.mock import patch
 from rate_agent import RateStrategyAgent
 from rate_parallel import RateParallelAgent, prepare_rate_series
 from rate_sources import FredCurveHistorySource
+from rate_event_log import RateEventLog
 import serve_rates
 from serve_rates import RateStrategyHandler
 from test_rate_strategy import completed_steepener_history
@@ -25,6 +27,9 @@ class RateHTTPTests(unittest.TestCase):
         )
         self.patch = patch.object(serve_rates, "RATE_AGENT", agent)
         self.patch.start()
+        self.event_directory = tempfile.TemporaryDirectory(prefix="rate-event-log-test-")
+        self.event_patch = patch.object(serve_rates, "EVENT_LOG", RateEventLog(self.event_directory.name))
+        self.event_patch.start()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), QuietRateHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -35,6 +40,8 @@ class RateHTTPTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join(timeout=2)
         self.patch.stop()
+        self.event_patch.stop()
+        self.event_directory.cleanup()
 
     def post(self, payload, path="/api/rates/run-once"):
         connection = http.client.HTTPConnection(self.host, self.port, timeout=5)
@@ -58,6 +65,16 @@ class RateHTTPTests(unittest.TestCase):
             "POST", "/api/rates/stream", body=body,
             headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
         )
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        headers = dict(response.getheaders())
+        connection.close()
+        return response.status, headers, [json.loads(line) for line in raw.splitlines()]
+
+    def post_replay(self, payload):
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=10)
+        connection.request("POST", "/api/rates/replay", body=json.dumps(payload).encode("utf-8"),
+                           headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"})
         response = connection.getresponse()
         raw = response.read().decode("utf-8")
         headers = dict(response.getheaders())
@@ -117,14 +134,37 @@ class RateHTTPTests(unittest.TestCase):
         self.assertTrue(result["result"]["eval"]["passed"])
         self.assertGreaterEqual(len([message for message in messages if message["type"] == "event"]), 10)
 
+    def test_replay_returns_persisted_messages_without_running_agent_again(self):
+        status, _, messages = self.post_stream({})
+        self.assertEqual(status, 200)
+        run_id = messages[0]["run_id"]
+        with patch.object(serve_rates, "RATE_AGENT", RuntimeError("replay must not execute the Tool")):
+            replay_status, headers, replay = self.post_replay({"run_id": run_id})
+        self.assertEqual(replay_status, 200)
+        self.assertIn("application/x-ndjson", headers["Content-Type"])
+        self.assertTrue(replay[0]["replayed"])
+        self.assertEqual([m["type"] for m in replay], [m["type"] for m in messages])
+        self.assertEqual([m.get("event") for m in replay if m["type"] == "event"], [m["event"] for m in messages if m["type"] == "event"])
+        self.assertEqual(replay[-1]["result"]["run_id"], run_id)
+
+    def test_replay_cursor_can_resume_after_a_disconnect(self):
+        _, _, messages = self.post_stream({})
+        run_id = messages[0]["run_id"]
+        status, _, replay = self.post_replay({"run_id": run_id, "after_sequence": 5})
+        self.assertEqual(status, 200)
+        self.assertEqual(replay[0]["type"], "start")
+        self.assertTrue(all(item["event"]["sequence"] > 5 for item in replay if item["type"] == "event"))
+        self.assertEqual(replay[-1]["type"], "result")
+
     def test_root_loads_only_focused_graph_and_stream_console(self):
         status, html = self.get_root()
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=15", html)
-        self.assertIn("rate_console_core.js?v=15", html)
-        self.assertIn("Outbox &amp; Idempotency", html)
+        self.assertIn("rate_console.js?v=16", html)
+        self.assertIn("rate_console_core.js?v=16", html)
+        self.assertIn("Replayable Event Stream", html)
+        self.assertIn("id=\"replay-button\"", html)
         self.assertIn("outbox_retry", html)
         self.assertIn("lease_failover", html)
         self.assertIn("route_fallback", html)

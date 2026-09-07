@@ -113,6 +113,8 @@
     rows.forEach(row => { row.hidden = !!filter && row.dataset.node !== filter && !(filter === 'R1' && row.dataset.node === 'END'); });
     byId('filter-empty').hidden = !filter || rows.some(row => !row.hidden);
     byId('download').disabled = !state.events.length;
+    byId('replay-button').hidden = !state.terminal || !state.runId || inFlight;
+    byId('replay-button').disabled = inFlight;
     byId('run-button').disabled = inFlight;
     byId('stop-button').hidden = !inFlight || state.terminal || !state.cancelSupported;
     byId('stop-button').disabled = cancelPending || state.phase === 'cancelling';
@@ -126,7 +128,7 @@
     }
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
-    byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? '事件流已完成 · 完整输入与输出已保留' : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
+    byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? (state.replayed ? '历史事件已重放 · 未重新调用 Tool' : '事件流已完成 · 完整输入与输出已保留') : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
   }
   function scrollToLatest() {
     if (byId('follow').checked) byId('stream-scroll').scrollTop = byId('stream-scroll').scrollHeight;
@@ -187,6 +189,31 @@
       byId('deny-button').disabled = false;
     }
   }
+  async function consume(response) {
+    if (!response.body || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) throw new Error('服务未返回 NDJSON 事件流。');
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8', { fatal: true });
+    let buffer = '';
+    const parse = () => {
+      let newline;
+      while ((newline = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, newline).trim();
+        buffer = buffer.slice(newline + 1);
+        if (line) receive(JSON.parse(line));
+      }
+    };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      parse();
+    }
+    buffer += decoder.decode();
+    parse();
+    if (buffer.trim()) receive(JSON.parse(buffer));
+    finishStream(state);
+    reader.releaseLock();
+  }
   async function run() {
     if (inFlight) return;
     const form = byId('parameters');
@@ -208,47 +235,52 @@
     byId('follow').checked = true;
     byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
     update();
-    let reader;
     try {
       const response = await fetch('/api/rates/stream', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(config) });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(body?.error?.message || `HTTP ${response.status}`);
       }
-      if (!response.body || !response.headers.get('Content-Type')?.includes('application/x-ndjson')) throw new Error('服务未返回 NDJSON 事件流。');
-      reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8', { fatal: true });
-      let buffer = '';
-      const parse = () => {
-        let newline;
-        while ((newline = buffer.indexOf('\n')) >= 0) {
-          const line = buffer.slice(0, newline).trim();
-          buffer = buffer.slice(newline + 1);
-          if (line) receive(JSON.parse(line));
-        }
-      };
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        parse();
-      }
-      buffer += decoder.decode();
-      parse();
-      if (buffer.trim()) receive(JSON.parse(buffer));
-      finishStream(state);
+      await consume(response);
     } catch (error) {
       failState(state, { code: 'STREAM_ERROR', message: error.message, task_id: state.activeTask });
       showError();
-      if (reader) await reader.cancel().catch(() => {});
     } finally {
-      if (reader) reader.releaseLock();
+      inFlight = false;
+      update();
+      scrollToLatest();
+    }
+  }
+  async function replayLast() {
+    if (inFlight || !state.runId || !state.terminal) return;
+    const runId = state.runId;
+    inFlight = true;
+    cancelPending = false;
+    cancelNote = '';
+    filter = null;
+    rows.length = 0;
+    byId('event-list').replaceChildren();
+    state = createState('parallel');
+    state.phase = 'connecting';
+    update();
+    try {
+      const response = await fetch('/api/rates/replay', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ run_id: runId, after_sequence: 0 }) });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error?.message || `HTTP ${response.status}`);
+      }
+      await consume(response);
+    } catch (error) {
+      failState(state, { code: 'REPLAY_ERROR', message: error.message, task_id: state.activeTask });
+      showError();
+    } finally {
       inFlight = false;
       update();
       scrollToLatest();
     }
   }
   byId('run-button').addEventListener('click', run);
+  byId('replay-button').addEventListener('click', replayLast);
   byId('stop-button').addEventListener('click', requestStop);
   byId('approve-button').addEventListener('click', () => decideApproval('approve'));
   byId('deny-button').addEventListener('click', () => decideApproval('deny'));

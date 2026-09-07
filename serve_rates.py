@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from http.server import ThreadingHTTPServer
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -14,7 +15,7 @@ from rate_commands import RateIdempotencyStore
 from rate_parallel import RateParallelAgent, SCENARIOS
 from rate_control import RunControl, RunControlRegistry
 from rate_approval import ApprovalRegistry
-from r7_streaming import encode_stream_message
+from rate_event_log import EventLogError, RateEventLog
 from serve_r12 import R12VisualizerHandler
 
 
@@ -22,10 +23,11 @@ RATE_AGENT = RateStrategyAgent()
 PARALLEL_RATE_AGENT = RateParallelAgent()
 RUN_CONTROLS = RunControlRegistry()
 APPROVALS = ApprovalRegistry(os.environ.get("RATE_APPROVAL_DIR", ".rate_approvals"))
+EVENT_LOG = RateEventLog(os.environ.get("RATE_EVENT_DIR", os.path.join(tempfile.gettempdir(), "rate-agent-events")))
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V15-OUTBOX-IDEMPOTENCY"
+    version_label = "RATE-CONSOLE-V16-REPLAYABLE-STREAM"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -39,7 +41,7 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/cancel", "/api/rates/approval"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
@@ -64,6 +66,8 @@ class RateStrategyHandler(R12VisualizerHandler):
                                         {"ok": outcome["accepted"], "approval": outcome})
         if self.path == "/api/rates/stream":
             return self._stream_run(request_data)
+        if self.path == "/api/rates/replay":
+            return self._replay_run(request_data)
         if self.path != "/api/rates/run-once":
             if self.path == "/api/rates/recovery-demo":
                 return self._run_recovery_demo(request_data)
@@ -230,9 +234,9 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.close_connection = True
 
         def send(message_type, **payload):
-            self.wfile.write(encode_stream_message(
-                message_type, protocol="rate-ndjson-v1", run_id=run_id, **payload
-            ))
+            message = {"protocol": "rate-ndjson-v1", "type": message_type, "run_id": run_id, **payload}
+            EVENT_LOG.append(message)
+            self.wfile.write((json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
             self.wfile.flush()
 
         def observe(event):
@@ -279,17 +283,44 @@ class RateStrategyHandler(R12VisualizerHandler):
             if control and not control.snapshot()["terminal"]:
                 control.finish("failed")
 
+    def _replay_run(self, request_data):
+        """Replay persisted envelopes without executing any Tool again."""
+        run_id = request_data.get("run_id")
+        after_sequence = request_data.get("after_sequence", 0)
+        if not isinstance(run_id, str) or not run_id:
+            return self._send_eval_json(400, {"ok": False, "error": {"code": "RUN_ID_REQUIRED", "message": "run_id is required"}})
+        if not isinstance(after_sequence, int) or isinstance(after_sequence, bool) or after_sequence < 0:
+            return self._send_eval_json(400, {"ok": False, "error": {"code": "INVALID_SEQUENCE", "message": "after_sequence must be a non-negative integer"}})
+        try:
+            messages = EVENT_LOG.read(run_id, after_sequence=after_sequence)
+        except EventLogError as exc:
+            return self._send_eval_json(400, {"ok": False, "error": {"code": "INVALID_REPLAY", "message": str(exc)}})
+        if not messages:
+            return self._send_eval_json(404, {"ok": False, "error": {"code": "RUN_NOT_FOUND", "message": "no persisted stream for run_id"}})
+        replay_start = dict(messages[0])
+        replay_start["replayed"] = True
+        messages[0] = replay_start
+        body = b"".join((json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8") for message in messages)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache, no-transform")
+        self.send_header("X-Rate-Replay", "true")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
 
 def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V15-OUTBOX-IDEMPOTENCY")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V16-REPLAYABLE-STREAM")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> Eval")
     print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
-    print("New lesson: Outbox at-least-once delivery + idempotent Sink + fence before side effect")
+    print("New lesson: Replayable Event Stream · persist before delivery · resume without Tool re-execution")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

@@ -40,7 +40,7 @@
   const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['O1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
-    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null };
+    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
   }
   function failState(state, error) {
     const uncertain = state.phase === 'cancelling' && !state.stopConfirmed;
@@ -252,6 +252,7 @@
       }
       state.runId = message.run_id;
       state.phase = 'running';
+      state.replayed = message.replayed === true;
       state.cancelSupported = message.cancel_supported === true;
       state.budgetMs = message.budget_ms ?? null;
     } else {

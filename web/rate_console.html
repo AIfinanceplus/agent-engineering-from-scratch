@@ -5,16 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=15">
-  <script defer src="/rate_console_core.js?v=15"></script>
-  <script defer src="/rate_console.js?v=15"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=16">
+  <script defer src="/rate_console_core.js?v=16"></script>
+  <script defer src="/rate_console.js?v=16"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Outbox &amp; Idempotency <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Replayable Event Stream <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
-        <optgroup label="本课：Outbox &amp; Idempotency"><option value="outbox_retry">确认丢失 · 同一 key 重试并去重</option><option value="outbox_fenced">旧 Runtime · 副作用前被 fencing 拦截</option></optgroup>
+        <optgroup label="本课：Replayable Event Stream"><option value="outbox_retry">先完成一次 Outbox Run，再重放事件</option><option value="outbox_fenced">先完成一次 Fencing Run，再重放事件</option></optgroup>
         <optgroup label="上一课：Lease &amp; Fencing"><option value="lease_failover">Runtime A 失联 · Runtime B 接管</option><option value="lease_renewal">Runtime A 续租 · 保持执行权</option></optgroup>
         <optgroup label="上一课：Durable Approval"><option value="approval_durable_restart">批准后重启 · 从磁盘恢复并继续</option><option value="approval_durable_stale">参数已变化 · 旧批准失效</option></optgroup>
         <optgroup label="更早课程：Human Approval"><option value="approval_interactive">高风险 Scope · 等待人工 Approve / Deny</option></optgroup>
@@ -48,9 +48,9 @@
 
       <section class="stream-panel" aria-labelledby="stream-title">
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
-        <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
+        <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="replay-button" type="button" hidden>↻ 重放最近 Run</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
         <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
-          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>发送可以重复，副作用只能一次</h3><p>O1 先把命令写入 Outbox，再按 at-least-once 方式发送。<br>确认丢失时使用同一个 idempotency key 重试，由 Sink 去重；旧 token 则在 Sink 之前被拦截。</p><span>Enqueue. Retry. Deduplicate.</span></div>
+          <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>先运行一次，再从日志重放</h3><p>每条 start、event、result 都先持久化再发送。<br>浏览器断开或 Runtime 重启后，Replay 不会重新调用 D1 / S1 / O1。</p><span>Persist. Disconnect. Replay.</span></div>
           <ol id="event-list" class="event-list" aria-label="运行事件"></ol>
           <p id="filter-empty" class="filter-empty" hidden>此节点尚未产生事件。</p>
         </div>

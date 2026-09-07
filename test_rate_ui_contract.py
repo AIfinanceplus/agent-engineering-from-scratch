@@ -20,7 +20,8 @@ class RateUIContractTests(unittest.TestCase):
         self.assertNotIn('data-detail-tab', html)
         self.assertNotIn('r12_', html)
         self.assertNotIn('rate_workbench', html)
-        self.assertIn('Outbox &amp; Idempotency', html)
+        self.assertIn('Replayable Event Stream', html)
+        self.assertIn('id="replay-button"', html)
         self.assertIn('value="outbox_retry"', html)
         self.assertIn('value="outbox_fenced"', html)
         self.assertIn('value="lease_failover"', html)
@@ -43,7 +44,7 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn('value="context_compression"', html)
         self.assertIn('value="context_relevant"', html)
         self.assertIn('value="context_conflict"', html)
-        self.assertIn('发送可以重复，副作用只能一次', html)
+        self.assertIn('先运行一次，再从日志重放', html)
 
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
@@ -102,6 +103,13 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn("appState.selectedDetailTab = (recoveryDemo || idempotencyDemo) ? 'state' : 'trace'", source)
         self.assertIn("child.hidden = child !== overlay", source)
         self.assertNotIn("panel.innerHTML =", source)
+
+    def test_replayable_stream_console_uses_same_reader_and_reducer(self):
+        source = (ROOT / "web" / "rate_console.js").read_text(encoding="utf-8")
+        self.assertIn("/api/rates/replay", source)
+        self.assertIn("replayLast", source)
+        self.assertIn("历史事件已重放", source)
+        self.assertIn("await consume(response)", source)
 
     def test_server_retains_legacy_apis_but_serves_focused_console(self):
         source = (ROOT / "serve_rates.py").read_text(encoding="utf-8")

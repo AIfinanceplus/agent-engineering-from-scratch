@@ -23,6 +23,13 @@ test('actual graph has no fake parallel tasks and runtime stays active during to
   assert.equal(state.nodes.S1, 'waiting');
 });
 
+test('replayed start is visible in state while preserving the same event reducer', () => {
+  const state = createState('parallel');
+  applyMessage(state, { protocol: 'rate-ndjson-v1', run_id: 'replay-run', type: 'start', execution_mode: 'parallel', replayed: true });
+  assert.equal(state.replayed, true);
+  assert.equal(state.runId, 'replay-run');
+});
+
 test('retry keeps the node active and completion unblocks the next node', () => {
   const { state, emit } = setup();
   emit('task_started', 'D1');
