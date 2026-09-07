@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=16">
-  <script defer src="/rate_console_core.js?v=16"></script>
-  <script defer src="/rate_console.js?v=16"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=17">
+  <script defer src="/rate_console_core.js?v=17"></script>
+  <script defer src="/rate_console.js?v=17"></script>
 </head>
 <body>
   <header class="topbar">
@@ -49,6 +49,21 @@
       <section class="stream-panel" aria-labelledby="stream-title">
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
         <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="replay-button" type="button" hidden>↻ 重放最近 Run</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
+        <section class="stream-overview" id="stream-overview" aria-live="polite" aria-label="本次运行能力变化">
+          <div class="overview-title"><div><span class="eyebrow">WHAT CHANGED</span><strong>Replayable Event Stream</strong></div><span class="overview-mode" id="overview-mode">等待运行</span></div>
+          <p id="overview-change">新增边界：事件先持久化，再发送；断线后可从同一份历史恢复。</p>
+          <div class="capability-lane" aria-label="事件流能力阶段">
+            <div class="capability-step" id="capability-persist"><span class="capability-dot">1</span><div><strong>Persist</strong><small>写入日志</small></div></div>
+            <div class="capability-arrow" aria-hidden="true">→</div>
+            <div class="capability-step" id="capability-deliver"><span class="capability-dot">2</span><div><strong>Deliver</strong><small>实时发送</small></div></div>
+            <div class="capability-arrow" aria-hidden="true">→</div>
+            <div class="capability-step" id="capability-observe"><span class="capability-dot">3</span><div><strong>Observe</strong><small>状态归约</small></div></div>
+            <div class="capability-arrow" aria-hidden="true">→</div>
+            <div class="capability-step" id="capability-replay"><span class="capability-dot">4</span><div><strong>Replay</strong><small>历史恢复</small></div></div>
+          </div>
+          <div class="overview-metrics"><span><b id="frame-count">0</b><small>frames</small></span><span><b id="attempt-count">0</b><small>attempts</small></span><span><b id="side-effect-count">—</b><small>effects</small></span><span><b id="outcome-label">—</b><small>outcome</small></span></div>
+        </section>
+        <section class="stream-outcome" id="stream-outcome" aria-live="polite" hidden><div><span class="eyebrow">RUN OUTCOME</span><strong id="outcome-title">—</strong></div><p id="outcome-detail">—</p></section>
         <div class="stream-scroll" id="stream-scroll" tabindex="0" aria-label="按发生顺序排列的执行事件">
           <div class="empty-state" id="empty-state"><div class="empty-icon" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div><h3>先运行一次，再从日志重放</h3><p>每条 start、event、result 都先持久化再发送。<br>浏览器断开或 Runtime 重启后，Replay 不会重新调用 D1 / S1 / O1。</p><span>Persist. Disconnect. Replay.</span></div>
           <ol id="event-list" class="event-list" aria-label="运行事件"></ol>

@@ -82,15 +82,57 @@
     const row = element('li', 'event-row');
     row.dataset.kind = view.kind;
     row.dataset.node = event.task_id || 'END';
+    row.dataset.event = event.event || view.label || '';
+    const impact = eventImpact(event, view);
+    row.dataset.phase = impact.phase.toLowerCase().replace(/\s+/g, '-');
     const metadata = element('div', 'event-meta');
     const time = event.timestamp ? new Date(event.timestamp).toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 }) : '';
     metadata.append(element('span', 'event-sequence', event.sequence ? String(event.sequence).padStart(2, '0') : '—'), element('span', 'event-node', event.task_id || 'END'), element('span', 'event-kind', view.label), element('time', 'event-time', time));
     metadata.lastChild.title = event.timestamp || '';
     row.append(metadata, element('div', 'event-title', view.title));
     if (view.description) row.append(element('p', 'event-description', view.description));
+    const impactLine = element('div', 'event-impact');
+    impactLine.append(element('span', 'impact-phase', impact.phase), element('span', 'impact-state', impact.state), element('span', 'impact-effect', impact.effect));
+    row.append(impactLine);
     addDetails(row, view.detailLabel, view.payload);
     byId('event-list').append(row);
     rows.push(row);
+  }
+  function eventImpact(event, view) {
+    const name = event.event || '';
+    if (name === 'outbox_ack_lost') return { phase: 'FAILURE WINDOW', state: '状态：待恢复', effect: '副作用：可能已发生' };
+    if (name === 'outbox_effect_deduplicated') return { phase: 'RECOVERY', state: '状态：已去重', effect: `副作用：${event.effect_count ?? 1} 次` };
+    if (name === 'outbox_effect_applied') return { phase: 'SIDE EFFECT', state: '状态：已写入', effect: `副作用：${event.effect_count ?? 1} 次` };
+    if (name === 'outbox_side_effect_blocked' || name === 'capability_rejected' || name === 'lease_side_effect_blocked') return { phase: 'GUARD', state: '状态：已阻断', effect: '副作用：0 次' };
+    if (name === 'tool_execution_failed' || name === 'task_failed' || name === 'admission_rejected' || name === 'circuit_call_rejected' || name === 'run_stopped') return { phase: 'FAILURE', state: `状态：${event.retryable ? '可重试' : '失败'}`, effect: '下游：停止或等待' };
+    if (name === 'tool_retry_scheduled') return { phase: 'RETRY', state: `状态：attempt ${event.next_attempt}`, effect: `等待：${event.delay_ms ?? 0}ms` };
+    if (name === 'eval_completed') return { phase: 'RESULT', state: `Eval：${event.passed ? 'PASS' : 'FAIL'}`, effect: '边界：仅模拟' };
+    if (name === 'run_completed' || view.kind === 'result') return { phase: 'RESULT', state: '终态：已完成', effect: '下游：全部收束' };
+    if (name === 'outbox_enqueued') return { phase: 'PROCESS', state: '状态：已入队', effect: '副作用：尚未发送' };
+    if (name === 'outbox_dispatch_started') return { phase: 'PROCESS', state: `状态：attempt ${event.attempt}`, effect: '副作用：等待确认' };
+    if (name === 'task_started' || name === 'tool_execution_started' || name === 'eval_started') return { phase: 'PROCESS', state: '状态：运行中', effect: '边界：调用进行中' };
+    return { phase: view.kind === 'error' ? 'FAILURE' : 'OBSERVATION', state: '状态：已记录', effect: '结果：保留在 Trace' };
+  }
+  function updateOverview() {
+    const eventCount = state.events.length;
+    const frameCount = state.runId ? eventCount + 1 + (state.terminal ? 1 : 0) : 0;
+    const attempts = state.events.filter(event => ['tool_execution_started', 'outbox_dispatch_started'].includes(event.event)).length;
+    const effectEvent = [...state.events].reverse().find(event => Number.isFinite(event.effect_count));
+    const effectCount = effectEvent ? String(effectEvent.effect_count) : '—';
+    const outcome = state.phase === 'completed' ? 'PASS' : state.phase === 'failed' ? 'FAIL' : state.terminal ? state.phase.toUpperCase() : '—';
+    byId('overview-mode').textContent = state.replayed ? 'REPLAY · READ ONLY' : inFlight ? 'LIVE · RECORDING' : state.runId ? 'LIVE · RECORDED' : '等待运行';
+    byId('overview-change').textContent = state.replayed ? '当前展示的是已持久化历史；页面只重建状态，不重新调用 Tool。' : '新增边界：事件先持久化，再发送；断线后可从同一份历史恢复。';
+    byId('frame-count').textContent = frameCount;
+    byId('attempt-count').textContent = attempts;
+    byId('side-effect-count').textContent = effectCount;
+    byId('outcome-label').textContent = outcome;
+    const steps = { persist: state.runId ? (eventCount ? 'completed' : 'active') : '', deliver: eventCount ? (inFlight ? 'active' : 'completed') : '', observe: eventCount ? (state.terminal ? 'completed' : 'active') : '', replay: state.replayed ? 'completed' : '' };
+    Object.entries(steps).forEach(([id, status]) => { const node = byId(`capability-${id}`); node.classList.remove('active', 'completed'); if (status) node.classList.add(status); });
+    const outcomePanel = byId('stream-outcome');
+    outcomePanel.hidden = !state.runId;
+    byId('outcome-title').textContent = state.replayed ? 'Replay completed · same run, no Tool call' : state.phase === 'completed' ? 'Run completed · Eval passed' : state.phase === 'failed' ? 'Run failed · inspect the boundary below' : 'Run in progress';
+    const last = state.events.at(-1);
+    byId('outcome-detail').textContent = last ? `${last.task_id || 'Runtime'} · ${last.event} · sequence ${last.sequence}` : '等待第一条真实事件';
   }
   function update() {
     for (const [id, button] of nodeElements) {
@@ -129,6 +171,7 @@
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
     byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? (state.replayed ? '历史事件已重放 · 未重新调用 Tool' : '事件流已完成 · 完整输入与输出已保留') : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
+    updateOverview();
   }
   function scrollToLatest() {
     if (byId('follow').checked) byId('stream-scroll').scrollTop = byId('stream-scroll').scrollHeight;

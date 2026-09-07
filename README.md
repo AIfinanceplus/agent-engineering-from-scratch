@@ -445,6 +445,16 @@ Engineering contract:
 
 Source files: `rate_event_log.py`, `serve_rates.py`, `web/rate_console.js`.
 
+#### Stream visualization contract
+
+The console keeps one compact teaching surface instead of hiding new features in
+raw JSON. The **What Changed** strip shows `Persist → Deliver → Observe → Replay`,
+the metrics line counts persisted frames, Tool attempts, known side effects and
+the terminal outcome, and each event row adds a phase/state/effect line. The
+result banner distinguishes a live recorded run from a read-only historical
+replay. Graph filtering only narrows the rows; the original event history stays
+in memory and remains exportable.
+
 ### Previous lesson: Outbox, at-least-once delivery and idempotent side effects
 
 O1 separates “记录要做什么” from “把副作用送到目标”。Runtime first atomically

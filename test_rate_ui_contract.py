@@ -22,6 +22,8 @@ class RateUIContractTests(unittest.TestCase):
         self.assertNotIn('rate_workbench', html)
         self.assertIn('Replayable Event Stream', html)
         self.assertIn('id="replay-button"', html)
+        for element_id in ('stream-overview', 'capability-persist', 'capability-deliver', 'capability-observe', 'capability-replay', 'stream-outcome', 'frame-count', 'attempt-count', 'side-effect-count', 'outcome-label'):
+            self.assertIn(f'id="{element_id}"', html)
         self.assertIn('value="outbox_retry"', html)
         self.assertIn('value="outbox_fenced"', html)
         self.assertIn('value="lease_failover"', html)
