@@ -161,6 +161,9 @@
       case 'ledger_event_appending':
       case 'ledger_event_appended': state.nodes.LG1 = 'writing'; break;
       case 'ledger_snapshot_rebuilt': state.nodes.LG1 = 'verifying'; break;
+      case 'portfolio_snapshot_rebuilt': state.nodes.LG1 = 'verifying'; break;
+      case 'portfolio_fill_preflight': state.nodes.LG1 = 'verifying'; break;
+      case 'portfolio_fill_blocked': state.nodes.LG1 = 'verifying'; break;
       case 'ledger_reconciliation_started': state.nodes.LG1 = 'verifying'; break;
       case 'ledger_reconciliation_completed': state.nodes.LG1 = event.passed ? 'completed' : 'failed'; break;
       case 'ledger_mismatch_detected': state.nodes.LG1 = 'failed'; break;
@@ -381,6 +384,9 @@
       case 'ledger_event_appending':
       case 'ledger_event_appended': return { ...common, kind: 'ledger', label: 'LEDGER WRITE', title: event.event_type, description: '事件先追加并 fsync；写入成功后才向 Live Stream 发布状态。', detailLabel: '写入命令', payload: event };
       case 'ledger_snapshot_rebuilt': return { ...common, kind: 'ledger', label: 'REBUILD', title: `${event.event_count} events · ${event.status}`, description: '按序重放 JSONL hash chain，生成可复算的账本快照。', detailLabel: '重建快照', payload: event };
+      case 'portfolio_snapshot_rebuilt': return { ...common, kind: 'ledger', label: 'PORTFOLIO', title: event.risk_status, description: `未结算 ${event.summary?.unsettled_trade_count ?? 0} 笔 · 裸腿风险 ${event.summary?.total_leg_risk_quantity ?? 0}；聚合来源是重放后的追加账本。`, detailLabel: '组合投影与明确限额', payload: event };
+      case 'portfolio_fill_preflight': return { ...common, kind: 'ledger', label: 'PREFLIGHT PASS', title: 'Projected portfolio within limits', description: '先检查投影组合，账本仍未写入；获准后才可记录这笔纸面成交。', detailLabel: '原子预检结果', payload: event };
+      case 'portfolio_fill_blocked': return { ...common, kind: 'guard', label: 'LIMIT BLOCKED', title: 'Projected fill exceeds portfolio limit', description: `副作用 0 次；${event.violations?.map(row => row.limit + ' ' + row.value + ' > ' + row.maximum).join(' · ') || '限额超出'}。`, detailLabel: '拒绝的投影与限额', payload: event };
       case 'ledger_reconciliation_started': return { ...common, kind: 'ledger', label: 'RECONCILE', title: 'Compare S1 with replayed ledger', description: '逐字段比较交易 ID、方向、利差、毛收益、成本与净 P&L。', detailLabel: 'Expected → Replayed', payload: event };
       case 'ledger_reconciliation_completed': return { ...common, kind: 'result', label: 'LEDGER PASS', title: 'Paper ledger reconciled', description: `${event.event_count} 个持久化事件重建出与 S1 相同的交易。`, detailLabel: '对账结果', payload: event };
       case 'ledger_mismatch_detected': return { ...common, kind: 'error', label: 'LEDGER MISMATCH', title: 'Replay differs from S1', description: `${event.differences?.length || 0} 个字段不一致；E1 被阻断，不继续伪造通过。`, detailLabel: 'Expected vs replayed diff', payload: event };
