@@ -36,6 +36,19 @@ class PaperExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(ExecutionError, "another quantity"):
             tracker.record_fill("F1", 6)
 
+    def test_replay_rejects_tampered_hash_and_schema(self):
+        tracker = PaperExecutionTracker("ORDER-4", 10)
+        tracker.accept()
+        events = tracker.events()
+        events[0]["payload"]["requested_quantity"] = 11
+        with self.assertRaisesRegex(ExecutionError, "hash"):
+            PaperExecutionTracker.from_events(events)
+
+        events = tracker.events()
+        events[0]["schema_version"] = "rate.execution.old"
+        with self.assertRaisesRegex(ExecutionError, "schema_version"):
+            PaperExecutionTracker.from_events(events)
+
     def test_demo_contract(self):
         run = partial_fill_cancel_race_demo()
         self.assertEqual(run["execution"]["filled_quantity"], 50)
