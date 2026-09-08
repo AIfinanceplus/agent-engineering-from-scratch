@@ -14,7 +14,10 @@ class PartialFillConsoleContractTests(unittest.TestCase):
         self.assertIn("/api/rates/execution-race", client)
         self.assertIn("/api/rates/execution-race", server)
         self.assertIn("partial_fill_cancel_race", server)
+        self.assertIn('row["passed"] = True', server)
         self.assertIn("fill_deduplicated", client + server)
+        self.assertIn("FILLED ", client)
+        self.assertIn("CANCELED ", client)
 
 
 if __name__ == "__main__":
