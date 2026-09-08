@@ -127,7 +127,13 @@
     const outcome = state.phase === 'completed' ? 'PASS' : state.phase === 'failed' ? 'FAIL' : state.terminal ? state.phase.toUpperCase() : '—';
     byId('overview-mode').textContent = state.replayed ? 'REPLAY · READ ONLY' : inFlight ? 'LIVE · RECORDING' : state.runId ? 'LIVE · RECORDED' : '等待运行';
     const ledger = state.result?.paper_ledger;
-    byId('overview-change').textContent = state.replayed ? '当前展示的是已持久化历史；页面只重建状态，不重新调用 Tool。' : '新增边界：LG1 从纸面账本重放重建 P&L，再与 S1 对账；不一致时阻断 E1。';
+    const executionResult = state.result?.execution;
+    const raceDemo = executionResult?.artifact_type === 'paper_execution_projection';
+    byId('overview-change').textContent = state.replayed
+      ? '当前展示的是已持久化历史；页面只重建状态，不重新调用 Tool。'
+      : raceDemo
+        ? '新增边界：取消请求不会抹掉取消确认前已经发生的成交；fill_id 重复回报只保留一次副作用。'
+        : '新增边界：LG1 从纸面账本重放重建 P&L，再与 S1 对账；不一致时阻断 E1。';
     byId('frame-count').textContent = frameCount;
     byId('attempt-count').textContent = attempts;
     byId('side-effect-count').textContent = effectCount;
@@ -145,6 +151,12 @@
       byId('ledger-status').dataset.state = mismatch ? 'error' : ledger?.passed ? 'pass' : '';
       const diff = mismatch?.differences || ledger?.differences || [];
       byId('ledger-diff').textContent = diff.length ? diff.map(item => `${item.field}: ${item.expected} → ${item.replayed}`).join(' · ') : 'Expected = Replayed · 无差异';
+    }
+    if (raceDemo && byId('ledger-status')) {
+      const stateLabel = executionResult.state === 'CANCELED' ? 'RACE RESOLVED' : executionResult.state;
+      byId('ledger-status').textContent = stateLabel + ' · FILLED ' + executionResult.filled_quantity + ' / CANCELED ' + executionResult.canceled_quantity;
+      byId('ledger-status').dataset.state = 'pass';
+      byId('ledger-diff').textContent = 'requested ' + executionResult.requested_quantity + ' · remaining ' + executionResult.remaining_quantity + ' · events ' + executionResult.event_count;
     }
   }
   function update() {
