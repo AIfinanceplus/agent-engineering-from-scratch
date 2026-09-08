@@ -461,3 +461,24 @@ test('paper ledger graph shows write, rebuild, reconcile and mismatch blocking E
   assert.equal(state.nodes.LG1, 'failed');
   assert.equal(describe({ event: 'ledger_mismatch_detected', differences: [{ field: 'net_pnl_usd' }] }).label, 'LEDGER MISMATCH');
 });
+
+test('partial fill cancel race completes LG1 and preserves execution result', () => {
+  const state = createState('parallel');
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: 'race-run', type, ...payload });
+  applyMessage(state, message('start', { execution_mode: 'parallel' }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', {
+    event: { event, task_id, run_id: 'race-run', sequence: state.events.length + 1, timestamp: '2026-09-01T01:02:03.000Z', ...extras },
+  }));
+  emit('outbox_enqueued', 'O1');
+  emit('ledger_event_appended', 'LG1', { execution_event: 'fill_recorded', payload: { fill_id: 'F1', quantity: 30 } });
+  emit('ledger_event_appending', 'LG1', { execution_event: 'cancel_requested' });
+  emit('ledger_event_appended', 'LG1', { execution_event: 'fill_recorded', payload: { fill_id: 'F2', quantity: 20 } });
+  emit('outbox_effect_deduplicated', 'O1', { effect_count: 1, execution_event: 'fill_deduplicated' });
+  emit('ledger_reconciliation_completed', 'LG1', { passed: true, execution_event: 'cancel_confirmed' });
+  emit('run_completed', 'R1');
+  const execution = { artifact_type: 'paper_execution_projection', state: 'CANCELED', filled_quantity: 50, canceled_quantity: 50, remaining_quantity: 0, requested_quantity: 100, event_count: 6 };
+  applyMessage(state, message('result', { result: { run_id: state.runId, trace: state.events, execution, eval: { passed: true } } }));
+  assert.equal(state.nodes.LG1, 'completed');
+  assert.equal(state.phase, 'completed');
+  assert.equal(state.result.execution.filled_quantity, 50);
+});
