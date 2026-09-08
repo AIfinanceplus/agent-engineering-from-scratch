@@ -425,6 +425,9 @@ class RateStrategyHandler(R12VisualizerHandler):
             self.wfile.write((json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
             self.wfile.flush()
 
+        send("start", strategy="r12_paper_fill_accounting", execution_mode="parallel",
+             cancel_supported=False, budget_ms=120000, lesson="paper_fill_accounting")
+
         def emit_ledger(trade, paper_event_type, *, mapped="ledger_event_appended", extra=None):
             row = {
                 "sequence": len(trace) + 1,
