@@ -520,3 +520,29 @@ test('paper fill accounting keeps quote separate from fills and reports realized
   assert.equal(state.result.paper_trade.pnl.realized_pnl, 0.4);
   assert.equal(describe({ event: 'ledger_event_appended', event_type: 'paper_fill_recorded' }).label, 'LEDGER WRITE');
 });
+
+test('paper portfolio risk blocks projected exposure before a ledger write', () => {
+  const state = createState('parallel');
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: 'paper-portfolio-run', type, ...payload });
+  applyMessage(state, message('start', { execution_mode: 'parallel' }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', {
+    event: { event, task_id, run_id: 'paper-portfolio-run', sequence: state.events.length + 1, timestamp: '2026-09-01T01:02:03.000Z', ...extras },
+  }));
+  emit('ledger_event_appended', 'LG1', { event_type: 'paper_fill_recorded', event_count: 2, status: 'PARTIALLY_FILLED_LEG_RISK' });
+  emit('portfolio_snapshot_rebuilt', 'LG1', { risk_status: 'WITHIN_LIMITS', summary: { unsettled_trade_count: 1, total_leg_risk_quantity: 4 } });
+  emit('portfolio_fill_blocked', 'LG1', { effect_count: 0, violations: [{ limit: 'max_total_leg_risk_quantity', value: 5, maximum: 4 }] });
+  emit('portfolio_fill_preflight', 'LG1', { allowed: true, effect_count: 0 });
+  emit('ledger_event_appended', 'LG1', { event_type: 'paper_fill_recorded', event_count: 2, status: 'PARTIALLY_FILLED_LEG_RISK' });
+  emit('ledger_reconciliation_completed', 'LG1', { passed: true, event_count: 5 });
+  emit('run_completed', 'R1');
+  const paperPortfolio = {
+    risk_status: 'WITHIN_LIMITS',
+    summary: { unsettled_trade_count: 2, total_leg_risk_quantity: 1, realized_pnl: 0, unsettled_acquisition_cost: 2.25 },
+    violations: [],
+  };
+  applyMessage(state, message('result', { result: { run_id: state.runId, trace: state.events, paper_portfolio: paperPortfolio, eval: { passed: true } } }));
+  assert.equal(state.nodes.LG1, 'completed');
+  assert.equal(state.result.paper_portfolio.summary.total_leg_risk_quantity, 1);
+  assert.equal(describe({ event: 'portfolio_fill_blocked', effect_count: 0, violations: [{ limit: 'max_total_leg_risk_quantity', value: 5, maximum: 4 }] }).label, 'LIMIT BLOCKED');
+  assert.equal(describe({ event: 'portfolio_fill_preflight' }).label, 'PREFLIGHT PASS');
+});
