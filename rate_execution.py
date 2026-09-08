@@ -48,6 +48,39 @@ class PaperOrder:
         }
 
 
+def _validate_event_stream(events: list[dict[str, Any]]) -> None:
+    """Validate durability metadata before applying any state transition."""
+    if not isinstance(events, list) or not events:
+        raise ExecutionError("event stream is empty")
+    previous_hash = None
+    order_id = None
+    for expected_sequence, event in enumerate(events, 1):
+        if not isinstance(event, dict):
+            raise ExecutionError("execution event must be an object")
+        if event.get("schema_version") != SCHEMA_VERSION:
+            raise ExecutionError("unsupported execution schema_version")
+        if event.get("sequence") != expected_sequence or event.get("previous_hash") != previous_hash:
+            raise ExecutionError("execution sequence or hash chain is invalid")
+        if not isinstance(event.get("order_id"), str) or not event["order_id"]:
+            raise ExecutionError("execution event order_id is required")
+        if order_id is None:
+            order_id = event["order_id"]
+        elif event["order_id"] != order_id:
+            raise ExecutionError("execution stream mixes order IDs")
+        try:
+            material = {key: event[key] for key in (
+                "schema_version", "sequence", "event", "order_id", "payload", "previous_hash"
+            )}
+        except KeyError as exc:
+            raise ExecutionError(f"execution event is missing {exc.args[0]}") from exc
+        expected_hash = hashlib.sha256(
+            json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if event.get("event_hash") != expected_hash:
+            raise ExecutionError("execution event hash is invalid")
+        previous_hash = event["event_hash"]
+
+
 class PaperExecutionTracker:
     """Append-only, replayable state machine for one paper order."""
 
@@ -64,7 +97,8 @@ class PaperExecutionTracker:
 
     @classmethod
     def from_events(cls, events: list[dict[str, Any]], *, path: str | Path | None = None) -> "PaperExecutionTracker":
-        if not events or events[0].get("event") != "order_accepted":
+        _validate_event_stream(events)
+        if events[0].get("event") != "order_accepted":
             raise ExecutionError("event stream must start with order_accepted")
         first = events[0]
         tracker = cls(first["order_id"], (first.get("payload") or {}).get("requested_quantity"), path=path)
@@ -110,7 +144,12 @@ class PaperExecutionTracker:
             if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity <= 0:
                 raise ExecutionError("fill quantity must be a positive integer")
             if fill_id in self.order.seen_fill_ids:
-                return
+                prior = next((event for event in self._events
+                              if event["event"] == "fill_recorded"
+                              and event["payload"].get("fill_id") == fill_id), None)
+                if prior and prior["payload"].get("quantity") != quantity:
+                    raise ExecutionError("fill_id is already bound to another quantity")
+                raise ExecutionError("duplicate fill_recorded must be represented as fill_deduplicated")
             if quantity > self.order.remaining_quantity:
                 raise ExecutionError("fill quantity exceeds remaining order quantity")
             self.order.seen_fill_ids.add(fill_id)
@@ -178,16 +217,10 @@ def replay_execution(path: str | Path) -> dict[str, Any]:
     path = Path(path)
     if not path.exists():
         raise ExecutionError("execution event log not found")
-    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    previous_hash = None
-    for expected_sequence, event in enumerate(events, 1):
-        if event.get("sequence") != expected_sequence or event.get("previous_hash") != previous_hash:
-            raise ExecutionError("execution sequence or hash chain is invalid")
-        material = {key: event[key] for key in ("schema_version", "sequence", "event", "order_id", "payload", "previous_hash")}
-        expected_hash = hashlib.sha256(json.dumps(material, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        if event.get("event_hash") != expected_hash:
-            raise ExecutionError("execution event hash is invalid")
-        previous_hash = event["event_hash"]
+    try:
+        events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except json.JSONDecodeError as exc:
+        raise ExecutionError("execution event log contains invalid JSON") from exc
     return PaperExecutionTracker.from_events(events, path=path).snapshot()
 
 
