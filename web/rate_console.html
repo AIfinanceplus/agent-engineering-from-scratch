@@ -11,10 +11,11 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Paper Ledger Reconciliation <span>/</span> 2s10s 教学策略 · 仅模拟</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Paper Ledger Reconciliation <span>/</span> 2s10s 教学策略 · 仅模拟 · 部分成交实验</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
         <optgroup label="本课：Paper Ledger Reconciliation"><option value="live">正常运行 · 写入、重放并对账</option><option value="ledger_mismatch">故障演示 · 篡改账本后阻断 E1</option></optgroup>
+        <optgroup label="本课：部分成交与取消竞态"><option value="execution_race">确认丢失 · 部分成交、取消竞态与去重</option></optgroup>
         <optgroup label="上一课：Replayable Event Stream"><option value="outbox_retry">先完成一次 Outbox Run，再重放事件</option><option value="outbox_fenced">先完成一次 Fencing Run，再重放事件</option></optgroup>
         <optgroup label="上一课：Lease &amp; Fencing"><option value="lease_failover">Runtime A 失联 · Runtime B 接管</option><option value="lease_renewal">Runtime A 续租 · 保持执行权</option></optgroup>
         <optgroup label="上一课：Durable Approval"><option value="approval_durable_restart">批准后重启 · 从磁盘恢复并继续</option><option value="approval_durable_stale">参数已变化 · 旧批准失效</option></optgroup>
