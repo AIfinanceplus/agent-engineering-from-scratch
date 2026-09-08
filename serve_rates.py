@@ -453,28 +453,28 @@ class RateStrategyHandler(R12VisualizerHandler):
             emit_ledger(trade, "paper_intent_created")
             trade = ledger.record_fill(
                 trade["paper_trade_id"], leg_id=first_leg, quantity=4, price=0.45,
-                fee=0.1, idempotency_key="fill-first-four",
+                fee=0.04, idempotency_key="fill-first-four",
             )
             emit_ledger(trade, "paper_fill_recorded")
             retried = ledger.record_fill(
                 trade["paper_trade_id"], leg_id=first_leg, quantity=4, price=0.45,
-                fee=0.1, idempotency_key="fill-first-four",
+                fee=0.04, idempotency_key="fill-first-four",
             )
             emit_ledger(retried, "paper_fill_recorded", mapped="outbox_effect_deduplicated",
                         extra={"retry": True, "same_idempotency_key": True})
             trade = ledger.record_fill(
                 trade["paper_trade_id"], leg_id=second_leg, quantity=4, price=0.49,
-                fee=0.1, idempotency_key="fill-second-four",
+                fee=0.04, idempotency_key="fill-second-four",
             )
             emit_ledger(trade, "paper_fill_recorded")
             trade = ledger.record_fill(
                 trade["paper_trade_id"], leg_id=first_leg, quantity=6, price=0.45,
-                fee=0.1, idempotency_key="fill-first-six",
+                fee=0.06, idempotency_key="fill-first-six",
             )
             emit_ledger(trade, "paper_fill_recorded")
             trade = ledger.record_fill(
                 trade["paper_trade_id"], leg_id=second_leg, quantity=6, price=0.49,
-                fee=0.1, idempotency_key="fill-second-six",
+                fee=0.06, idempotency_key="fill-second-six",
             )
             emit_ledger(trade, "paper_fill_recorded")
             trade = ledger.mark_to_market(
