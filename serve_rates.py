@@ -330,6 +330,8 @@ class RateStrategyHandler(R12VisualizerHandler):
             }
             if source_event in {"fill_recorded", "fill_deduplicated"}:
                 row["effect_count"] = 1
+            if source_event == "cancel_confirmed":
+                row["passed"] = True
             trace.append(row)
             send("event", event=row)
 
