@@ -19,6 +19,11 @@ from rate_approval import ApprovalRegistry
 from rate_event_log import EventLogError, RateEventLog
 from rate_execution import partial_fill_cancel_race_demo
 from r12_paper import JsonlR12PaperLedgerStore, R12PaperLedger, evaluate_r12_paper_trade
+from r12_portfolio import (
+    R12PaperPortfolio,
+    R12PaperPortfolioLimits,
+    evaluate_r12_paper_portfolio,
+)
 from serve_r12 import R12VisualizerHandler
 
 
@@ -30,7 +35,7 @@ EVENT_LOG = RateEventLog(os.environ.get("RATE_EVENT_DIR", os.path.join(tempfile.
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V18-PAPER-LEDGER"
+    version_label = "RATE-CONSOLE-V19-PAPER-PORTFOLIO"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -44,7 +49,7 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/execution-race", "/api/rates/paper-fill", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/execution-race", "/api/rates/paper-fill", "/api/rates/paper-portfolio", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
@@ -73,6 +78,8 @@ class RateStrategyHandler(R12VisualizerHandler):
             return self._stream_execution_race()
         if self.path == "/api/rates/paper-fill":
             return self._stream_paper_fill()
+        if self.path == "/api/rates/paper-portfolio":
+            return self._stream_paper_portfolio()
         if self.path == "/api/rates/replay":
             return self._replay_run(request_data)
         if self.path != "/api/rates/run-once":
@@ -539,6 +546,178 @@ class RateStrategyHandler(R12VisualizerHandler):
                 },
             }
             send("result", result=result)
+
+    def _stream_paper_portfolio(self):
+        """Teach aggregate paper exposure and an atomic fill guard."""
+        run_id = f"RATE-PAPER-PORTFOLIO-{uuid4().hex[:16]}"
+        opportunity_id = "OPP-PAPER-PORTFOLIO-LESSON"
+        first_leg = "kalshi:YES"
+        second_leg = "polymarket:NO"
+        quote = {
+            "artifact_type": "r12_execution_quality_scan",
+            "identity_id": "IDENTITY-PAPER-PORTFOLIO-LESSON",
+            "opportunities": [{
+                "artifact_type": "r12_strategy_opportunity",
+                "opportunity_id": opportunity_id,
+                "eligible_for_paper_signal": True,
+                "market_view": {"execution_quote": {
+                    "target_contracts": 10,
+                    "full_fill_at_target": True,
+                    "eligible_for_paper_signal": True,
+                    "net_edge_total": 0.4,
+                    "legs": [
+                        {"leg_id": first_leg, "provider": "kalshi", "outcome": "YES", "full_fill": True,
+                         "filled_quantity": 10, "vwap": 0.45, "notional": 4.5, "fee": 0.1},
+                        {"leg_id": second_leg, "provider": "polymarket", "outcome": "NO", "full_fill": True,
+                         "filled_quantity": 10, "vwap": 0.49, "notional": 4.9, "fee": 0.1},
+                    ],
+                }},
+            }],
+        }
+        trace = []
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        self.close_connection = True
+
+        def send(message_type, **payload):
+            message = {"protocol": "rate-ndjson-v1", "type": message_type, "run_id": run_id, **payload}
+            EVENT_LOG.append(message)
+            self.wfile.write((json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+            self.wfile.flush()
+
+        def emit(event_name, *, task_id="LG1", **payload):
+            row = {
+                "sequence": len(trace) + 1,
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": event_name,
+                "task_id": task_id,
+                **payload,
+            }
+            trace.append(row)
+            send("event", event=row)
+
+        send("start", strategy="r12_paper_portfolio_risk", execution_mode="parallel",
+             cancel_supported=False, budget_ms=120000, lesson="paper_portfolio_risk")
+        with tempfile.TemporaryDirectory(prefix="rate-paper-portfolio-lesson-") as directory:
+            ledger = R12PaperLedger(JsonlR12PaperLedgerStore(directory))
+            limits = R12PaperPortfolioLimits(
+                max_unsettled_trades=3,
+                max_unsettled_acquisition_cost=20,
+                max_total_leg_risk_quantity=4,
+                max_provider_filled_notional=20,
+                max_identity_acquisition_cost=20,
+            )
+            portfolio = R12PaperPortfolio(ledger, limits)
+
+            def agent_run(source_run_id):
+                return {
+                    "artifact_type": "r12_strategy_agent_run",
+                    "run_id": source_run_id,
+                    "status": "COMPLETED_PAPER_QUOTE",
+                    "results": {"E1": quote},
+                }
+
+            def emit_ledger(trade, paper_event_type):
+                emit(
+                    "ledger_event_appended",
+                    event_type=paper_event_type,
+                    paper_event_type=paper_event_type,
+                    paper_trade_id=trade["paper_trade_id"],
+                    event_count=trade["event_count"],
+                    status=trade["status"],
+                    risk=trade["risk"],
+                    pnl=trade["pnl"],
+                )
+
+            def emit_snapshot(stage):
+                snapshot = portfolio.status()
+                emit(
+                    "portfolio_snapshot_rebuilt",
+                    stage=stage,
+                    risk_status=snapshot["risk_status"],
+                    summary=snapshot["summary"],
+                    limits=snapshot["limits"],
+                    violations=snapshot["violations"],
+                    source_of_truth=snapshot["guardrails"]["source_of_truth"],
+                )
+                return snapshot
+
+            trade_a = portfolio.create_from_agent_run(agent_run("R12A-PORTFOLIO-A"), opportunity_id, "portfolio-a")
+            emit_ledger(trade_a, "paper_intent_created")
+            trade_a = portfolio.record_fill(
+                trade_a["paper_trade_id"], leg_id=first_leg, quantity=4, price=0.45, fee=0,
+                idempotency_key="portfolio-a-first-leg-four",
+            )
+            emit_ledger(trade_a, "paper_fill_recorded")
+            emit_snapshot("A occupies all allowed leg-risk capacity")
+
+            trade_b = portfolio.create_from_agent_run(agent_run("R12A-PORTFOLIO-B"), opportunity_id, "portfolio-b")
+            emit_ledger(trade_b, "paper_intent_created")
+            blocked = portfolio.preflight_fill(
+                trade_b["paper_trade_id"], leg_id=first_leg, quantity=1, price=0.45, fee=0,
+            )
+            emit(
+                "portfolio_fill_blocked",
+                paper_trade_id=trade_b["paper_trade_id"],
+                allowed=blocked["allowed"],
+                effect_count=0,
+                violations=blocked["violations"],
+                projected_summary=blocked["projected_portfolio"]["summary"],
+                guardrails=blocked["guardrails"],
+            )
+
+            trade_a = portfolio.record_fill(
+                trade_a["paper_trade_id"], leg_id=second_leg, quantity=4, price=0.49, fee=0,
+                idempotency_key="portfolio-a-hedge-four",
+            )
+            emit_ledger(trade_a, "paper_fill_recorded")
+            emit_snapshot("A is matched; capacity is released")
+
+            allowed = portfolio.preflight_fill(
+                trade_b["paper_trade_id"], leg_id=first_leg, quantity=1, price=0.45, fee=0,
+            )
+            emit(
+                "portfolio_fill_preflight",
+                paper_trade_id=trade_b["paper_trade_id"],
+                allowed=allowed["allowed"],
+                effect_count=0,
+                projected_summary=allowed["projected_portfolio"]["summary"],
+                guardrails=allowed["guardrails"],
+            )
+            trade_b = portfolio.record_fill(
+                trade_b["paper_trade_id"], leg_id=first_leg, quantity=1, price=0.45, fee=0,
+                idempotency_key="portfolio-b-first-leg-one",
+            )
+            emit_ledger(trade_b, "paper_fill_recorded")
+            snapshot = emit_snapshot("B admitted after projected limits pass")
+            evaluation = evaluate_r12_paper_portfolio(snapshot)
+            emit("run_completed", task_id="R1", lesson="paper_portfolio_risk", status="COMPLETED")
+            send("result", result={
+                "artifact_type": "r12_paper_portfolio_risk_run",
+                "run_id": run_id,
+                "status": "COMPLETED_PAPER_PORTFOLIO_RISK",
+                "trace": trace,
+                "paper_portfolio": snapshot,
+                "eval": evaluation,
+                "guardrails": {
+                    "paper_only": True,
+                    "exchange_credentials_present": False,
+                    "automatic_execution": False,
+                    "preflight_is_not_a_fill": True,
+                    "blocked_fill_mutated_ledger": False,
+                },
+                "lesson": {"topic": "paper_portfolio_risk", "graph": {
+                    "nodes": ["O1", "LG1", "E1"], "edges": [["O1", "LG1"], ["LG1", "E1"]],
+                }},
+            })
 
     def _replay_run(self, request_data):
         """Replay persisted envelopes without executing any Tool again."""
