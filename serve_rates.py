@@ -27,7 +27,7 @@ EVENT_LOG = RateEventLog(os.environ.get("RATE_EVENT_DIR", os.path.join(tempfile.
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V17-STREAM-EXPLAINER"
+    version_label = "RATE-CONSOLE-V18-PAPER-LEDGER"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -315,10 +315,10 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V17-STREAM-EXPLAINER")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V18-PAPER-LEDGER")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
-    print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> Eval")
+    print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> LG1 ledger reconcile -> E1")
     print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
     print("New lesson: Stream Explainer · persist → deliver → observe → replay · no Tool re-execution")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")

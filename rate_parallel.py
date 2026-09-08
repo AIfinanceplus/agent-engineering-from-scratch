@@ -39,6 +39,7 @@ from rate_capabilities import (CapabilityAuthority, CapabilityRejected, TOOL_SCO
 from rate_approval import ApprovalUnavailable
 from rate_leases import LeaseCoordinator, LeaseFenced, LeaseHeld
 from rate_outbox import IdempotentEffectSink, OutboxCrash, OutboxFenced, OutboxStore
+from rate_paper_ledger import PaperLedger
 from rate_strategy import evaluate_rate_simulation
 from rate_tooling import register_rate_tools
 from tools import TOOL_REGISTRY, Tool, resolve_tool
@@ -54,7 +55,7 @@ SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadlin
              "injection_mixed", "injection_blocked", "injection_clean",
              "capability_valid", "capability_wrong_tool", "capability_expired",
              "approval_interactive", "approval_durable_restart", "approval_durable_stale",
-             "lease_failover", "lease_renewal", "outbox_retry", "outbox_fenced"}
+             "lease_failover", "lease_renewal", "outbox_retry", "outbox_fenced", "ledger_mismatch"}
 BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
@@ -71,10 +72,10 @@ DURABLE_APPROVAL_SCENARIOS = {"approval_durable_restart", "approval_durable_stal
 AUTHORIZATION_SCENARIOS = CAPABILITY_SCENARIOS | APPROVAL_SCENARIOS
 LEASE_SCENARIOS = {"lease_failover", "lease_renewal"}
 OUTBOX_SCENARIOS = {"outbox_retry", "outbox_fenced"}
-GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["L1"], ["H1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["O1"], ["E1"]]
+GRAPH_ROWS = [["G1"], ["RG1"], ["CG1"], ["TG1"], ["CT1"], ["MR1"], ["M1"], ["P1"], ["R1"], ["L1"], ["H1"], ["AZ1"], ["C1"], ["D1"], ["V1"], ["Q1"], ["A2", "A10"], ["J1"], ["S1"], ["O1"], ["LG1"], ["E1"]]
 GRAPH_EDGES = [["G1", "RG1"], ["RG1", "CG1"], ["CG1", "TG1"], ["TG1", "CT1"], ["CT1", "MR1"], ["MR1", "M1"], ["M1", "P1"], ["P1", "R1"], ["R1", "L1"], ["L1", "H1"], ["H1", "AZ1"], ["AZ1", "C1"], ["C1", "D1"],
                ["D1", "V1"], ["V1", "Q1"], ["Q1", "A2"], ["Q1", "A10"], ["A2", "J1"],
-               ["A10", "J1"], ["J1", "S1"], ["S1", "O1"], ["O1", "E1"]]
+               ["A10", "J1"], ["J1", "S1"], ["S1", "O1"], ["O1", "LG1"], ["LG1", "E1"]]
 
 
 def prepare_rate_series(history: dict, series_id: str, batch_id: str) -> dict:
@@ -206,6 +207,7 @@ class RateParallelAgent:
         lease_token = None
         outbox_store = None
         effect_sink = None
+        paper_ledger = None
 
         def emit(event, **payload):
             row = deepcopy({"sequence": len(trace) + 1, "run_id": run_id,
@@ -234,7 +236,7 @@ class RateParallelAgent:
             if info["reason"] == "deadline":
                 emit("deadline_exceeded", task_id="R1", **info)
             emit("cancellation_requested", task_id="R1", active_tasks=sorted(inflight - completed), **info)
-            for task_id in ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "E1"]:
+            for task_id in ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "LG1", "E1"]:
                 if task_id not in completed and task_id not in inflight:
                     emit("task_blocked", task_id=task_id, reason="run stop requested")
 
@@ -1156,6 +1158,33 @@ class RateParallelAgent:
                 emit("outbox_bypassed", task_id="O1",
                      reason="该历史场景不演示 Outbox、重试与幂等副作用。")
                 completed.add("O1")
+            current_task = "LG1"
+            ledger_directory = tempfile.mkdtemp(prefix="rate-paper-ledger-")
+            paper_ledger = PaperLedger(f"{ledger_directory}/events.jsonl")
+            trade = observations["S1"]["completed_trade"]
+            emit("ledger_replay_started", task_id="LG1", paper_trade_id=trade["paper_trade_id"], source_task="S1",
+                 source_of_truth="append_only_jsonl", automatic_execution=False)
+            def ledger_append_published(row):
+                emit("ledger_event_appended", task_id="LG1", event_type=row["event_type"],
+                     idempotency_key=row["idempotency_key"], ledger_sequence=row["sequence"],
+                     event_hash=row["event_hash"], durable=True)
+            paper_reconciliation = paper_ledger.reconcile(
+                observations["S1"], tamper=demo_scenario == "ledger_mismatch", on_append=ledger_append_published)
+            replayed = paper_reconciliation["replayed"]
+            emit("ledger_snapshot_rebuilt", task_id="LG1", event_count=replayed["event_count"],
+                 last_event_hash=replayed["last_event_hash"], status=replayed["status"])
+            emit("ledger_reconciliation_started", task_id="LG1", expected=paper_reconciliation["expected"],
+                 replayed={key: replayed.get(key) for key in paper_reconciliation["expected"]})
+            if paper_reconciliation["passed"]:
+                emit("ledger_reconciliation_completed", task_id="LG1", passed=True, status="RECONCILED",
+                     differences=[], event_count=replayed["event_count"])
+                completed.add("LG1")
+            else:
+                emit("ledger_mismatch_detected", task_id="LG1", passed=False, status="MISMATCH",
+                     differences=paper_reconciliation["differences"], expected=paper_reconciliation["expected"],
+                     replayed={key: replayed.get(key) for key in paper_reconciliation["expected"]})
+                raise ParallelRunError("paper ledger replay does not reconcile with S1 simulation", "LG1", trace,
+                                       {"LG1": "ledger mismatch"}, code="PAPER_LEDGER_MISMATCH")
             current_task = "E1"
             control.check()
             inflight.add("E1")
@@ -1192,14 +1221,39 @@ class RateParallelAgent:
             control.finish("failed")
             emit("task_failed", task_id=current_task, error_type=type(exc).__name__, error_message=str(exc))
             raise ParallelRunError(str(exc), current_task, trace) from exc
+        if demo_scenario in {"live", "ledger_mismatch"}:
+            lesson_topic = "paper_ledger_reconciliation"
+        elif demo_scenario in OUTBOX_SCENARIOS:
+            lesson_topic = "outbox_idempotency"
+        elif demo_scenario in LEASE_SCENARIOS:
+            lesson_topic = "lease_fencing"
+        elif demo_scenario in APPROVAL_SCENARIOS:
+            lesson_topic = "human_approval"
+        elif demo_scenario in CAPABILITY_SCENARIOS:
+            lesson_topic = "capability_security"
+        elif demo_scenario in INJECTION_SCENARIOS:
+            lesson_topic = "prompt_injection_defense"
+        elif demo_scenario in RAG_SCENARIOS:
+            lesson_topic = "rag_retrieval"
+        elif demo_scenario in CONTEXT_SCENARIOS:
+            lesson_topic = "context_engineering"
+        elif demo_scenario in ROUTING_SCENARIOS:
+            lesson_topic = "model_routing"
+        elif demo_scenario in MODEL_SCENARIOS:
+            lesson_topic = "model_planner_authority"
+        elif demo_scenario in REPLAN_SCENARIOS:
+            lesson_topic = "bounded_replanning"
+        else:
+            lesson_topic = "resilience_guards"
         return {
             "artifact_type": "rate_strategy_agent_run", "run_id": run_id,
             "status": "COMPLETED_ONE_PAPER_SIMULATION", "trace": trace,
             "plan": {"artifact_type": "rate_strategy_plan", "status": "completed",
                      "tasks": [{**task, "status": "completed"} for task in plan]},
             "data": observations["J1"], "simulation": observations["S1"], "eval": evaluation,
+            "paper_ledger": paper_reconciliation,
             "observations": observations,
-            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "O1", "E1"]},
+            "state": {"phase": "completed", "completed_tasks": ["RG1", "CG1", "TG1", "CT1", "MR1", "M1", "L1", "H1", "AZ1", "C1", "V1", "Q1", *by_id, "O1", "LG1", "E1"]},
             "architecture": {"planner": planner_name,
                              "model": model_adapter.model_name if model_adapter else "none_deterministic_v1",
                              "model_is_real_llm": model_adapter.is_real_llm if model_adapter else False,
@@ -1222,19 +1276,15 @@ class RateParallelAgent:
                                  "fenced_before_sink": True,
                                  "implementation": "durable_json_teaching_store",
                              } if demo_scenario in OUTBOX_SCENARIOS else None,
+                             "paper_ledger": {
+                                 "source_of_truth": "append_only_jsonl_replay",
+                                 "reconciles": ["paper_trade_id", "action", "entry_spread_bps", "exit_spread_bps", "gross_pnl_usd", "cost_usd", "net_pnl_usd"],
+                                 "automatic_execution": False,
+                             },
                              "max_workers": 2, "join_policy": "all_success", "stream_writer": "owner_thread",
                              "observation_gate": "V1",
                              "replanning_guard": revision_guard.snapshot() if revision_guard else None},
-            "lesson": {"topic": "outbox_idempotency" if demo_scenario in OUTBOX_SCENARIOS else
-                       ("lease_fencing" if demo_scenario in LEASE_SCENARIOS else
-                       ("human_approval" if demo_scenario in APPROVAL_SCENARIOS else
-                       ("capability_security" if demo_scenario in CAPABILITY_SCENARIOS else
-                       ("prompt_injection_defense" if demo_scenario in INJECTION_SCENARIOS else
-                       ("rag_retrieval" if demo_scenario in RAG_SCENARIOS else
-                       ("context_engineering" if demo_scenario in CONTEXT_SCENARIOS else
-                       ("model_routing" if demo_scenario in ROUTING_SCENARIOS else
-                       ("model_planner_authority" if demo_scenario in MODEL_SCENARIOS else
-                        ("bounded_replanning" if demo_scenario in REPLAN_SCENARIOS else "resilience_guards"))))))))),
+            "lesson": {"topic": lesson_topic,
                        "demo_scenario": demo_scenario,
                        "teaching_delay": demo_scenario != "live", "graph": {"rows": GRAPH_ROWS, "edges": GRAPH_EDGES}},
             "guardrails": {"paper_only": True, "broker_connection": False, "automatic_execution": False,

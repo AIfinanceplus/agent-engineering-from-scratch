@@ -35,9 +35,10 @@
     { id: 'J1', title: 'Join', description: '两个分支均成功才放行' },
     NODES[4],
     { id: 'O1', title: 'Outbox dispatcher', description: '持久化命令 · 重试 · 幂等 Sink' },
+    { id: 'LG1', title: 'Paper Ledger', description: '事件写入 · 重放 · P&L 对账' },
     NODES[5]
   ];
-  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['O1'], ['E1']];
+  const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['O1'], ['LG1'], ['E1']];
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
@@ -156,6 +157,13 @@
       case 'outbox_effect_deduplicated': state.nodes.O1 = 'deduplicated'; break;
       case 'outbox_acknowledged': state.nodes.O1 = 'writing'; break;
       case 'outbox_completed': state.nodes.O1 = 'completed'; break;
+      case 'ledger_replay_started': state.nodes.LG1 = 'running'; break;
+      case 'ledger_event_appending':
+      case 'ledger_event_appended': state.nodes.LG1 = 'writing'; break;
+      case 'ledger_snapshot_rebuilt': state.nodes.LG1 = 'verifying'; break;
+      case 'ledger_reconciliation_started': state.nodes.LG1 = 'verifying'; break;
+      case 'ledger_reconciliation_completed': state.nodes.LG1 = event.passed ? 'completed' : 'failed'; break;
+      case 'ledger_mismatch_detected': state.nodes.LG1 = 'failed'; break;
       case 'task_started':
       case 'tool_execution_started':
       case 'eval_started':
@@ -369,6 +377,13 @@
       case 'outbox_effect_deduplicated': return { ...common, kind: 'outbox', label: 'DEDUPLICATED', title: `${event.idempotency_key} · effect count ${event.effect_count}`, description: '第二次投递被 Sink 识别为同一个命令；没有产生第二个副作用。', detailLabel: '去重结果', payload: event };
       case 'outbox_acknowledged': return { ...common, kind: 'outbox', label: 'ACK', title: `${event.status} · ${event.attempts} attempts`, description: `Sink effect count = ${event.effect_count}；发送可以重复，效果只保留一份。`, detailLabel: '确认结果', payload: event };
       case 'outbox_completed': return { ...common, kind: 'result', label: 'OUTBOX DONE', title: `effect count ${event.effect_count}`, description: '本课不宣称分布式 exactly-once；保证的是 at-least-once + 幂等目标。', detailLabel: 'Outbox 终态', payload: event };
+      case 'ledger_replay_started': return { ...common, kind: 'ledger', label: 'LEDGER START', title: 'Replay paper ledger', description: 'LG1 不直接相信 S1 内存结果；从追加事件重建纸面交易。', detailLabel: '账本边界', payload: event };
+      case 'ledger_event_appending':
+      case 'ledger_event_appended': return { ...common, kind: 'ledger', label: 'LEDGER WRITE', title: event.event_type, description: '事件先追加并 fsync；写入成功后才向 Live Stream 发布状态。', detailLabel: '写入命令', payload: event };
+      case 'ledger_snapshot_rebuilt': return { ...common, kind: 'ledger', label: 'REBUILD', title: `${event.event_count} events · ${event.status}`, description: '按序重放 JSONL hash chain，生成可复算的账本快照。', detailLabel: '重建快照', payload: event };
+      case 'ledger_reconciliation_started': return { ...common, kind: 'ledger', label: 'RECONCILE', title: 'Compare S1 with replayed ledger', description: '逐字段比较交易 ID、方向、利差、毛收益、成本与净 P&L。', detailLabel: 'Expected → Replayed', payload: event };
+      case 'ledger_reconciliation_completed': return { ...common, kind: 'result', label: 'LEDGER PASS', title: 'Paper ledger reconciled', description: `${event.event_count} 个持久化事件重建出与 S1 相同的交易。`, detailLabel: '对账结果', payload: event };
+      case 'ledger_mismatch_detected': return { ...common, kind: 'error', label: 'LEDGER MISMATCH', title: 'Replay differs from S1', description: `${event.differences?.length || 0} 个字段不一致；E1 被阻断，不继续伪造通过。`, detailLabel: 'Expected vs replayed diff', payload: event };
       case 'task_started': return { ...common, title: 'Node started', description: event.tool_name };
       case 'tool_lookup': return { ...common, label: 'REGISTRY', title: event.tool_name, description: event.found ? 'Tool 已在注册表找到' : 'Tool 未注册' };
       case 'tool_validation': return { ...common, kind: event.passed ? 'node' : 'error', label: 'VALIDATION', title: event.passed ? 'Arguments validated' : 'Arguments rejected', description: event.tool_name, detailLabel: '参数校验结果' };

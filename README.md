@@ -390,7 +390,7 @@ The default page has only two work areas: **Agent Graph** and **Agent Live Strea
    default scenario pauses the live stream at a real H1 human-approval boundary.
    Use the visible Approve/Deny buttons to resolve that same running task.
 2. Follow Goal → RG1 → CG1 → TG1 → CT1 → MR1 → M1 → P1 → Runtime → L1 Lease/Fencing → H1 Human Approval → AZ1 Capability Gate → C1 → D1 → V1 →
-   Q1 → **A2 / A10** → J1 → S1 → O1 Outbox → E1.
+   Q1 → **A2 / A10** → J1 → S1 → O1 Outbox → LG1 Paper Ledger → E1.
    D1 still fetches one bulk dataset. A2 and A10 independently prepare the 2Y
    and 10Y series; J1 checks that both came from the same run and source batch.
    S1 consumes the joined output. Runtime remains active throughout. No LLM is used.
@@ -419,7 +419,25 @@ the browser's “重放最近 Run” button feeds them through the same reducer,
 Tool is called a second time. `RATE_EVENT_DIR` can point at a durable directory;
 the default is a process-independent temporary teaching directory.
 
-### Current lesson: Replayable Event Stream
+### Current lesson: Paper Ledger Reconciliation
+
+This lesson makes the paper ledger the durable source of truth for the simulated
+trade. S1 produces a candidate result, then LG1 appends three paper-only events:
+`paper_intent_created → paper_fill_recorded → paper_trade_closed`. The hash-chained
+JSONL is fsync'd before its result is streamed. LG1 replays those events into a
+fresh projection and compares the trade ID, direction, spread, gross P&L, cost
+and net P&L with S1. A mismatch stops before E1.
+
+| Boundary | What is persisted | What the learner can verify |
+| --- | --- | --- |
+| Paper write | Intent, fill and close events with idempotency keys | The ledger, not in-memory state, is the source of truth |
+| Replay | Ordered events plus previous/event hashes | A fresh projection can rebuild the same trade |
+| Reconciliation | Expected vs Replayed fields | `RECONCILED` continues to E1; `MISMATCH` blocks it |
+
+Choose `故障演示 · 篡改账本后阻断 E1` to see the explicit mismatch path. No
+broker, account or real order API exists in this lesson.
+
+### Previous lesson: Replayable Event Stream
 
 This lesson separates **live delivery** from **durable history**. A stream is not
 just a socket: `start → event* → result/error` is an ordered artifact that can be

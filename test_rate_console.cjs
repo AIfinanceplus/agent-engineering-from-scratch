@@ -444,3 +444,20 @@ test('outbox graph visualizes retry, deduplication and fenced side-effect bounda
   assert.equal(describe({ event: 'outbox_ack_lost', attempt: 1 }).label, 'ACK LOST');
   assert.equal(describe({ event: 'outbox_effect_deduplicated', effect_count: 1 }).label, 'DEDUPLICATED');
 });
+
+test('paper ledger graph shows write, rebuild, reconcile and mismatch blocking E1', () => {
+  const { state, emit } = setup();
+  Object.assign(state, { mode: 'parallel', nodes: Object.fromEntries(PARALLEL_NODES.map(n => [n.id, 'waiting'])) });
+  assert.ok(PARALLEL_NODES.some(node => node.id === 'LG1' && node.title === 'Paper Ledger'));
+  emit('ledger_replay_started', 'LG1', { paper_trade_id: 'RATE-1' });
+  emit('ledger_event_appending', 'LG1', { event_type: 'paper_intent_created' });
+  assert.equal(state.nodes.LG1, 'writing');
+  emit('ledger_snapshot_rebuilt', 'LG1', { event_count: 3, status: 'CLOSED' });
+  emit('ledger_reconciliation_started', 'LG1', { expected: { net_pnl_usd: 100 }, replayed: { net_pnl_usd: 100 } });
+  emit('ledger_reconciliation_completed', 'LG1', { passed: true, event_count: 3 });
+  assert.equal(state.nodes.LG1, 'completed');
+  assert.equal(describe({ event: 'ledger_reconciliation_completed', event_count: 3 }).label, 'LEDGER PASS');
+  emit('ledger_mismatch_detected', 'LG1', { differences: [{ field: 'net_pnl_usd', expected: 100, replayed: 101 }] });
+  assert.equal(state.nodes.LG1, 'failed');
+  assert.equal(describe({ event: 'ledger_mismatch_detected', differences: [{ field: 'net_pnl_usd' }] }).label, 'LEDGER MISMATCH');
+});

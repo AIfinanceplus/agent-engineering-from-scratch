@@ -100,6 +100,11 @@
   }
   function eventImpact(event, view) {
     const name = event.event || '';
+    if (name === 'ledger_mismatch_detected') return { phase: 'RECONCILIATION FAILURE', state: '状态：账本不一致', effect: '下游：E1 被阻断' };
+    if (name === 'ledger_reconciliation_completed') return { phase: 'RECONCILIATION', state: '状态：已对账', effect: `事件：${event.event_count ?? 0} 个` };
+    if (name === 'ledger_event_appending' || name === 'ledger_event_appended') return { phase: 'PERSIST', state: `状态：${event.event_type}`, effect: '副作用：纸面账本 · fsync' };
+    if (name === 'ledger_snapshot_rebuilt' || name === 'ledger_reconciliation_started') return { phase: 'RECONCILIATION', state: '状态：重建比较', effect: '结果：可复算' };
+    if (name === 'ledger_replay_started') return { phase: 'PROCESS', state: '状态：重放中', effect: '边界：不调用外部 Tool' };
     if (name === 'outbox_ack_lost') return { phase: 'FAILURE WINDOW', state: '状态：待恢复', effect: '副作用：可能已发生' };
     if (name === 'outbox_effect_deduplicated') return { phase: 'RECOVERY', state: '状态：已去重', effect: `副作用：${event.effect_count ?? 1} 次` };
     if (name === 'outbox_effect_applied') return { phase: 'SIDE EFFECT', state: '状态：已写入', effect: `副作用：${event.effect_count ?? 1} 次` };
@@ -121,7 +126,8 @@
     const effectCount = effectEvent ? String(effectEvent.effect_count) : '—';
     const outcome = state.phase === 'completed' ? 'PASS' : state.phase === 'failed' ? 'FAIL' : state.terminal ? state.phase.toUpperCase() : '—';
     byId('overview-mode').textContent = state.replayed ? 'REPLAY · READ ONLY' : inFlight ? 'LIVE · RECORDING' : state.runId ? 'LIVE · RECORDED' : '等待运行';
-    byId('overview-change').textContent = state.replayed ? '当前展示的是已持久化历史；页面只重建状态，不重新调用 Tool。' : '新增边界：事件先持久化，再发送；断线后可从同一份历史恢复。';
+    const ledger = state.result?.paper_ledger;
+    byId('overview-change').textContent = state.replayed ? '当前展示的是已持久化历史；页面只重建状态，不重新调用 Tool。' : '新增边界：LG1 从纸面账本重放重建 P&L，再与 S1 对账；不一致时阻断 E1。';
     byId('frame-count').textContent = frameCount;
     byId('attempt-count').textContent = attempts;
     byId('side-effect-count').textContent = effectCount;
@@ -133,6 +139,13 @@
     byId('outcome-title').textContent = state.replayed ? 'Replay completed · same run, no Tool call' : state.phase === 'completed' ? 'Run completed · Eval passed' : state.phase === 'failed' ? 'Run failed · inspect the boundary below' : 'Run in progress';
     const last = state.events.at(-1);
     byId('outcome-detail').textContent = last ? `${last.task_id || 'Runtime'} · ${last.event} · sequence ${last.sequence}` : '等待第一条真实事件';
+    if (byId('ledger-status')) {
+      const mismatch = state.events.find(event => event.event === 'ledger_mismatch_detected');
+      byId('ledger-status').textContent = mismatch ? 'MISMATCH · E1 BLOCKED' : ledger?.status || (state.nodes.LG1 === 'completed' ? 'RECONCILED' : '等待 LG1');
+      byId('ledger-status').dataset.state = mismatch ? 'error' : ledger?.passed ? 'pass' : '';
+      const diff = mismatch?.differences || ledger?.differences || [];
+      byId('ledger-diff').textContent = diff.length ? diff.map(item => `${item.field}: ${item.expected} → ${item.replayed}`).join(' · ') : 'Expected = Replayed · 无差异';
+    }
   }
   function update() {
     for (const [id, button] of nodeElements) {
@@ -188,6 +201,7 @@
       addRow(message.event, describe(message.event));
       if (message.event.event === 'tool_observation' && message.event.task_id === 'D1') showSource(message.event.output);
     } else if (message.type === 'result') {
+      state.result = message.result;
       addRow({ task_id: 'END' }, { kind: state.phase === 'completed' ? 'result' : 'error', label: 'RUN RESULT', title: state.phase === 'completed' ? 'Run completed · Eval passed' : 'Run completed · Eval failed', description: '最终产物包含完整 Plan、Trace、数据、模拟与 Eval。', detailLabel: '完整运行结果 · JSON', payload: message.result });
     } else if (message.type === 'error') showError();
     update();

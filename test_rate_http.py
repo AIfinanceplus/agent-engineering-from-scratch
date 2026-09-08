@@ -161,8 +161,8 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=17", html)
-        self.assertIn("rate_console_core.js?v=17", html)
+        self.assertIn("rate_console.js?v=18", html)
+        self.assertIn("rate_console_core.js?v=18", html)
         self.assertIn("Replayable Event Stream", html)
         self.assertIn("id=\"replay-button\"", html)
         self.assertIn("outbox_retry", html)
@@ -554,6 +554,21 @@ class RateHTTPTests(unittest.TestCase):
         applied = next(event for event in events if event["event"] == "outbox_effect_applied")
         self.assertEqual(blocked["side_effects"], [])
         self.assertLess(rejected["sequence"], applied["sequence"])
+
+    def test_paper_ledger_reconciles_before_eval_and_mismatch_blocks(self):
+        status, _, messages = self.post_stream({"execution_mode": "parallel", "budget_ms": 30000})
+        self.assertEqual(status, 200)
+        events = [message["event"] for message in messages if message["type"] == "event"]
+        names = [event["event"] for event in events]
+        self.assertLess(names.index("ledger_reconciliation_completed"), names.index("eval_started"))
+        self.assertEqual(messages[-1]["result"]["paper_ledger"]["status"], "RECONCILED")
+        status, _, failed = self.post_stream({"execution_mode": "parallel", "demo_scenario": "ledger_mismatch"})
+        self.assertEqual(status, 200)
+        self.assertEqual(failed[-1]["type"], "error")
+        self.assertEqual(failed[-1]["error"]["code"], "PAPER_LEDGER_MISMATCH")
+        failed_events = [message["event"] for message in failed if message["type"] == "event"]
+        self.assertTrue(any(event["event"] == "ledger_mismatch_detected" for event in failed_events))
+        self.assertFalse(any(event["event"] == "eval_started" for event in failed_events))
 
     def test_invalid_config_returns_structured_error(self):
         status, _, payload = self.post({"holding_days": 0})
