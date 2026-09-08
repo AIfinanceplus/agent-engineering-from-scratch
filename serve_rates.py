@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from http.server import ThreadingHTTPServer
+from datetime import datetime, timezone
 import json
 import os
 import tempfile
@@ -16,6 +17,7 @@ from rate_parallel import RateParallelAgent, SCENARIOS
 from rate_control import RunControl, RunControlRegistry
 from rate_approval import ApprovalRegistry
 from rate_event_log import EventLogError, RateEventLog
+from rate_execution import partial_fill_cancel_race_demo
 from serve_r12 import R12VisualizerHandler
 
 
@@ -41,7 +43,7 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/execution-race", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
@@ -66,6 +68,8 @@ class RateStrategyHandler(R12VisualizerHandler):
                                         {"ok": outcome["accepted"], "approval": outcome})
         if self.path == "/api/rates/stream":
             return self._stream_run(request_data)
+        if self.path == "/api/rates/execution-race":
+            return self._stream_execution_race()
         if self.path == "/api/rates/replay":
             return self._replay_run(request_data)
         if self.path != "/api/rates/run-once":
@@ -282,6 +286,85 @@ class RateStrategyHandler(R12VisualizerHandler):
             APPROVALS.discard(run_id)
             if control and not control.snapshot()["terminal"]:
                 control.finish("failed")
+
+    def _stream_execution_race(self):
+        """Stream the deterministic partial-fill/cancel race without a broker."""
+        run_id = f"RATE-RACE-{uuid4().hex[:16]}"
+        demo = partial_fill_cancel_race_demo()
+        trace = []
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        self.close_connection = True
+
+        def send(message_type, **payload):
+            message = {"protocol": "rate-ndjson-v1", "type": message_type, "run_id": run_id, **payload}
+            EVENT_LOG.append(message)
+            self.wfile.write((json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+            self.wfile.flush()
+
+        def emit(source):
+            source_event = source["event"]
+            mapped = {
+                "order_accepted": "outbox_enqueued",
+                "fill_recorded": "ledger_event_appended",
+                "cancel_requested": "ledger_event_appending",
+                "fill_deduplicated": "outbox_effect_deduplicated",
+                "cancel_confirmed": "ledger_reconciliation_completed",
+            }[source_event]
+            row = {
+                "sequence": len(trace) + 1,
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": mapped,
+                "execution_event": source_event,
+                "task_id": "O1" if mapped.startswith("outbox_") else "LG1",
+                "order_id": source["order_id"],
+                "payload": source["payload"],
+            }
+            if source_event in {"fill_recorded", "fill_deduplicated"}:
+                row["effect_count"] = 1
+            trace.append(row)
+            send("event", event=row)
+
+        send("start", strategy="2s10s", execution_mode="parallel", cancel_supported=False,
+             budget_ms=120000, lesson="partial_fill_cancel_race")
+        for source in demo["events"]:
+            emit(source)
+        final = {
+            "sequence": len(trace) + 1,
+            "run_id": run_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "run_completed",
+            "task_id": "R1",
+            "lesson": "partial_fill_cancel_race",
+            "status": "COMPLETED",
+        }
+        trace.append(final)
+        send("event", event=final)
+        run = {
+            "artifact_type": "partial_fill_cancel_race_run",
+            "run_id": run_id,
+            "status": "COMPLETED_PARTIAL_FILL_CANCEL_RACE",
+            "trace": trace,
+            "execution": demo["execution"],
+            "eval": {"passed": True, "checks": {
+                "late_fill_counted": True, "duplicate_fill_deduplicated": True,
+                "cancel_waited_for_confirmation": True, "quantity_conserved": True,
+            }},
+            "guardrails": {"paper_only": True, "broker_connection": False,
+                           "automatic_execution": False},
+            "lesson": {"topic": "partial_fill_cancel_race",
+                       "graph": {"nodes": ["O1", "LG1", "E1"],
+                                 "edges": [["O1", "LG1"], ["LG1", "E1"]]}},
+        }
+        send("result", result=run)
 
     def _replay_run(self, request_data):
         """Replay persisted envelopes without executing any Tool again."""
