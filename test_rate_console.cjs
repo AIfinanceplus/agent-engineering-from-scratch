@@ -482,3 +482,41 @@ test('partial fill cancel race completes LG1 and preserves execution result', ()
   assert.equal(state.phase, 'completed');
   assert.equal(state.result.execution.filled_quantity, 50);
 });
+
+test('paper fill accounting keeps quote separate from fills and reports realized pnl', () => {
+  const state = createState('parallel');
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: 'paper-fill-run', type, ...payload });
+  applyMessage(state, message('start', { execution_mode: 'parallel' }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', {
+    event: { event, task_id, run_id: 'paper-fill-run', sequence: state.events.length + 1, timestamp: '2026-09-01T01:02:03.000Z', ...extras },
+  }));
+  emit('ledger_event_appended', 'LG1', { event_type: 'paper_intent_created', event_count: 1, status: 'PENDING_PAPER_FILL' });
+  emit('ledger_event_appended', 'LG1', { event_type: 'paper_fill_recorded', event_count: 2, status: 'PARTIALLY_FILLED_LEG_RISK' });
+  emit('outbox_effect_deduplicated', 'O1', { effect_count: 0, event_type: 'paper_fill_recorded' });
+  emit('ledger_event_appended', 'LG1', { event_type: 'paper_fill_recorded', event_count: 6, status: 'FULLY_MATCHED' });
+  emit('ledger_event_appended', 'LG1', { event_type: 'paper_marks_updated', event_count: 7, status: 'FULLY_MATCHED' });
+  emit('ledger_event_appended', 'LG1', { event_type: 'paper_trade_settled', event_count: 8, status: 'SETTLED' });
+  emit('ledger_reconciliation_completed', 'LG1', { passed: true, event_count: 8 });
+  emit('run_completed', 'R1');
+  const paperTrade = {
+    paper_trade_id: 'R12P-0123456789abcdef',
+    status: 'SETTLED',
+    target_quantity: 10,
+    event_count: 8,
+    risk: { matched_quantity: 10, leg_risk_quantity: 0 },
+    pnl: { realized_pnl: 0.4 },
+  };
+  applyMessage(state, message('result', {
+    result: {
+      run_id: state.runId,
+      trace: state.events,
+      paper_trade: paperTrade,
+      eval: { passed: true },
+    },
+  }));
+  assert.equal(state.nodes.LG1, 'completed');
+  assert.equal(state.phase, 'completed');
+  assert.equal(state.result.paper_trade.status, 'SETTLED');
+  assert.equal(state.result.paper_trade.pnl.realized_pnl, 0.4);
+  assert.equal(describe({ event: 'ledger_event_appended', event_type: 'paper_fill_recorded' }).label, 'LEDGER WRITE');
+});
