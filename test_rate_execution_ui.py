@@ -18,6 +18,7 @@ class PartialFillConsoleContractTests(unittest.TestCase):
         self.assertIn("/api/rates/paper-fill", server)
         self.assertIn("partial_fill_cancel_race", server)
         self.assertIn("paper_fill_accounting", server)
+        self.assertIn('send("start", strategy="r12_paper_fill_accounting"', server)
         self.assertIn('row["passed"] = True', server)
         self.assertIn("fill_deduplicated", client + server)
         self.assertIn("FILLED ", client)
