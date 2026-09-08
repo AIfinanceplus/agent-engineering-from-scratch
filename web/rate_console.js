@@ -11,7 +11,7 @@
   const rows = [];
   const nodeElements = new Map();
   const edgeElements = [];
-  const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
+  const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
 
   function element(tag, className, text) {
     const el = document.createElement(tag);
@@ -164,6 +164,13 @@
       byId('ledger-status').dataset.state = state.result?.eval?.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = 'target ' + paperTrade.target_quantity + ' · events ' + paperTrade.event_count + ' · leg risk ' + paperTrade.risk.leg_risk_quantity;
     }
+    const paperPortfolio = state.result?.paper_portfolio;
+    if (paperPortfolio && byId('ledger-status')) {
+      const summary = paperPortfolio.summary;
+      byId('ledger-status').textContent = paperPortfolio.risk_status + ' · OPEN ' + summary.unsettled_trade_count + ' · LEG RISK ' + summary.total_leg_risk_quantity;
+      byId('ledger-status').dataset.state = state.result?.eval?.passed ? 'pass' : 'error';
+      byId('ledger-diff').textContent = 'unsettled cost ' + summary.unsettled_acquisition_cost + ' · limits ' + paperPortfolio.violations.length + ' · realized P&L ' + summary.realized_pnl;
+    }
   }
   function update() {
     for (const [id, button] of nodeElements) {
@@ -308,10 +315,10 @@
     byId('event-list').replaceChildren();
     byId('settings').open = false;
     byId('follow').checked = true;
-    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : config.demo_scenario === 'execution_race' ? '纸面成交事件 · 持久化后发送 · 重复 fill 去重' : config.demo_scenario === 'paper_fill_accounting' ? '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : config.demo_scenario === 'execution_race' ? '纸面成交事件 · 持久化后发送 · 重复 fill 去重' : config.demo_scenario === 'paper_fill_accounting' ? '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L' : config.demo_scenario === 'paper_portfolio_risk' ? '纸面组合投影 · 限额预检 · 拦截不写入账本' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
     update();
     try {
-      const endpoint = config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : config.demo_scenario === 'paper_fill_accounting' ? '/api/rates/paper-fill' : '/api/rates/stream';
+      const endpoint = config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : config.demo_scenario === 'paper_fill_accounting' ? '/api/rates/paper-fill' : config.demo_scenario === 'paper_portfolio_risk' ? '/api/rates/paper-portfolio' : '/api/rates/stream';
       const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(config) });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
