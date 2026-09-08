@@ -11,6 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,7 @@ class PaperExecutionTracker:
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n")
                 handle.flush()
+                os.fsync(handle.fileno())
         self._events.append(event)
         return deepcopy(event)
 
