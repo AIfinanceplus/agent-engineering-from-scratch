@@ -18,6 +18,7 @@ from rate_control import RunControl, RunControlRegistry
 from rate_approval import ApprovalRegistry
 from rate_event_log import EventLogError, RateEventLog
 from rate_execution import partial_fill_cancel_race_demo
+from r12_paper import JsonlR12PaperLedgerStore, R12PaperLedger, evaluate_r12_paper_trade
 from serve_r12 import R12VisualizerHandler
 
 
@@ -43,7 +44,7 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/execution-race", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/execution-race", "/api/rates/paper-fill", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
@@ -70,6 +71,8 @@ class RateStrategyHandler(R12VisualizerHandler):
             return self._stream_run(request_data)
         if self.path == "/api/rates/execution-race":
             return self._stream_execution_race()
+        if self.path == "/api/rates/paper-fill":
+            return self._stream_paper_fill()
         if self.path == "/api/rates/replay":
             return self._replay_run(request_data)
         if self.path != "/api/rates/run-once":
@@ -367,6 +370,172 @@ class RateStrategyHandler(R12VisualizerHandler):
                                  "edges": [["O1", "LG1"], ["LG1", "E1"]]}},
         }
         send("result", result=run)
+
+    def _stream_paper_fill(self):
+        """Teach quote -> explicit paper fills -> marks -> settlement P&L."""
+        run_id = f"RATE-PAPER-FILL-{uuid4().hex[:16]}"
+        source_run_id = "R12A-PAPER-FILL-LESSON"
+        opportunity_id = "OPP-PAPER-FILL-LESSON"
+        first_leg = "kalshi:YES"
+        second_leg = "polymarket:NO"
+        quote = {
+            "artifact_type": "r12_execution_quality_scan",
+            "identity_id": "IDENTITY-PAPER-FILL-LESSON",
+            "opportunities": [{
+                "artifact_type": "r12_strategy_opportunity",
+                "opportunity_id": opportunity_id,
+                "eligible_for_paper_signal": True,
+                "market_view": {"execution_quote": {
+                    "target_contracts": 10,
+                    "full_fill_at_target": True,
+                    "eligible_for_paper_signal": True,
+                    "net_edge_total": 0.4,
+                    "legs": [
+                        {"leg_id": first_leg, "provider": "kalshi", "outcome": "YES",
+                         "full_fill": True, "filled_quantity": 10, "vwap": 0.45,
+                         "notional": 4.5, "fee": 0.1},
+                        {"leg_id": second_leg, "provider": "polymarket", "outcome": "NO",
+                         "full_fill": True, "filled_quantity": 10, "vwap": 0.49,
+                         "notional": 4.9, "fee": 0.1},
+                    ],
+                }},
+            }],
+        }
+        agent_run = {
+            "artifact_type": "r12_strategy_agent_run",
+            "run_id": source_run_id,
+            "status": "COMPLETED_PAPER_QUOTE",
+            "results": {"E1": quote},
+        }
+        trace = []
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        self.close_connection = True
+
+        def send(message_type, **payload):
+            message = {"protocol": "rate-ndjson-v1", "type": message_type, "run_id": run_id, **payload}
+            EVENT_LOG.append(message)
+            self.wfile.write((json.dumps(message, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8"))
+            self.wfile.flush()
+
+        def emit_ledger(trade, paper_event_type, *, mapped="ledger_event_appended", extra=None):
+            row = {
+                "sequence": len(trace) + 1,
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": mapped,
+                "event_type": paper_event_type,
+                "paper_event_type": paper_event_type,
+                "task_id": "O1" if mapped == "outbox_effect_deduplicated" else "LG1",
+                "paper_trade_id": trade["paper_trade_id"],
+                "event_count": trade["event_count"],
+                "status": trade["status"],
+                "risk": trade["risk"],
+                "pnl": trade["pnl"],
+                "payload": (extra or {}),
+            }
+            if mapped == "outbox_effect_deduplicated":
+                row["effect_count"] = 0
+                row["idempotency_key"] = "fill-first-four"
+            trace.append(row)
+            send("event", event=row)
+
+        with tempfile.TemporaryDirectory(prefix="rate-paper-fill-lesson-") as directory:
+            ledger = R12PaperLedger(JsonlR12PaperLedgerStore(directory))
+            trade = ledger.create_from_agent_run(agent_run, opportunity_id, "create-paper-fill-lesson")
+            emit_ledger(trade, "paper_intent_created")
+            trade = ledger.record_fill(
+                trade["paper_trade_id"], leg_id=first_leg, quantity=4, price=0.45,
+                fee=0.1, idempotency_key="fill-first-four",
+            )
+            emit_ledger(trade, "paper_fill_recorded")
+            retried = ledger.record_fill(
+                trade["paper_trade_id"], leg_id=first_leg, quantity=4, price=0.45,
+                fee=0.1, idempotency_key="fill-first-four",
+            )
+            emit_ledger(retried, "paper_fill_recorded", mapped="outbox_effect_deduplicated",
+                        extra={"retry": True, "same_idempotency_key": True})
+            trade = ledger.record_fill(
+                trade["paper_trade_id"], leg_id=second_leg, quantity=4, price=0.49,
+                fee=0.1, idempotency_key="fill-second-four",
+            )
+            emit_ledger(trade, "paper_fill_recorded")
+            trade = ledger.record_fill(
+                trade["paper_trade_id"], leg_id=first_leg, quantity=6, price=0.45,
+                fee=0.1, idempotency_key="fill-first-six",
+            )
+            emit_ledger(trade, "paper_fill_recorded")
+            trade = ledger.record_fill(
+                trade["paper_trade_id"], leg_id=second_leg, quantity=6, price=0.49,
+                fee=0.1, idempotency_key="fill-second-six",
+            )
+            emit_ledger(trade, "paper_fill_recorded")
+            trade = ledger.mark_to_market(
+                trade["paper_trade_id"], marks={first_leg: 0.46, second_leg: 0.50},
+                idempotency_key="mark-paper-fill-lesson",
+            )
+            emit_ledger(trade, "paper_marks_updated")
+            trade = ledger.settle(
+                trade["paper_trade_id"], winning_outcome="YES",
+                idempotency_key="settle-paper-fill-lesson",
+            )
+            emit_ledger(trade, "paper_trade_settled")
+            reconciliation = {
+                "sequence": len(trace) + 1,
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": "ledger_reconciliation_completed",
+                "event_type": "paper_trade_settled",
+                "task_id": "LG1",
+                "event_count": trade["event_count"],
+                "passed": True,
+                "status": trade["status"],
+                "payload": {"expected": "replayed paper ledger", "replayed": "same projection"},
+            }
+            trace.append(reconciliation)
+            send("event", event=reconciliation)
+            evaluation = evaluate_r12_paper_trade(trade)
+            final = {
+                "sequence": len(trace) + 1,
+                "run_id": run_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "event": "run_completed",
+                "task_id": "R1",
+                "lesson": "paper_fill_accounting",
+                "status": "COMPLETED",
+            }
+            trace.append(final)
+            send("event", event=final)
+            result = {
+                "artifact_type": "r12_paper_fill_accounting_run",
+                "run_id": run_id,
+                "status": "COMPLETED_PAPER_FILL_ACCOUNTING",
+                "trace": trace,
+                "paper_trade": trade,
+                "eval": evaluation,
+                "guardrails": {
+                    "paper_only": True,
+                    "exchange_credentials_present": False,
+                    "automatic_execution": False,
+                    "quote_is_not_a_fill": True,
+                    "partial_fill_is_locked_arbitrage": False,
+                },
+                "lesson": {
+                    "topic": "paper_fill_accounting",
+                    "graph": {
+                        "nodes": ["E1", "O1", "LG1"],
+                        "edges": [["E1", "O1"], ["O1", "LG1"]],
+                    },
+                },
+            }
+            send("result", result=result)
 
     def _replay_run(self, request_data):
         """Replay persisted envelopes without executing any Tool again."""
