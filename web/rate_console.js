@@ -11,7 +11,7 @@
   const rows = [];
   const nodeElements = new Map();
   const edgeElements = [];
-  const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
+  const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
 
   function element(tag, className, text) {
     const el = document.createElement(tag);
@@ -290,10 +290,11 @@
     byId('event-list').replaceChildren();
     byId('settings').open = false;
     byId('follow').checked = true;
-    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : config.demo_scenario === 'execution_race' ? '纸面成交事件 · 持久化后发送 · 重复 fill 去重' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
     update();
     try {
-      const response = await fetch('/api/rates/stream', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(config) });
+      const endpoint = config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : '/api/rates/stream';
+      const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(config) });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
         throw new Error(body?.error?.message || `HTTP ${response.status}`);
