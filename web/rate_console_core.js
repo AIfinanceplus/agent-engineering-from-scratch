@@ -47,8 +47,8 @@
     { id: 'risk', name: '风控专员', type: '规则程序', icon: '盾', tasks: ['CG1', 'TG1', 'L1', 'H1', 'AZ1', 'C1', 'V1', 'Q1'], idle: '检查来源、权限、容量与风险边界' },
     { id: 'auditor', name: '账本审计员', type: '规则程序', icon: '审', tasks: ['O1', 'LG1', 'E1'], idle: '持久化、重放、对账与评估' },
   ];
-  const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
-  const DECISION_EVENT = /(model_intent|model_plan|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|join_|run_completed)/;
+  const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|privacy|memory_write_blocked|handoff_validation|handoff_rejected|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
+  const DECISION_EVENT = /(model_intent|model_plan|model_regression|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|agent_role|handoff_contract|handoff_accepted|join_|run_completed)/;
   function flowForEvent(event) {
     const name = event?.event || '';
     if (RISK_EVENT.test(name)) return 'risk';
@@ -77,6 +77,18 @@
     if (RISK_EVENT.test(name) && /(completed|rejected|blocked|verified|detected|resolved)/.test(name)) return { from: 'risk', to: 'runtime', flow: 'risk', title: name.replaceAll('_', ' ') };
     if (name === 'ledger_event_appended') return { from: 'data', to: 'auditor', flow: 'information', title: `纸面事件已持久化：${event.event_type || 'event'}` };
     if (name === 'ledger_reconciliation_completed') return { from: 'auditor', to: 'runtime', flow: 'risk', title: event.passed ? '重放对账通过' : '重放对账失败' };
+    if (name === 'golden_trace_loaded') return { from: 'auditor', to: 'model', flow: 'information', title: '载入已批准的 Golden Trace' };
+    if (name === 'model_regression_completed') return { from: 'auditor', to: 'runtime', flow: 'risk', title: event.passed ? '模型回归评测通过' : '检测到模型行为退化' };
+    if (name === 'short_term_memory_created') return { from: 'principal', to: 'runtime', flow: 'information', title: '创建本次 Run 的短期状态' };
+    if (name === 'privacy_redaction_completed') return { from: 'runtime', to: 'risk', flow: 'risk', title: '长期写入前完成隐私脱敏' };
+    if (name === 'long_term_memory_written') return { from: 'risk', to: 'auditor', flow: 'information', title: '写入脱敏的长期记忆' };
+    if (name === 'long_term_memory_retrieved') return { from: 'auditor', to: 'data', flow: 'information', title: '按 Scope 召回有来源的记忆' };
+    if (name === 'memory_write_blocked') return { from: 'risk', to: 'runtime', flow: 'risk', title: '敏感长期写入被阻断，副作用为零' };
+    if (name === 'handoff_contract_created') return event.recipient_role === 'risk_controller'
+      ? { from: 'data', to: 'risk', flow: 'decision', title: 'Strategy Analyst 提交结构化交接合约' }
+      : { from: 'risk', to: 'runtime', flow: 'decision', title: 'Risk Controller 提交已批准合约' };
+    if (name === 'handoff_accepted') return { from: event.actor_role === 'risk_controller' ? 'data' : 'risk', to: event.actor_role === 'risk_controller' ? 'risk' : 'runtime', flow: 'decision', title: '接收方验证并接受交接' };
+    if (name === 'handoff_rejected') return { from: 'risk', to: 'data', flow: 'risk', title: '越权交接被拒绝，未激活下游' };
     if (name === 'run_completed') return { from: 'runtime', to: 'principal', flow: 'decision', title: '交付完整运行终态' };
     return null;
   }
@@ -189,6 +201,22 @@
         state.nodes.M1 = 'completed';
         state.nodes.P1 = 'failed';
         break;
+      case 'golden_trace_loaded': state.nodes.E1 = 'running'; break;
+      case 'model_regression_started': state.nodes.E1 = 'running'; break;
+      case 'model_eval_assertion_checked': state.nodes.E1 = event.passed ? 'verifying' : 'rejected'; break;
+      case 'model_regression_completed': state.nodes.E1 = event.passed ? 'completed' : 'failed'; break;
+      case 'short_term_memory_created': state.nodes.CT1 = 'running'; break;
+      case 'privacy_redaction_completed': state.nodes.TG1 = event.passed ? 'completed' : 'failed'; break;
+      case 'long_term_memory_written': state.nodes.LG1 = 'writing'; break;
+      case 'long_term_memory_retrieved': state.nodes.RG1 = 'completed'; state.nodes.LG1 = 'completed'; break;
+      case 'memory_write_blocked': state.nodes.TG1 = event.passed ? 'completed' : 'failed'; break;
+      case 'short_term_memory_discarded': state.nodes.CT1 = 'completed'; break;
+      case 'agent_role_activated': if (id in state.nodes) state.nodes[id] = 'running'; break;
+      case 'handoff_contract_created': if (id in state.nodes) state.nodes[id] = 'proposed'; break;
+      case 'handoff_validation_started': if (id in state.nodes) state.nodes[id] = 'verifying'; break;
+      case 'handoff_validation_completed': if (id in state.nodes) state.nodes[id] = event.passed ? 'ready' : 'rejected'; break;
+      case 'handoff_accepted': if (id in state.nodes) state.nodes[id] = 'completed'; break;
+      case 'handoff_rejected': if (id in state.nodes) state.nodes[id] = 'rejected'; break;
       case 'plan_created': state.nodes.P1 = 'completed'; break;
       case 'runtime_started': state.nodes.R1 = 'running'; break;
       case 'lease_bypassed': state.nodes.L1 = 'completed'; break;
@@ -353,6 +381,22 @@
     const common = { kind: 'node', label: 'NODE', title: event.event, description: '', detailLabel: '完整事件', payload: event };
     switch (event.event) {
       case 'goal_received': return { ...common, label: 'INPUT', title: 'Goal received', description: event.goal, detailLabel: '目标与运行参数' };
+      case 'golden_trace_loaded': return { ...common, kind: 'eval', label: 'GOLDEN TRACE', title: event.golden.golden_id, description: '固定必须满足的事件顺序、Guardrails、禁用 Tool 与最低分；不要求模型逐字复现答案。', detailLabel: '批准的行为基准', payload: event.golden };
+      case 'model_regression_started': return { ...common, kind: 'eval', label: 'REGRESSION', title: `${event.candidate_version} vs ${event.golden_id}`, description: '候选版本在同一行为合约上接受评测。', detailLabel: '评测身份', payload: event };
+      case 'model_eval_assertion_checked': return { ...common, kind: event.passed ? 'eval' : 'error', label: event.passed ? 'ASSERT PASS' : 'ASSERT FAIL', title: event.assertion, description: event.passed ? '候选行为满足 Golden Trace。' : '检测到行为退化；不会用总分掩盖硬性安全失败。', detailLabel: '断言结果', payload: event };
+      case 'model_regression_completed': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'EVAL PASS' : 'REGRESSION FOUND', title: `Score ${event.score} / ${event.threshold}`, description: event.passed ? '候选模型可继续进入纸面研究环境。' : `退化项：${event.regressions.join(' · ')}`, detailLabel: '完整回归报告', payload: event };
+      case 'short_term_memory_created': return { ...common, kind: 'memory', label: 'SHORT-TERM', title: 'Run-scoped working state', description: `只活在本次运行；检测到敏感字段但不把值写入 Trace。字段：${event.field_names.join(' · ')}`, detailLabel: '生命周期与字段名', payload: event };
+      case 'privacy_redaction_completed': return { ...common, kind: 'memory', label: 'REDACT', title: `${event.redacted_fields.length} sensitive fields removed`, description: '先脱敏，再允许长期保存；API Key、邮箱和账户标识不会进入记忆库。', detailLabel: '脱敏审计', payload: event };
+      case 'long_term_memory_written': return { ...common, kind: 'memory', label: 'LONG-TERM WRITE', title: event.memory.memory_id, description: '只保存脱敏内容、Scope、来源和内容哈希；使用追加式 JSONL。', detailLabel: '实际持久化记录', payload: event.memory };
+      case 'long_term_memory_retrieved': return { ...common, kind: 'memory', label: 'MEMORY RETRIEVAL', title: event.memory.scope, description: `按明确 Scope 召回 · 来源 ${event.provenance.source} · 不把记忆当成事实真相。`, detailLabel: '召回记录与来源', payload: event };
+      case 'memory_write_blocked': return { ...common, kind: 'error', label: 'PRIVACY BLOCK', title: 'Raw memory rejected before disk write', description: `副作用 ${event.effect_count} 次 · 拒绝字段：${event.rejected_fields.join(' · ')}`, detailLabel: '隐私门禁结果', payload: event };
+      case 'short_term_memory_discarded': return { ...common, kind: 'memory', label: 'FORGET', title: 'Short-term state discarded', description: 'Run 结束后工作状态被清除；只有已脱敏的长期记录可以继续存在。', detailLabel: '清除边界', payload: event };
+      case 'agent_role_activated': return { ...common, kind: 'handoff', label: 'ROLE', title: event.role_contract.role_id, description: event.role_contract.mission, detailLabel: '完整角色合约', payload: event.role_contract };
+      case 'handoff_contract_created': return { ...common, kind: 'handoff', label: 'HANDOFF', title: `${event.actor_role} → ${event.recipient_role}`, description: '发送方只能提交结构化合约；接收方不会继承发送方的隐含权限。', detailLabel: '交接信封、Payload 与哈希', payload: event.handoff };
+      case 'handoff_validation_started': return { ...common, kind: 'handoff', label: 'VERIFY', title: `${event.actor_role} validates ${event.sender_role}`, description: '接收方先检查 Schema、角色路由、证据、Paper-only 与合约哈希。', detailLabel: '验证边界', payload: event };
+      case 'handoff_validation_completed': return { ...common, kind: event.passed ? 'handoff' : 'error', label: event.passed ? 'CONTRACT PASS' : 'CONTRACT FAIL', title: event.passed ? 'Handoff may activate recipient' : 'Recipient remains inactive', description: event.passed ? '所有交接断言通过。' : event.reasons.join(' · '), detailLabel: '交接校验结果', payload: event };
+      case 'handoff_accepted': return { ...common, kind: 'handoff', label: 'ACCEPTED', title: `${event.sender_role} → ${event.actor_role}`, description: '接收方只接受合约内声明的 Payload 与权限。', detailLabel: '接受凭证', payload: event };
+      case 'handoff_rejected': return { ...common, kind: 'error', label: 'HANDOFF REJECTED', title: 'Unsafe authority escalation stopped', description: `${event.reasons.join(' · ')} · 副作用 ${event.effect_count} 次`, detailLabel: '拒绝原因', payload: event };
       case 'retrieval_bypassed': return { ...common, kind: 'retrieval', label: 'RETRIEVER', title: 'Retrieval bypassed', description: event.reason };
       case 'retrieval_query_created': return { ...common, kind: 'retrieval', label: 'QUERY', title: event.query, description: `确定性 lexical retrieval · Top-K ${event.top_k} · 语料 ${event.corpus_size} chunks · 无伪造 embedding`, detailLabel: 'Query 与检索配置', payload: event };
       case 'retrieval_candidate_scored': return { ...common, kind: 'retrieval', label: 'RANK', title: `#${event.rank} ${event.chunk_id} · ${event.lexical_score}`, description: `${event.matched_terms.join(', ') || '无匹配词'}${event.selected_top_k ? ' · 进入 Top-K' : ' · 未进入 Top-K'}`, detailLabel: '完整 Chunk、来源与内容哈希', payload: event };
