@@ -26,7 +26,7 @@ class AdvancedRateLessonTests(unittest.TestCase):
         return result
 
     def test_all_teaching_scenarios_are_runnable(self):
-        self.assertEqual(len(ADVANCED_SCENARIOS), 17)
+        self.assertEqual(len(ADVANCED_SCENARIOS), 23)
         for scenario in sorted(ADVANCED_SCENARIOS):
             result = self.run_lesson(scenario)
             if scenario == "eval_regression_fail":
@@ -106,6 +106,39 @@ class AdvancedRateLessonTests(unittest.TestCase):
         blocked = self.run_lesson("observability_slo_breach")
         self.assertEqual(blocked["eval"]["terminal_action"], "STOP")
         self.assertFalse(any(row["event"] == "paper_runtime_mapped" for row in blocked["trace"]))
+
+    def test_durable_resume_reuses_committed_outputs_and_rejects_stale_bindings(self):
+        resumed = self.run_lesson("durable_resume_pass")
+        restored = [row["task_id"] for row in resumed["trace"]
+                    if row["event"] == "task_restored_from_checkpoint"]
+        self.assertEqual(restored, ["W1", "W2"])
+        self.assertEqual(resumed["eval"]["checks"]["completed_tasks_not_repeated"], True)
+        stale = self.run_lesson("durable_stale_checkpoint_block")
+        rejection = next(row for row in stale["trace"] if row["event"] == "stale_checkpoint_rejected")
+        self.assertEqual((rejection["resumed_tasks"], rejection["effect_count"]), (0, 0))
+        self.assertFalse(any(row["event"] == "unfinished_task_resumed" for row in stale["trace"]))
+
+    def test_saga_compensates_in_reverse_or_escalates_truthfully(self):
+        compensated = self.run_lesson("saga_compensation_pass")
+        actions = [row["action"] for row in compensated["trace"]
+                   if row["event"] == "compensation_applied"]
+        self.assertEqual(actions, ["mark_paper_intent_compensated", "release_paper_risk"])
+        terminal = next(row for row in compensated["trace"] if row["event"] == "saga_compensated")
+        self.assertEqual(terminal["open_paper_effects"], 0)
+        escalated = self.run_lesson("saga_compensation_escalate")
+        self.assertFalse(any(row["event"] == "saga_compensated" for row in escalated["trace"]))
+        self.assertIn("reconciliation_required", [row["event"] for row in escalated["trace"]])
+
+    def test_release_uses_shadow_canary_and_safe_rollback(self):
+        promoted = self.run_lesson("release_canary_promote")
+        shadow = next(row for row in promoted["trace"] if row["event"] == "shadow_run_started")
+        self.assertFalse(shadow["result_authority"])
+        self.assertEqual(promoted["eval"]["terminal_action"], "PROMOTE")
+        rolled_back = self.run_lesson("release_canary_rollback")
+        self.assertEqual(rolled_back["eval"]["terminal_action"], "ROLLBACK")
+        rollback = next(row for row in rolled_back["trace"] if row["event"] == "release_rolled_back")
+        self.assertEqual(rollback["candidate_traffic_percent"], 0)
+        self.assertTrue(rollback["candidate_traces_preserved"])
 
     def test_golden_eval_compares_behavior_not_wording(self):
         candidate = {

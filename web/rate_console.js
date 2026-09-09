@@ -2,11 +2,13 @@
   'use strict';
   const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS,
     DECOMPOSITION_NODES, DECOMPOSITION_ROWS, AGENT_TOOL_NODES, AGENT_TOOL_ROWS,
-    OBSERVABILITY_NODES, OBSERVABILITY_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent,
+    OBSERVABILITY_NODES, OBSERVABILITY_ROWS, DURABLE_NODES, DURABLE_ROWS,
+    SAGA_NODES, SAGA_ROWS, RELEASE_NODES, RELEASE_ROWS,
+    STUDIO_ROLES, flowForEvent, roleForEvent,
     handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
   const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', abstained: '主动停止', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
-  let state = createState(modeForScenario(document.getElementById('scenario')?.value || 'decomposition_dynamic_pass'));
+  let state = createState(modeForScenario(document.getElementById('scenario')?.value || 'durable_resume_pass'));
   let inFlight = false;
   let filter = null;
   let selectedRole = null;
@@ -23,7 +25,7 @@
     decision: ['决策流', '策略提议 → 独立验约 → 已批准合约 → 固定 Runtime', '每位 Agent 只决定自己职责内的事情，接收方必须重新验证。'],
     risk: ['风控流', 'Claims / Evidence → Contract Gate → ALLOW 或 BLOCK → Audit', '拒绝路径停在风险主管，执行主管保持未激活，副作用为零。'],
   };
-  const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject', 'orchestration_normal', 'orchestration_revision', 'orchestration_timeout_reassign', 'orchestration_loop_block', 'orchestration_authority_block', 'decomposition_dynamic_pass', 'decomposition_cycle_block', 'agent_tool_parallel_pass', 'agent_tool_scope_block', 'observability_slo_pass', 'observability_slo_breach']);
+  const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject', 'orchestration_normal', 'orchestration_revision', 'orchestration_timeout_reassign', 'orchestration_loop_block', 'orchestration_authority_block', 'decomposition_dynamic_pass', 'decomposition_cycle_block', 'agent_tool_parallel_pass', 'agent_tool_scope_block', 'observability_slo_pass', 'observability_slo_breach', 'durable_resume_pass', 'durable_stale_checkpoint_block', 'saga_compensation_pass', 'saga_compensation_escalate', 'release_canary_promote', 'release_canary_rollback']);
   const lessonCopy = {
     eval: {
       title: 'Model Evals · Golden Trace', detail: '判断候选模型行为是否仍满足已批准合约。',
@@ -74,10 +76,31 @@
       watchTitle: 'SLO 违反会阻止 Runtime', watch: '正常场景通过门禁；超标场景以 SAFE STOP 结束且副作用为零。',
       overview: 'Trace Context → Parented Spans → Aggregation → SLO Decision → Run / Stop',
     },
+    durable: {
+      title: 'Durable Workflow · 断点恢复', detail: '进程崩溃后验证 Checkpoint，只继续没有已提交输出的任务。',
+      whyTitle: '恢复不能等同于从头再跑', why: '已完成 Tool 如果重复调用，会重复消耗、写入或污染状态；Checkpoint 必须证明哪些输出已经提交。',
+      howTitle: 'Commit → Crash → Load → Revalidate → Resume', how: '恢复前重新验证 Run、图版本、输入指纹和 Guardrail；有效才恢复 W1/W2 并只继续 W3。',
+      watchTitle: 'Resume、Replay 与 Rerun 必须区分', watch: '正常场景已完成 Tool 重复调用为 0；参数变化时旧 Checkpoint 在 RV1 被拒绝。',
+      overview: 'Committed Output → Durable Checkpoint → Crash → Binding Gate → Selective Resume',
+    },
+    saga: {
+      title: 'Saga & Compensation · 部分失败恢复', detail: '跨步骤失败后，以追加式补偿恢复纸面状态，而不是删除历史。',
+      whyTitle: '跨 Tool 操作没有一个全局数据库事务', why: '后一步失败时，前面的纸面风险预留和意图可能已经发生；系统必须按逆序执行对应补偿。',
+      howTitle: 'Forward Steps → Failure → Reverse Compensation → Reconcile', how: '每个正向步骤声明补偿动作；补偿失败时停止自动化并进入人工对账。',
+      watchTitle: '补偿不是假装原操作没发生', watch: 'Trace 同时保留正向和补偿事件；只有 open_paper_effects=0 才能标记 COMPENSATED。',
+      overview: 'Paper Effects → Failure → Reverse Compensation → Compensated / Manual Reconciliation',
+    },
+    release: {
+      title: 'Agent Release Engineering · 安全发布', detail: '把 Model、Prompt、Graph 和 Policy 作为一个版本，经 Shadow 与 Canary 后晋级。',
+      whyTitle: '升级模型只是升级 Agent 的一部分', why: 'Prompt、工具、任务图和风险政策都会改变行为；发布必须绑定完整 Bundle 并保留可回滚版本。',
+      howTitle: 'Bundle → Golden Gate → Shadow → 5% Canary → Promote / Rollback', how: 'Shadow 无结果权限；Canary 只接收少量纸面流量，延迟或 Token 超标会自动切回 Current。',
+      watchTitle: '新版本先证明自己，再获得流量', watch: '正常场景晋级到 100%；超标场景 Candidate 流量降为 0，失败 Trace 仍保留。',
+      overview: 'Immutable Release → Offline Eval → Shadow → Canary Gate → Promote / Rollback',
+    },
   };
   const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'model_live', 'intent_live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
 
-  const lessonForScenario = scenario => scenario.startsWith('decomposition_') ? 'decomposition' : scenario.startsWith('agent_tool_') ? 'agent_tool' : scenario.startsWith('observability_') ? 'observability' : scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : scenario.startsWith('orchestration_') ? 'orchestration' : 'eval';
+  const lessonForScenario = scenario => scenario.startsWith('durable_') ? 'durable' : scenario.startsWith('saga_') ? 'saga' : scenario.startsWith('release_') ? 'release' : scenario.startsWith('decomposition_') ? 'decomposition' : scenario.startsWith('agent_tool_') ? 'agent_tool' : scenario.startsWith('observability_') ? 'observability' : scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : scenario.startsWith('orchestration_') ? 'orchestration' : 'eval';
   const lessonOutcomeCopy = {
     eval_golden_pass: ['Golden Trace 固定安全行为，不固定模型措辞', '候选运行保留了事件顺序、风险门禁与 paper-only 结果，模型可以升级。'],
     eval_regression_fail: ['回归评测的价值，是在上线前阻止行为退化', '越权 Tool 与缺失风险门禁已被 Golden Trace 检出；候选模型没有进入 Runtime。'],
@@ -96,6 +119,12 @@
     agent_tool_scope_block: ['专家 Agent 的能力边界必须可执行地约束', 'risk_specialist 请求 place_order 被 Scope Gate 拒绝，Manager 安全停止。'],
     observability_slo_pass: ['可观测性必须能回答“哪里慢、花多少、下一步做什么”', '三个子 Span 的父子关系与预算指标完整，SLO 通过后才激活纸面 Runtime。'],
     observability_slo_breach: ['SLO 是运行政策，不只是仪表盘数字', '延迟与 Token 超标触发 SAFE STOP；Runtime 未激活，副作用为零。'],
+    durable_resume_pass: ['恢复只继续没有已提交结果的工作', 'W1/W2 从输出收据恢复且不重复调用；W3 完成后 Recovery Join 才放行。'],
+    durable_stale_checkpoint_block: ['Checkpoint 必须重新验约，不能盲目续跑', '输入指纹已变化，RV1 拒绝旧状态；恢复任务为 0，副作用为零。'],
+    saga_compensation_pass: ['补偿以新事件纠正状态，不删除历史', '账本步骤失败后按逆序补偿意图与风险预留，未解决纸面效果回到 0。'],
+    saga_compensation_escalate: ['补偿失败必须升级，不能虚报恢复成功', '风险释放失败后系统进入 NEEDS_MANUAL_RECONCILIATION，并冻结继续自动化。'],
+    release_canary_promote: ['Agent 发布必须绑定完整版本并逐级获得权限', 'Candidate 通过 Golden、Shadow 与 5% Canary，才晋级为 100% Active。'],
+    release_canary_rollback: ['Canary 的意义是限制坏版本影响范围', '延迟与 Token 超标后停止 Candidate 新流量，切回 Current 并保留失败 Trace。'],
   };
   function updateLessonOutcome() {
     const banner = byId('lesson-outcome-banner');
@@ -110,11 +139,14 @@
     const terminalAction = state.result?.eval?.terminal_action;
     const passed = Boolean(state.result) && state.result.eval?.passed !== false;
     const effectEvent = [...state.events].reverse().find(event => Number.isFinite(event.effect_count));
-    banner.dataset.outcome = terminalAction === 'STOP' ? 'stopped' : passed ? 'pass' : 'blocked';
+    const guardedTerminal = ['STOP', 'ESCALATE', 'ROLLBACK'].includes(terminalAction);
+    const terminalLabels = { STOP: 'SAFE STOP', ESCALATE: 'MANUAL REVIEW', ROLLBACK: 'AUTO ROLLBACK',
+      COMPENSATED: 'COMPENSATED', PROMOTE: 'PROMOTED', COMPLETE: 'CONTRACT PASS' };
+    banner.dataset.outcome = guardedTerminal ? 'stopped' : passed ? 'pass' : 'blocked';
     byId('lesson-outcome-theme').textContent = copy[0];
     byId('lesson-outcome-summary').textContent = copy[1];
     byId('lesson-outcome-scenario').textContent = `SCENARIO · ${scenario}`;
-    byId('lesson-outcome-result').textContent = !state.result ? 'RUN ERROR' : terminalAction === 'STOP' ? 'SAFE STOP' : passed ? 'CONTRACT PASS' : 'REGRESSION BLOCKED';
+    byId('lesson-outcome-result').textContent = !state.result ? 'RUN ERROR' : terminalLabels[terminalAction] || (passed ? 'CONTRACT PASS' : 'REGRESSION BLOCKED');
     byId('lesson-outcome-effect').textContent = `SIDE EFFECTS · ${effectEvent?.effect_count ?? 0}`;
   }
   function sourceNote(scenario) {
@@ -125,6 +157,9 @@
     if (scenario.startsWith('decomposition_')) return '动态任务图 · 派发前无环检查 · 三个有类型 Worker · 仅 2s10s';
     if (scenario.startsWith('agent_tool_')) return 'Manager 保留控制 · 专家仅返回结构化结果 · Scope 越权零副作用阻断';
     if (scenario.startsWith('observability_')) return 'Trace/Span 父子关系 · 不采集 Prompt/Secret · SLO 可执行门禁';
+    if (scenario.startsWith('durable_')) return '原子 Checkpoint · 绑定重验证 · 只恢复未完成任务 · 已完成 Tool 不重跑';
+    if (scenario.startsWith('saga_')) return '追加式纸面事件 · 逆序补偿 · 补偿失败转人工对账 · 无真实订单';
+    if (scenario.startsWith('release_')) return '不可变 Release Bundle · Shadow 无权限 · 5% Canary · 自动回滚';
     if (scenario === 'live') return '公开数据 · 无延时或故障注入';
     if (scenario === 'execution_race') return '纸面成交事件 · 持久化后发送 · 重复 fill 去重';
     if (scenario === 'paper_fill_accounting') return '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L';
@@ -151,8 +186,8 @@
     byId('model-key-field').hidden = !needsKey;
     byId('key-session').hidden = !needsKey;
     byId('orchestration-panel').hidden = lesson !== 'orchestration';
-    byId('pattern-panel').hidden = !['decomposition', 'agent_tool', 'observability'].includes(lesson);
-    byId('handoff').hidden = ['orchestration', 'decomposition', 'agent_tool', 'observability'].includes(lesson);
+    byId('pattern-panel').hidden = !['decomposition', 'agent_tool', 'observability', 'durable', 'saga', 'release'].includes(lesson);
+    byId('handoff').hidden = ['orchestration', 'decomposition', 'agent_tool', 'observability', 'durable', 'saga', 'release'].includes(lesson);
     byId('source-note').textContent = sourceNote(scenario);
     if (!state.runId && lesson) {
       byId('overview-title').textContent = copy.title.split(' · ')[0];
@@ -200,10 +235,12 @@
   }
   const graphDefinitions = { parallel: PARALLEL_NODES, orchestration: ORCHESTRATION_NODES,
     decomposition: DECOMPOSITION_NODES, agent_tool: AGENT_TOOL_NODES,
-    observability: OBSERVABILITY_NODES };
+    observability: OBSERVABILITY_NODES, durable: DURABLE_NODES,
+    saga: SAGA_NODES, release: RELEASE_NODES };
   const graphRowsByMode = { parallel: PARALLEL_ROWS, orchestration: ORCHESTRATION_ROWS,
     decomposition: DECOMPOSITION_ROWS, agent_tool: AGENT_TOOL_ROWS,
-    observability: OBSERVABILITY_ROWS };
+    observability: OBSERVABILITY_ROWS, durable: DURABLE_ROWS,
+    saga: SAGA_ROWS, release: RELEASE_ROWS };
   const definitions = () => graphDefinitions[state.mode] || NODES;
   function buildGraph() {
     nodeElements.clear();
@@ -439,20 +476,28 @@
       decomposition: ['GRAPH VALIDATION', 'Orchestrator', '动态 Fan-out / 3-way Join'],
       agent_tool: ['MANAGER CONTROL', 'Manager', '2 bounded specialist calls'],
       observability: ['SLO ENFORCEMENT', 'Risk Controller', 'Root trace / 3 child spans'],
+      durable: ['RECOVERY CONTROL', 'Resume Validator', 'Checkpoint / selective resume'],
+      saga: ['COMPENSATION CONTROL', 'Saga Coordinator', 'Forward / reverse / reconcile'],
+      release: ['RELEASE CONTROL', 'Release Gate', 'Golden / Shadow / 5% Canary'],
     };
     const config = configs[lesson];
-    const gate = [...state.events].reverse().find(event => ['task_graph_validated', 'task_graph_rejected', 'agent_tool_scope_rejected', 'manager_synthesis_completed', 'slo_evaluation_completed'].includes(event.event));
+    const gate = [...state.events].reverse().find(event => ['task_graph_validated', 'task_graph_rejected', 'agent_tool_scope_rejected', 'manager_synthesis_completed', 'slo_evaluation_completed', 'checkpoint_binding_validated', 'stale_checkpoint_rejected', 'saga_compensated', 'reconciliation_required', 'canary_gate_evaluated', 'release_promoted', 'release_rolled_back'].includes(event.event));
     const active = lesson === 'decomposition' ? state.events.filter(event => event.event === 'dynamic_worker_dispatched').length
       : lesson === 'agent_tool' ? state.events.filter(event => event.event === 'agent_tool_call_started').length
-      : state.events.filter(event => event.event === 'span_completed').length;
+      : lesson === 'observability' ? state.events.filter(event => event.event === 'span_completed').length
+      : lesson === 'durable' ? state.events.filter(event => /task_restored|unfinished_task_resumed/.test(event.event)).length
+      : lesson === 'saga' ? state.events.filter(event => event.event === 'compensation_applied').length
+      : state.events.filter(event => /shadow_run_started|canary_started/.test(event.event)).length;
     const metric = state.events.find(event => event.event === 'telemetry_aggregated')?.metrics;
     byId('pattern-label').textContent = config[0];
     byId('pattern-owner').textContent = config[1];
     byId('pattern-topology').textContent = config[2];
     byId('pattern-active').textContent = `${active} observed`;
-    byId('pattern-gate').textContent = !gate ? 'WAITING' : /rejected/.test(gate.event) || gate.passed === false ? 'BLOCK' : 'PASS';
-    byId('pattern-budget').textContent = metric ? `${metric.p95_latency_ms}ms · ${metric.tokens_used} tok` : lesson === 'decomposition' ? '0 workers before gate' : lesson === 'agent_tool' ? 'declared scope only' : 'p95 ≤ 1200ms';
-    const events = state.events.filter(event => /task_graph_|dynamic_|manager_|agent_tool_|span_|slo_/.test(event.event)).slice(-6);
+    byId('pattern-gate').textContent = !gate ? 'WAITING' : /rejected|reconciliation_required/.test(gate.event) || gate.passed === false ? 'BLOCK' : /rolled_back/.test(gate.event) ? 'ROLLBACK' : 'PASS';
+    const sagaTerminal = state.events.find(event => /saga_compensated|reconciliation_required/.test(event.event));
+    const releaseGate = state.events.find(event => event.event === 'canary_gate_evaluated');
+    byId('pattern-budget').textContent = metric ? `${metric.p95_latency_ms}ms · ${metric.tokens_used} tok` : lesson === 'decomposition' ? '0 workers before gate' : lesson === 'agent_tool' ? 'declared scope only' : lesson === 'observability' ? 'p95 ≤ 1200ms' : lesson === 'durable' ? '0 repeated tool calls' : lesson === 'saga' ? `${sagaTerminal?.open_paper_effects ?? '—'} open paper effects` : `${releaseGate?.metrics?.p95_latency_ms ?? '—'}ms · ${releaseGate?.metrics?.tokens_per_run ?? '—'} tok`;
+    const events = state.events.filter(event => /task_graph_|dynamic_|manager_|agent_tool_|span_|slo_|durable_|checkpoint_|task_restored|unfinished_task|resume_|recovery_|saga_|compensation_|reconciliation_|release_|shadow_|canary_/.test(event.event)).slice(-6);
     const list = byId('pattern-events');
     list.replaceChildren();
     (events.length ? events : [{ event: '等待运行', task_id: '—' }]).forEach(event => list.append(element('li', '', `${event.task_id} · ${event.event.replaceAll('_', ' ')}`)));
@@ -608,11 +653,11 @@
       byId('ledger-status').dataset.state = state.result?.eval?.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = 'gross DV01 ' + summary.gross_dv01_usd_per_bp + ' USD/bp · limits ' + paperPortfolio.violations.length + ' · realized P&L ' + summary.realized_pnl_usd;
     }
-    const advancedResult = state.result && ['rate_model_eval_lesson', 'rate_memory_lesson', 'rate_multi_agent_handoff_lesson', 'rate_supervisor_orchestration_lesson', 'rate_dynamic_task_graph_lesson', 'rate_agent_as_tool_lesson', 'rate_observability_slo_lesson'].includes(state.result.artifact_type) ? state.result : null;
+    const advancedResult = state.result && ['rate_model_eval_lesson', 'rate_memory_lesson', 'rate_multi_agent_handoff_lesson', 'rate_supervisor_orchestration_lesson', 'rate_dynamic_task_graph_lesson', 'rate_agent_as_tool_lesson', 'rate_observability_slo_lesson', 'rate_durable_workflow_lesson', 'rate_saga_compensation_lesson', 'rate_agent_release_lesson'].includes(state.result.artifact_type) ? state.result : null;
     if (advancedResult && byId('ledger-status')) {
       const regressions = advancedResult.eval.regressions || [];
       const checks = Object.entries(advancedResult.eval.checks || {});
-      const evalLabels = { rate_model_eval_lesson: 'MODEL EVAL', rate_memory_lesson: 'MEMORY EVAL', rate_multi_agent_handoff_lesson: 'HANDOFF EVAL', rate_supervisor_orchestration_lesson: 'ORCHESTRATION EVAL', rate_dynamic_task_graph_lesson: 'GRAPH EVAL', rate_agent_as_tool_lesson: 'DELEGATION EVAL', rate_observability_slo_lesson: 'SLO EVAL' };
+      const evalLabels = { rate_model_eval_lesson: 'MODEL EVAL', rate_memory_lesson: 'MEMORY EVAL', rate_multi_agent_handoff_lesson: 'HANDOFF EVAL', rate_supervisor_orchestration_lesson: 'ORCHESTRATION EVAL', rate_dynamic_task_graph_lesson: 'GRAPH EVAL', rate_agent_as_tool_lesson: 'DELEGATION EVAL', rate_observability_slo_lesson: 'SLO EVAL', rate_durable_workflow_lesson: 'RECOVERY EVAL', rate_saga_compensation_lesson: 'SAGA EVAL', rate_agent_release_lesson: 'RELEASE EVAL' };
       byId('check-label').textContent = evalLabels[advancedResult.artifact_type];
       byId('ledger-status').textContent = advancedResult.eval.passed ? 'PASS · CONTRACT PRESERVED' : 'REGRESSION · CANDIDATE BLOCKED';
       byId('ledger-status').dataset.state = advancedResult.eval.passed ? 'pass' : 'error';
