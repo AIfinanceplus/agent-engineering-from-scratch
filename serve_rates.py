@@ -809,7 +809,7 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Operations Studio · RATE-CONSOLE-V23-ADVANCED-LESSONS")
+    print("Agent Operations Studio · RATE-CONSOLE-V26-AGENT-HANDOFF")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> LG1 ledger reconcile -> E1")
