@@ -30,7 +30,7 @@ EVENT_LOG = RateEventLog(os.environ.get("RATE_EVENT_DIR", os.path.join(tempfile.
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V19-PAPER-PORTFOLIO"
+    version_label = "RATE-CONSOLE-V20-MODEL-INTENT"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -218,7 +218,7 @@ class RateStrategyHandler(R12VisualizerHandler):
             return self._send_eval_json(400, {"ok": False, "error": {"message": "model_api_key must be a non-empty string"}})
         parallel = mode == "parallel"
         default_budget = (1000 if scenario in {"deadline", "late_result"}
-                          else 120000 if scenario in {"live", "approval_interactive",
+                          else 120000 if scenario in {"live", "model_live", "intent_live", "approval_interactive",
                                                        "approval_durable_restart",
                                                        "approval_durable_stale",
                                                        "lease_failover", "lease_renewal",
@@ -761,7 +761,7 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V19-PAPER-PORTFOLIO")
+    print("Agent Workflow · Graph & Live Stream · RATE-CONSOLE-V20-MODEL-INTENT")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> LG1 ledger reconcile -> E1")
