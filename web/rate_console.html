@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=19">
-  <script defer src="/rate_console_core.js?v=19"></script>
-  <script defer src="/rate_console.js?v=19"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=20">
+  <script defer src="/rate_console_core.js?v=20"></script>
+  <script defer src="/rate_console.js?v=20"></script>
 </head>
 <body>
   <header class="topbar">
@@ -34,6 +34,7 @@
           <label>持有窗口 <span>有效观测日</span><input name="holding_days" type="number" value="20" min="1" step="1" required></label>
           <label>DV01 <span>USD / bp</span><input name="dv01_usd_per_bp" type="number" value="100" min="0.01" step="any" required></label>
           <label>往返成本 <span>bp</span><input name="round_trip_cost_bps" type="number" value="1" min="0" step="any" required></label>
+          <label>OpenAI API Key <span>仅 model_live 本次请求使用，不保存</span><input id="model-api-key" name="model_api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…"></label>
         </form>
       </details>
       <button class="run-button" id="run-button" type="button"><span aria-hidden="true">▶</span> Run Agent</button>
