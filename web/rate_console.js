@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
+  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
   const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', abstained: '主动停止', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
   let state = createState('parallel');
@@ -20,7 +20,7 @@
     decision: ['决策流', '策略提议 → 独立验约 → 已批准合约 → 固定 Runtime', '每位 Agent 只决定自己职责内的事情，接收方必须重新验证。'],
     risk: ['风控流', 'Claims / Evidence → Contract Gate → ALLOW 或 BLOCK → Audit', '拒绝路径停在风险主管，执行主管保持未激活，副作用为零。'],
   };
-  const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject']);
+  const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject', 'orchestration_normal', 'orchestration_revision', 'orchestration_timeout_reassign', 'orchestration_loop_block', 'orchestration_authority_block']);
   const lessonCopy = {
     eval: {
       title: 'Model Evals · Golden Trace', detail: '判断候选模型行为是否仍满足已批准合约。',
@@ -43,14 +43,22 @@
       watchTitle: '接受后激活，拒绝则下游不启动', watch: '合法合约逐级传递；越权 automatic_execution 会被 Risk 拒绝且副作用为零。',
       overview: 'Role Contract → Handoff Envelope → Recipient Validation → Activation / Reject',
     },
+    orchestration: {
+      title: 'Supervisor · Multi-Agent Orchestration', detail: '让独立编排层管理任务所有权、Revision、超时与预算，而不获得业务执行权。',
+      whyTitle: 'Handoff 解决交接格式，Supervisor 解决下一步由谁负责', why: '真实团队会遇到退回、超时和重复循环；没有编排政策，Agent 容易失去所有权边界或无限消耗预算。',
+      howTitle: 'Assign → Observe → Return / Reassign → Complete / Stop', how: '每次决策都记录责任人、理由、所有权版本和剩余预算；任何时刻只能有一个 Owner。',
+      watchTitle: '所有权先撤销，再重分配', watch: '重点观察 ASSIGN、RETURN、REASSIGN 和 STOP；Supervisor 不能改策略、批风险或执行 Tool。',
+      overview: 'Goal → Supervisor Policy → Single Owner → Bounded Decision → Safe Terminal',
+    },
   };
   const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'model_live', 'intent_live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
 
-  const lessonForScenario = scenario => scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : 'eval';
+  const lessonForScenario = scenario => scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : scenario.startsWith('orchestration_') ? 'orchestration' : 'eval';
   function sourceNote(scenario) {
     if (scenario.startsWith('eval_')) return '可重复模型候选 · Golden Trace 比较语义行为 · 回归失败阻止升级';
     if (scenario.startsWith('memory_')) return '短期状态仅本次 Run · 长期记忆先脱敏并绑定来源 · 无敏感值进入 Trace';
     if (scenario.startsWith('handoff_')) return '确定性教学 Agent · 接收方独立验约 · 仍为 2s10s paper_only';
+    if (scenario.startsWith('orchestration_')) return '确定性 Supervisor · 单一任务所有者 · 有界 Revision / Token · 无执行权限';
     if (scenario === 'live') return '公开数据 · 无延时或故障注入';
     if (scenario === 'execution_race') return '纸面成交事件 · 持久化后发送 · 重复 fill 去重';
     if (scenario === 'paper_fill_accounting') return '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L';
@@ -76,6 +84,8 @@
     const needsKey = ['model_live', 'intent_live'].includes(scenario);
     byId('model-key-field').hidden = !needsKey;
     byId('key-session').hidden = !needsKey;
+    byId('orchestration-panel').hidden = lesson !== 'orchestration';
+    byId('handoff').hidden = lesson === 'orchestration';
     byId('source-note').textContent = sourceNote(scenario);
     if (!state.runId && lesson) {
       byId('overview-title').textContent = copy.title.split(' · ')[0];
@@ -121,14 +131,15 @@
     if (text !== undefined) el.textContent = text;
     return el;
   }
-  const definitions = () => state.mode === 'parallel' ? PARALLEL_NODES : NODES;
+  const definitions = () => state.mode === 'parallel' ? PARALLEL_NODES : state.mode === 'orchestration' ? ORCHESTRATION_NODES : NODES;
   function buildGraph() {
     nodeElements.clear();
     edgeElements.length = 0;
     byId('graph-nodes').replaceChildren();
     byId('graph-nodes').classList.toggle('parallel-graph', state.mode === 'parallel');
+    byId('graph-nodes').classList.toggle('orchestration-graph', state.mode === 'orchestration');
     byId('node-count').textContent = `${definitions().length} nodes`;
-    const graphRows = state.mode === 'parallel' ? PARALLEL_ROWS : NODES.map(n => [n.id]);
+    const graphRows = state.mode === 'parallel' ? PARALLEL_ROWS : state.mode === 'orchestration' ? ORCHESTRATION_ROWS : NODES.map(n => [n.id]);
     graphRows.forEach((ids, index) => {
       const row = element('div', ids.length > 1 ? 'graph-row branch-row' : 'graph-row');
       byId('graph-nodes').append(row);
@@ -315,6 +326,38 @@
     }
   }
 
+  function updateOrchestration() {
+    const panel = byId('orchestration-panel');
+    if (panel.hidden) return;
+    const started = state.events.find(event => event.event === 'orchestration_started');
+    const ownership = state.events.filter(event => event.event === 'task_ownership_changed').at(-1);
+    const revoked = state.events.filter(event => event.event === 'task_ownership_revoked').at(-1);
+    const decisions = state.events.filter(event => event.event === 'orchestration_decision_recorded');
+    const lastDecision = decisions.at(-1);
+    const budget = state.events.filter(event => event.event === 'orchestration_budget_updated').at(-1) || lastDecision?.budget;
+    const policy = started?.policy || { max_assignments: 5, max_revisions: 2, token_budget: 1200 };
+    const owner = lastDecision?.action === 'STOP' || lastDecision?.action === 'COMPLETE' ? '已释放' : revoked && (!ownership || revoked.sequence > ownership.sequence) ? '已撤销' : ownership?.to_owner || '—';
+    byId('orchestration-policy').textContent = started ? `single_owner · ${policy.deadline_ms}ms deadline` : '等待编排策略';
+    byId('orchestration-owner').textContent = owner;
+    byId('orchestration-action').textContent = lastDecision?.action || '—';
+    byId('orchestration-assignments').textContent = `${budget?.assignments || 0} / ${policy.max_assignments}`;
+    byId('orchestration-revisions').textContent = `${budget?.revisions || 0} / ${policy.max_revisions}`;
+    byId('orchestration-tokens').textContent = `${budget?.tokens_used || 0} / ${policy.token_budget}`;
+    const list = byId('orchestration-decisions');
+    list.replaceChildren();
+    if (!decisions.length) {
+      list.append(element('li', '', '运行后逐条显示 ASSIGN、RETURN、REASSIGN、STOP 或 COMPLETE。'));
+      return;
+    }
+    decisions.forEach((decision, index) => {
+      const item = element('li');
+      item.dataset.action = decision.action;
+      item.append(element('b', '', `${String(index + 1).padStart(2, '0')} · ${decision.action}`),
+        element('small', '', `${decision.from_owner || 'Supervisor'} → ${decision.to_owner || '释放'} · ${decision.reason}`));
+      list.append(item);
+    });
+  }
+
   function updateStudio() {
     const relevantHandoffs = state.events.map(handoffForEvent).filter(Boolean).filter(handoff => handoff.flow === flowMode);
     for (const role of STUDIO_ROLES) {
@@ -338,6 +381,7 @@
     renderHandoffs();
     updateHandoffJourney();
     updateModelInspector();
+    updateOrchestration();
   }
 
   function addDetails(row, label, payload) {
@@ -379,6 +423,13 @@
     if (name === 'handoff_rejected') return { phase: 'HANDOFF GATE', state: '状态：接收方拒绝', effect: `副作用：${event.effect_count} 次` };
     if (name === 'handoff_accepted') return { phase: 'HANDOFF', state: '状态：合约已接受', effect: '下游：允许激活' };
     if (name === 'handoff_validation_completed') return { phase: 'CONTRACT', state: `状态：${event.passed ? '通过' : '拒绝'}`, effect: event.passed ? '下游：待激活' : '下游：不启动' };
+    if (name === 'orchestration_decision_recorded') return { phase: 'SUPERVISOR', state: `决策：${event.action}`, effect: `Owner：${event.to_owner || '已释放'}` };
+    if (name === 'task_ownership_changed') return { phase: 'OWNERSHIP', state: `Owner：${event.to_owner}`, effect: `版本：v${event.ownership_version}` };
+    if (name === 'task_returned_for_revision') return { phase: 'REVISION', state: `第 ${event.revision} 次退回`, effect: '下游：重新验约' };
+    if (name === 'agent_timeout_detected') return { phase: 'TIMEOUT', state: '状态：未提交输出', effect: '所有权：待撤销' };
+    if (name === 'orchestration_loop_detected') return { phase: 'LOOP GUARD', state: `重复：${event.occurrences} 次`, effect: '下游：STOP' };
+    if (name === 'orchestration_authority_violation_detected') return { phase: 'AUTHORITY GATE', state: '状态：越权已拒绝', effect: `副作用：${event.effect_count} 次` };
+    if (name === 'orchestration_stopped') return { phase: 'SAFE STOP', state: `原因：${event.reason}`, effect: `副作用：${event.effect_count} 次` };
     if (name === 'ledger_mismatch_detected') return { phase: 'RECONCILIATION FAILURE', state: '状态：账本不一致', effect: '下游：E1 被阻断' };
     if (name === 'ledger_reconciliation_completed') return { phase: 'RECONCILIATION', state: '状态：已对账', effect: `事件：${event.event_count ?? 0} 个` };
     if (name === 'ledger_event_appending' || name === 'ledger_event_appended') return { phase: 'PERSIST', state: `状态：${event.event_type}`, effect: '副作用：纸面账本 · fsync' };
@@ -456,11 +507,11 @@
       byId('ledger-status').dataset.state = state.result?.eval?.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = 'gross DV01 ' + summary.gross_dv01_usd_per_bp + ' USD/bp · limits ' + paperPortfolio.violations.length + ' · realized P&L ' + summary.realized_pnl_usd;
     }
-    const advancedResult = state.result && ['rate_model_eval_lesson', 'rate_memory_lesson', 'rate_multi_agent_handoff_lesson'].includes(state.result.artifact_type) ? state.result : null;
+    const advancedResult = state.result && ['rate_model_eval_lesson', 'rate_memory_lesson', 'rate_multi_agent_handoff_lesson', 'rate_supervisor_orchestration_lesson'].includes(state.result.artifact_type) ? state.result : null;
     if (advancedResult && byId('ledger-status')) {
       const regressions = advancedResult.eval.regressions || [];
       const checks = Object.entries(advancedResult.eval.checks || {});
-      byId('check-label').textContent = advancedResult.artifact_type === 'rate_model_eval_lesson' ? 'MODEL EVAL' : advancedResult.artifact_type === 'rate_memory_lesson' ? 'MEMORY EVAL' : 'HANDOFF EVAL';
+      byId('check-label').textContent = advancedResult.artifact_type === 'rate_model_eval_lesson' ? 'MODEL EVAL' : advancedResult.artifact_type === 'rate_memory_lesson' ? 'MEMORY EVAL' : advancedResult.artifact_type === 'rate_multi_agent_handoff_lesson' ? 'HANDOFF EVAL' : 'ORCHESTRATION EVAL';
       byId('ledger-status').textContent = advancedResult.eval.passed ? 'PASS · CONTRACT PRESERVED' : 'REGRESSION · CANDIDATE BLOCKED';
       byId('ledger-status').dataset.state = advancedResult.eval.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = regressions.length ? regressions.join(' · ') : checks.map(([name, passed]) => `${passed ? '✓' : '✂'} ${name}`).join(' · ');
@@ -684,7 +735,7 @@
   byId('forget-model-key').addEventListener('click', clearSessionKey);
   byId('load-archive-scenario').addEventListener('click', selectArchivedScenario);
   byId('scenario').addEventListener('change', () => {
-    if (byId('scenario').value.startsWith('handoff_')) {
+    if (byId('scenario').value.startsWith('handoff_') || byId('scenario').value.startsWith('orchestration_')) {
       flowMode = 'decision';
       document.querySelectorAll('.flow-tab').forEach(tab => {
         const selected = tab.dataset.flow === flowMode;
