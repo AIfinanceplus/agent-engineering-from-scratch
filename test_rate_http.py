@@ -10,6 +10,8 @@ from rate_agent import RateStrategyAgent
 from rate_parallel import RateParallelAgent, prepare_rate_series
 from rate_sources import FredCurveHistorySource
 from rate_event_log import RateEventLog
+from rate_advanced_lessons import (ADVANCED_SCENARIOS, JsonlRateMemoryStore,
+                                   RateAdvancedLessons)
 import serve_rates
 from serve_rates import RateStrategyHandler
 from test_rate_strategy import completed_steepener_history
@@ -30,6 +32,11 @@ class RateHTTPTests(unittest.TestCase):
         self.event_directory = tempfile.TemporaryDirectory(prefix="rate-event-log-test-")
         self.event_patch = patch.object(serve_rates, "EVENT_LOG", RateEventLog(self.event_directory.name))
         self.event_patch.start()
+        self.memory_directory = tempfile.TemporaryDirectory(prefix="rate-memory-test-")
+        self.advanced_patch = patch.object(
+            serve_rates, "ADVANCED_LESSONS",
+            RateAdvancedLessons(JsonlRateMemoryStore(self.memory_directory.name)))
+        self.advanced_patch.start()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), QuietRateHandler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -41,7 +48,9 @@ class RateHTTPTests(unittest.TestCase):
         self.thread.join(timeout=2)
         self.patch.stop()
         self.event_patch.stop()
+        self.advanced_patch.stop()
         self.event_directory.cleanup()
+        self.memory_directory.cleanup()
 
     def post(self, payload, path="/api/rates/run-once"):
         connection = http.client.HTTPConnection(self.host, self.port, timeout=5)
@@ -63,6 +72,19 @@ class RateHTTPTests(unittest.TestCase):
         body = json.dumps(payload).encode("utf-8")
         connection.request(
             "POST", "/api/rates/stream", body=body,
+            headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
+        )
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        headers = dict(response.getheaders())
+        connection.close()
+        return response.status, headers, [json.loads(line) for line in raw.splitlines()]
+
+    def post_advanced(self, scenario):
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=10)
+        body = json.dumps({"demo_scenario": scenario}).encode("utf-8")
+        connection.request(
+            "POST", "/api/rates/advanced-lesson", body=body,
             headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
         )
         response = connection.getresponse()
@@ -123,6 +145,18 @@ class RateHTTPTests(unittest.TestCase):
         self.assertIn("application/json", headers["Content-Type"])
         self.assertEqual(headers["Connection"], "close")
 
+    def test_advanced_lessons_stream_persisted_events_and_full_result(self):
+        for scenario in sorted(ADVANCED_SCENARIOS):
+            status, headers, messages = self.post_advanced(scenario)
+            self.assertEqual(status, 200, scenario)
+            self.assertIn("application/x-ndjson", headers["Content-Type"])
+            self.assertEqual(messages[0]["type"], "start")
+            self.assertEqual(messages[-1]["type"], "result")
+            streamed = [row["event"] for row in messages if row["type"] == "event"]
+            self.assertEqual(streamed, messages[-1]["result"]["trace"])
+            self.assertEqual(streamed[-1]["event"], "run_completed")
+            self.assertFalse(messages[-1]["result"]["guardrails"]["automatic_execution"])
+
     def test_stream_emits_start_events_and_result(self):
         status, headers, messages = self.post_stream({})
         self.assertEqual(status, 200)
@@ -161,8 +195,8 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=23", html)
-        self.assertIn("rate_console_core.js?v=23", html)
+        self.assertIn("rate_console.js?v=24", html)
+        self.assertIn("rate_console_core.js?v=24", html)
         self.assertIn("Agent Operations Studio", html)
         self.assertIn("id=\"lesson-archive\"", html)
         self.assertIn("默认收起", html)
