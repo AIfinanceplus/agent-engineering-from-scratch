@@ -39,6 +39,47 @@
     NODES[5]
   ];
   const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['O1'], ['LG1'], ['E1']];
+  const STUDIO_ROLES = [
+    { id: 'principal', name: '任务委托人', type: '人工', icon: '你', tasks: ['G1', 'H1'], idle: '提出目标，保留最终批准权' },
+    { id: 'model', name: '模型顾问', type: 'LLM', icon: 'M', tasks: ['M1'], idle: '等待受限模型请求' },
+    { id: 'runtime', name: '执行主管', type: '规则程序', icon: 'R', tasks: ['CT1', 'MR1', 'P1', 'R1'], idle: '校验提议并调度固定任务图' },
+    { id: 'data', name: '数据专员', type: '工具', icon: 'D', tasks: ['RG1', 'D1', 'A2', 'A10', 'J1', 'S1'], idle: '获取、准备并计算纸面结果' },
+    { id: 'risk', name: '风控专员', type: '规则程序', icon: '盾', tasks: ['CG1', 'TG1', 'L1', 'H1', 'AZ1', 'C1', 'V1', 'Q1'], idle: '检查来源、权限、容量与风险边界' },
+    { id: 'auditor', name: '账本审计员', type: '规则程序', icon: '审', tasks: ['O1', 'LG1', 'E1'], idle: '持久化、重放、对账与评估' },
+  ];
+  const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
+  const DECISION_EVENT = /(model_intent|model_plan|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|join_|run_completed)/;
+  function flowForEvent(event) {
+    const name = event?.event || '';
+    if (RISK_EVENT.test(name)) return 'risk';
+    if (DECISION_EVENT.test(name)) return 'decision';
+    return 'information';
+  }
+  function roleForEvent(event) {
+    const task = event?.task_id;
+    if (event?.event === 'model_response_received') return 'model';
+    const role = STUDIO_ROLES.find(candidate => candidate.tasks.includes(task));
+    return role?.id || 'runtime';
+  }
+  function handoffForEvent(event) {
+    const name = event?.event || '';
+    const flow = flowForEvent(event);
+    if (name === 'goal_received') return { from: 'principal', to: 'runtime', flow, title: '提交教学目标' };
+    if (name === 'context_pack_created' || name === 'model_request_started') return { from: 'runtime', to: 'model', flow: 'information', title: name === 'context_pack_created' ? '交付 Context Pack' : '请求模型提出受限提议' };
+    if (name === 'model_response_received') return { from: 'model', to: 'runtime', flow: 'information', title: '返回未经信任的模型输出' };
+    if (['model_intent_accepted', 'model_plan_accepted'].includes(name)) return { from: 'runtime', to: 'data', flow: 'decision', title: name === 'model_intent_accepted' ? 'Intent 通过，准备映射固定任务图' : '模型 Plan 通过 Runtime 校验' };
+    if (name === 'model_repair_requested') return { from: 'runtime', to: 'model', flow: 'decision', title: '请求一次有界修复' };
+    if (name === 'plan_created') return { from: 'runtime', to: 'data', flow: 'decision', title: '下发 Runtime 固定任务图' };
+    if (name === 'tool_execution_started') return { from: 'runtime', to: 'data', flow: 'information', title: `调用 ${event.tool_name || 'Tool'}` };
+    if (name === 'tool_observation') return { from: 'data', to: 'runtime', flow: 'information', title: `返回 ${event.tool_name || 'Tool'} Observation` };
+    if (name === 'human_approval_requested') return { from: 'risk', to: 'principal', flow: 'risk', title: '请求一次人工批准' };
+    if (name === 'human_approval_resolved') return { from: 'principal', to: 'risk', flow: 'risk', title: `人工决定：${event.decision || '已提交'}` };
+    if (RISK_EVENT.test(name) && /(completed|rejected|blocked|verified|detected|resolved)/.test(name)) return { from: 'risk', to: 'runtime', flow: 'risk', title: name.replaceAll('_', ' ') };
+    if (name === 'ledger_event_appended') return { from: 'data', to: 'auditor', flow: 'information', title: `纸面事件已持久化：${event.event_type || 'event'}` };
+    if (name === 'ledger_reconciliation_completed') return { from: 'auditor', to: 'runtime', flow: 'risk', title: event.passed ? '重放对账通过' : '重放对账失败' };
+    if (name === 'run_completed') return { from: 'runtime', to: 'principal', flow: 'decision', title: '交付完整运行终态' };
+    return null;
+  }
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
@@ -470,5 +511,5 @@
       default: return common;
     }
   }
-  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe };
+  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe };
 });
