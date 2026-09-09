@@ -301,10 +301,21 @@
     const form = byId('parameters');
     if (!form.checkValidity()) { byId('settings').open = true; form.reportValidity(); return; }
     const config = Object.fromEntries(new FormData(form).entries());
-    for (const key of Object.keys(config)) config[key] = Number(config[key]);
+    const modelApiKey = String(config.model_api_key || '').trim();
+    delete config.model_api_key;
+    for (const key of ['lookback_days', 'entry_z', 'holding_days', 'dv01_usd_per_bp', 'round_trip_cost_bps']) config[key] = Number(config[key]);
     config.execution_mode = 'parallel';
     config.demo_scenario = byId('scenario').value;
     config.budget_ms = scenarioBudget();
+    if (config.demo_scenario === 'model_live') {
+      if (!modelApiKey) {
+        byId('settings').open = true;
+        byId('model-api-key').focus();
+        return;
+      }
+      config.model_api_key = modelApiKey;
+      byId('model-api-key').value = '';
+    }
     cancelPending = false;
     cancelNote = '';
     inFlight = true;
