@@ -167,9 +167,9 @@
     const paperPortfolio = state.result?.paper_portfolio;
     if (paperPortfolio && byId('ledger-status')) {
       const summary = paperPortfolio.summary;
-      byId('ledger-status').textContent = paperPortfolio.risk_status + ' · OPEN ' + summary.unsettled_trade_count + ' · LEG RISK ' + summary.total_leg_risk_quantity;
+      byId('ledger-status').textContent = paperPortfolio.risk_status + ' · 2S10S OPEN ' + summary.open_curve_trade_count + ' · NET DV01 ' + summary.net_parallel_dv01_usd_per_bp + ' USD/bp';
       byId('ledger-status').dataset.state = state.result?.eval?.passed ? 'pass' : 'error';
-      byId('ledger-diff').textContent = 'unsettled cost ' + summary.unsettled_acquisition_cost + ' · limits ' + paperPortfolio.violations.length + ' · realized P&L ' + summary.realized_pnl;
+      byId('ledger-diff').textContent = 'gross DV01 ' + summary.gross_dv01_usd_per_bp + ' USD/bp · limits ' + paperPortfolio.violations.length + ' · realized P&L ' + summary.realized_pnl_usd;
     }
   }
   function update() {
@@ -315,7 +315,7 @@
     byId('event-list').replaceChildren();
     byId('settings').open = false;
     byId('follow').checked = true;
-    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : config.demo_scenario === 'execution_race' ? '纸面成交事件 · 持久化后发送 · 重复 fill 去重' : config.demo_scenario === 'paper_fill_accounting' ? '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L' : config.demo_scenario === 'paper_portfolio_risk' ? '纸面组合投影 · 限额预检 · 拦截不写入账本' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : config.demo_scenario === 'execution_race' ? '纸面成交事件 · 持久化后发送 · 重复 fill 去重' : config.demo_scenario === 'paper_fill_accounting' ? '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L' : config.demo_scenario === 'paper_portfolio_risk' ? '2s10s 纸面组合投影 · 净平行 DV01 限额 · 拦截不写入账本' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
     update();
     try {
       const endpoint = config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : config.demo_scenario === 'paper_fill_accounting' ? '/api/rates/paper-fill' : config.demo_scenario === 'paper_portfolio_risk' ? '/api/rates/paper-portfolio' : '/api/rates/stream';
