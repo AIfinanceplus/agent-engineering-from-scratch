@@ -3,22 +3,22 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Agent Workflow · Graph &amp; Live Stream</title>
+  <title>Agent Operations Studio · 2s10s Paper Lab</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=21">
-  <script defer src="/rate_console_core.js?v=21"></script>
-  <script defer src="/rate_console.js?v=21"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=22">
+  <script defer src="/rate_console_core.js?v=22"></script>
+  <script defer src="/rate_console.js?v=22"></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Workflow</h1><p>Paper Ledger Reconciliation <span>/</span> 2s10s 教学策略 · 仅模拟 · 部分成交实验</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Operations Studio</h1><p>观察模型、Runtime、Tools 与 Guardrails 如何协作 <span>/</span> 2s10s 仅作纸面教学场景</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
         <optgroup label="本课：Paper Ledger Reconciliation"><option value="live">正常运行 · 写入、重放并对账</option><option value="ledger_mismatch">故障演示 · 篡改账本后阻断 E1</option></optgroup>
         <optgroup label="本课：部分成交与取消竞态"><option value="execution_race">确认丢失 · 部分成交、取消竞态与去重</option></optgroup>
         <optgroup label="上一课：Paper Fill Accounting"><option value="paper_fill_accounting">报价不是成交 · 纸面成交、对冲风险与已实现 P&amp;L</option></optgroup>
         <optgroup label="本课：Paper Portfolio Risk"><option value="paper_portfolio_risk">组合限额 · 原子预检 · 纸面风险容量</option></optgroup>
-        <optgroup label="本课：可选真实 Model Adapter"><option value="intent_live">本地 OpenAI Key · 受限 Intent，Runtime 映射固定任务图</option><option value="model_live">本地 OpenAI Key · 模型只提议，Runtime 决定</option></optgroup>
+        <optgroup label="本课：可选真实 Model Adapter"><option value="intent_live" selected>本地 OpenAI Key · 受限 Intent，Runtime 映射固定任务图</option><option value="model_live">本地 OpenAI Key · 模型只提议，Runtime 决定</option></optgroup>
         <optgroup label="上一课：Replayable Event Stream"><option value="outbox_retry">先完成一次 Outbox Run，再重放事件</option><option value="outbox_fenced">先完成一次 Fencing Run，再重放事件</option></optgroup>
         <optgroup label="上一课：Lease &amp; Fencing"><option value="lease_failover">Runtime A 失联 · Runtime B 接管</option><option value="lease_renewal">Runtime A 续租 · 保持执行权</option></optgroup>
         <optgroup label="上一课：Durable Approval"><option value="approval_durable_restart">批准后重启 · 从磁盘恢复并继续</option><option value="approval_durable_stale">参数已变化 · 旧批准失效</option></optgroup>
@@ -45,7 +45,40 @@
   <main>
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
     <section class="approval-panel" id="approval-panel" aria-live="assertive" hidden><div class="approval-copy"><span>H1 · HUMAN APPROVAL REQUIRED</span><strong id="approval-tool">—</strong><small id="approval-fingerprint">—</small></div><div class="approval-actions"><button class="deny-button" id="deny-button" type="button">Deny</button><button class="approve-button" id="approve-button" type="button">Approve once</button></div></section>
-    <div class="workspace">
+    <section class="agent-studio" aria-labelledby="studio-title">
+      <div class="studio-heading">
+        <div><span class="eyebrow">LIVE ORGANIZATION</span><h2 id="studio-title">Agent 工作室</h2><p>角色是系统职责；只有标记为 LLM 的角色调用大模型。</p></div>
+        <div class="flow-switcher" role="tablist" aria-label="选择信息流视图">
+          <button class="flow-tab active" type="button" role="tab" aria-selected="true" data-flow="information"><i></i>信息流</button>
+          <button class="flow-tab" type="button" role="tab" aria-selected="false" data-flow="decision"><i></i>决策流</button>
+          <button class="flow-tab" type="button" role="tab" aria-selected="false" data-flow="risk"><i></i>风控流</button>
+        </div>
+      </div>
+      <div class="studio-layout">
+        <div class="office-board">
+          <div class="flow-route" id="flow-route" data-flow="information" aria-live="polite">
+            <span class="route-label">信息流</span><strong id="flow-route-title">Goal → Context → Intent → Observation → Result</strong><small id="flow-route-detail">点击角色查看它参与的原始事件；亮起状态全部来自 Trace。</small>
+          </div>
+          <div class="role-grid" id="role-grid" aria-label="Agent 角色与实时状态"></div>
+          <div class="handoff-panel">
+            <div class="handoff-heading"><div><span class="eyebrow">KEY HANDOFFS</span><strong>角色交接记录</strong></div><span id="handoff-count">0 个关键交接</span></div>
+            <ol class="handoff-list" id="handoff-list"><li class="handoff-empty">运行后，这里只显示影响信息、决策或风险边界的关键交接。</li></ol>
+          </div>
+        </div>
+        <aside class="model-inspector" aria-labelledby="model-inspector-title">
+          <div class="inspector-heading"><div><span class="eyebrow">LLM INSPECTOR</span><h3 id="model-inspector-title">模型顾问</h3></div><span class="authority-badge">仅提议</span></div>
+          <div class="model-presence"><span class="model-avatar" aria-hidden="true">M</span><div><strong id="model-name">尚未调用模型</strong><small id="model-presence-detail">真实 LLM 与教学模型都会明确标记</small></div></div>
+          <section class="inspector-card"><span>01 · 收到什么</span><strong id="model-input-title">等待 Model Input</strong><pre id="model-input">本次运行尚未向模型发送内容。</pre></section>
+          <section class="inspector-card"><span>02 · 提出什么</span><strong id="model-output-title">等待 Raw Output</strong><pre id="model-output">模型输出在 Runtime 校验前始终是不可信文本。</pre></section>
+          <section class="inspector-card"><span>03 · 谁决定</span><strong id="model-authority">Runtime 保留最终权限</strong><p id="model-decision">模型不能直接选择 Tool、修改执行参数或创建订单。</p></section>
+          <div class="model-metrics"><span><b id="model-call-count">0</b><small>calls</small></span><span><b id="model-repair-count">0</b><small>repairs</small></span><span><b id="model-output-size">—</b><small>output chars</small></span></div>
+        </aside>
+      </div>
+    </section>
+
+    <details class="engineering-details" id="engineering-details">
+      <summary><span><b>工程检查台</b><small>完整 DAG、所有 NDJSON 事件、原始参数与结果</small></span><i>展开</i></summary>
+      <div class="workspace">
       <section class="graph-panel" aria-labelledby="graph-title">
         <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">23 nodes</span></div>
         <div class="graph-canvas"><div class="graph-nodes" id="graph-nodes" aria-label="Agent 工作流节点"></div></div>
@@ -78,8 +111,9 @@
         </div>
         <div class="stream-footer"><span id="stream-footer">准备接收真实运行事件</span><span class="protocol">NDJSON</span></div>
       </section>
-    </div>
-    <footer class="page-footer"><span>仅教学模拟 · 无真实订单</span><span id="source-note">数据来源及快照状态将在 D1 结果中披露</span></footer>
+      </div>
+    </details>
+    <footer class="page-footer"><span>仅教学模拟 · 无真实订单</span><span id="source-note">真实模型仅提出受限 Intent；Runtime 保留映射与执行权限</span></footer>
   </main>
 </body>
 </html>
