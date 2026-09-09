@@ -211,8 +211,11 @@ class RateStrategyHandler(R12VisualizerHandler):
         streamed_events = []
         mode = request_data.get("execution_mode", "serial")
         scenario = request_data.get("demo_scenario", "live")
+        model_api_key = request_data.get("model_api_key")
         if mode not in ("serial", "parallel") or not isinstance(scenario, str) or scenario not in SCENARIOS:
             return self._send_eval_json(400, {"ok": False, "error": {"message": "invalid execution_mode or demo_scenario"}})
+        if model_api_key is not None and (not isinstance(model_api_key, str) or not model_api_key.strip()):
+            return self._send_eval_json(400, {"ok": False, "error": {"message": "model_api_key must be a non-empty string"}})
         parallel = mode == "parallel"
         default_budget = (1000 if scenario in {"deadline", "late_result"}
                           else 120000 if scenario in {"live", "approval_interactive",
@@ -257,7 +260,10 @@ class RateStrategyHandler(R12VisualizerHandler):
                  cancel_supported=parallel, budget_ms=control.budget_ms if control else None)
             agent = PARALLEL_RATE_AGENT if parallel else RATE_AGENT
             options = {"demo_scenario": scenario, "control": control,
-                       "approval_registry": APPROVALS} if parallel else {}
+                       "approval_registry": APPROVALS,
+                       # This one-shot value is intentionally absent from configuration,
+                       # trace, events, results, checkpoints, and replayed envelopes.
+                       "model_api_key": model_api_key} if parallel else {}
             run = agent.run_once(
                 run_id=run_id,
                 lookback_days=request_data.get("lookback_days", 60),
