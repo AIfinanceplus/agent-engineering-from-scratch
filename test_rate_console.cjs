@@ -564,3 +564,33 @@ test('paper portfolio risk blocks projected exposure before a ledger write', () 
   assert.equal(describe({ event: 'portfolio_fill_blocked', effect_count: 0, violations: [{ limit: 'max_abs_net_parallel_dv01_usd_per_bp', value: 110, maximum: 100 }] }).label, 'LIMIT BLOCKED');
   assert.equal(describe({ event: 'portfolio_fill_preflight' }).label, 'PREFLIGHT PASS');
 });
+
+test('advanced lessons reduce eval, memory, and handoff evidence into real node states', () => {
+  const state = createState('parallel');
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: 'advanced-run', type, ...payload });
+  applyMessage(state, message('start', { execution_mode: 'parallel' }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', {
+    event: { event, task_id, run_id: 'advanced-run', sequence: state.events.length + 1, timestamp: '2026-09-01T01:02:03.000Z', ...extras },
+  }));
+  emit('goal_received', 'G1');
+  emit('short_term_memory_created', 'CT1', { field_names: ['api_key'], contains_sensitive_fields: true });
+  emit('privacy_redaction_completed', 'TG1', { passed: true, redacted_fields: ['api_key'] });
+  emit('long_term_memory_written', 'LG1', { memory: { memory_id: 'm1' } });
+  emit('long_term_memory_retrieved', 'RG1', { memory: { scope: '2s10s_preferences' }, provenance: { source: 'explicit_user_session' } });
+  emit('handoff_contract_created', 'P1', { actor_role: 'strategy_analyst', recipient_role: 'risk_controller', handoff: {} });
+  emit('handoff_validation_completed', 'L1', { passed: true, reasons: [] });
+  emit('handoff_accepted', 'L1', { actor_role: 'risk_controller', sender_role: 'strategy_analyst' });
+  emit('model_regression_completed', 'E1', { passed: true, score: 1, threshold: 1, regressions: [] });
+  emit('eval_completed', 'E1', { passed: true, output: {} });
+  emit('run_completed', 'R1');
+  applyMessage(state, message('result', { result: { run_id: state.runId, trace: state.events, eval: { passed: true } } }));
+  assert.equal(state.nodes.CT1, 'running');
+  assert.equal(state.nodes.TG1, 'completed');
+  assert.equal(state.nodes.LG1, 'completed');
+  assert.equal(state.nodes.RG1, 'completed');
+  assert.equal(state.nodes.L1, 'completed');
+  assert.equal(state.nodes.E1, 'completed');
+  assert.equal(flowForEvent({ event: 'memory_write_blocked' }), 'risk');
+  assert.equal(flowForEvent({ event: 'handoff_contract_created' }), 'decision');
+  assert.equal(describe({ event: 'model_eval_assertion_checked', assertion: 'paper_only', passed: false }).label, 'ASSERT FAIL');
+});
