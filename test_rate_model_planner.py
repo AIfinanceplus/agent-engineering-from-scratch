@@ -150,6 +150,33 @@ class ModelPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(run["architecture"]["planner"], "validated_model_proposal")
         self.assertTrue(run["architecture"]["model_is_real_llm"])
 
+    def test_live_model_gets_one_bounded_semantic_contract_repair(self):
+        test_case = self
+
+        class Adapter:
+            model_name = "stub-live-model"
+            is_real_llm = True
+
+            def __init__(self, *, api_key):
+                del api_key
+                self.calls = 0
+
+            def complete(self, prompt, *, repair_error=None):
+                self.calls += 1
+                if self.calls == 1:
+                    self.assert_template = prompt["approved_template"]
+                    return json.dumps({"goal": "wrong shape", "tasks": []})
+                test_case.assertEqual(repair_error, "return one valid JSON object; do not add capabilities")
+                return json.dumps(self.assert_template)
+
+        with patch("rate_parallel.OpenAIRatePlanModel", Adapter):
+            run = self.agent().run_once(demo_scenario="model_live", model_api_key="ui-only-secret")
+        events = run["trace"]
+        self.assertEqual(sum(event["event"] == "model_request_started" for event in events), 2)
+        repair = next(event for event in events if event["event"] == "model_repair_requested")
+        self.assertEqual(repair["repair_kind"], "semantic_contract")
+        self.assertTrue(run["eval"]["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
