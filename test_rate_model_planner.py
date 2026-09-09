@@ -1,6 +1,7 @@
 from copy import deepcopy
 import json
 import unittest
+from unittest.mock import patch
 
 from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
                                 ModelPlanRejected, OpenAIRatePlanModel,
@@ -127,6 +128,27 @@ class ModelPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "MODEL_PROVIDER_UNAVAILABLE")
         self.assertTrue(any(e["event"] == "model_provider_failed" for e in caught.exception.trace))
         self.assertFalse(any(e["event"] == "tool_execution_started" for e in caught.exception.trace))
+
+    def test_ui_supplied_key_reaches_only_the_adapter_not_the_trace_or_configuration(self):
+        class Adapter:
+            model_name = "stub-live-model"
+            is_real_llm = True
+
+            def __init__(self, *, api_key):
+                self.api_key = api_key
+                self.calls = 0
+
+            def complete(self, prompt, *, repair_error=None):
+                del prompt, repair_error
+                self.calls += 1
+                return json.dumps(ModelPlanContractTests().valid_proposal())
+
+        with patch("rate_parallel.OpenAIRatePlanModel", Adapter):
+            run = self.agent().run_once(demo_scenario="model_live", model_api_key="ui-only-secret")
+        serialized_run = json.dumps(run)
+        self.assertNotIn("ui-only-secret", serialized_run)
+        self.assertEqual(run["architecture"]["planner"], "validated_model_proposal")
+        self.assertTrue(run["architecture"]["model_is_real_llm"])
 
 
 if __name__ == "__main__":
