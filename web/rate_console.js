@@ -14,12 +14,42 @@
   const nodeElements = new Map();
   const edgeElements = [];
   const roleElements = new Map();
+  const MODEL_KEY_SESSION = 'rate-console:model-api-key';
   const flowCopy = {
     information: ['信息流', 'Goal → Context → Intent → Observation → Result', '展示真正传递的数据；没有进入 Trace 的信息不会被画成已传递。'],
     decision: ['决策流', 'Model Proposal → Runtime Validation → Fixed Plan → Outcome', '区分模型提议与 Runtime 决定；模型不能直接启动 Tool。'],
     risk: ['风控流', 'Evidence → Guardrail → Allow / Block → Audit', '展示检查对象、规则与影响；被绕过的历史能力不会显示成已通过。'],
   };
   const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'model_live', 'intent_live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
+
+  function readSessionKey() {
+    try { return sessionStorage.getItem(MODEL_KEY_SESSION) || ''; } catch (_) { return ''; }
+  }
+  function writeSessionKey(value) {
+    try { sessionStorage.setItem(MODEL_KEY_SESSION, value); return true; } catch (_) { return false; }
+  }
+  function clearSessionKey() {
+    try { sessionStorage.removeItem(MODEL_KEY_SESSION); } catch (_) { /* storage can be disabled */ }
+    byId('model-api-key').value = '';
+    updateKeyStatus();
+  }
+  function updateKeyStatus() {
+    const remembered = Boolean(readSessionKey());
+    byId('key-session-status').textContent = remembered ? 'Key 已在本标签页会话中记住' : '本标签页尚未记住 Key';
+    byId('key-session-status').dataset.saved = String(remembered);
+    byId('forget-model-key').disabled = !remembered;
+  }
+  function selectArchivedScenario() {
+    const archive = byId('archive-scenario');
+    const selected = archive.options[archive.selectedIndex];
+    const scenario = byId('scenario');
+    scenario.querySelector('option[data-archive="true"]')?.remove();
+    const option = new Option(`历史 · ${selected.textContent}`, selected.value, true, true);
+    option.dataset.archive = 'true';
+    scenario.append(option);
+    byId('lesson-archive').open = false;
+    scenario.dispatchEvent(new Event('change'));
+  }
 
   function element(tag, className, text) {
     const el = document.createElement(tag);
@@ -437,7 +467,8 @@
     const form = byId('parameters');
     if (!form.checkValidity()) { byId('settings').open = true; form.reportValidity(); return; }
     const config = Object.fromEntries(new FormData(form).entries());
-    const modelApiKey = String(config.model_api_key || '').trim();
+    const enteredModelApiKey = String(config.model_api_key || '').trim();
+    const modelApiKey = enteredModelApiKey || readSessionKey();
     delete config.model_api_key;
     for (const key of ['lookback_days', 'entry_z', 'holding_days', 'dv01_usd_per_bp', 'round_trip_cost_bps']) config[key] = Number(config[key]);
     config.execution_mode = 'parallel';
@@ -449,8 +480,10 @@
         byId('model-api-key').focus();
         return;
       }
+      if (enteredModelApiKey) writeSessionKey(enteredModelApiKey);
       config.model_api_key = modelApiKey;
       byId('model-api-key').value = '';
+      updateKeyStatus();
     }
     cancelPending = false;
     cancelNote = '';
@@ -516,6 +549,8 @@
   byId('stop-button').addEventListener('click', requestStop);
   byId('approve-button').addEventListener('click', () => decideApproval('approve'));
   byId('deny-button').addEventListener('click', () => decideApproval('deny'));
+  byId('forget-model-key').addEventListener('click', clearSessionKey);
+  byId('load-archive-scenario').addEventListener('click', selectArchivedScenario);
   byId('scenario').addEventListener('change', () => {
     if (!state.runId) byId('source-note').textContent = byId('scenario').value === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
     update();
@@ -545,5 +580,6 @@
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
+  updateKeyStatus();
   update();
 })();
