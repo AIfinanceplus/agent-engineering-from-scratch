@@ -12,6 +12,7 @@ SAFE_RATE_TASKS = [
     {"task_id": "J1", "tool_name": "join_rate_series", "depends_on": ["A2", "A10"]},
     {"task_id": "S1", "tool_name": "simulate_one_curve_trade", "depends_on": ["J1"]},
 ]
+SAFE_RATE_INTENTS = {"RUN_2S10S_PAPER_SIMULATION", "ABSTAIN"}
 
 
 class ModelPlanParseError(ValueError):
@@ -24,6 +25,14 @@ class ModelPlanRejected(ValueError):
     def __init__(self, reasons):
         self.reasons = list(reasons)
         super().__init__("model plan rejected: " + "; ".join(self.reasons))
+
+
+class ModelIntentRejected(ValueError):
+    """A model intent failed the smaller Runtime-owned intent contract."""
+
+    def __init__(self, reasons):
+        self.reasons = list(reasons)
+        super().__init__("model intent rejected: " + "; ".join(self.reasons))
 
 
 class ScriptedRatePlanModel:
@@ -66,7 +75,7 @@ class OpenAIRatePlanModel:
     """Optional local OpenAI adapter that returns text for Runtime validation.
 
     The adapter never receives credentials in its prompt and cannot execute a
-    Tool.  It is only constructed for the explicit ``model_live`` scenario;
+    Tool.  It is only constructed for explicit ``model_live`` or ``intent_live`` scenarios;
     CI continues to exercise ``ScriptedRatePlanModel`` instead.
     """
 
@@ -80,7 +89,7 @@ class OpenAIRatePlanModel:
 
     def complete(self, prompt, *, repair_error=None):
         if not self._api_key:
-            raise RatePlanModelUnavailable("OPENAI_API_KEY is required for the model_live scenario")
+            raise RatePlanModelUnavailable("OPENAI_API_KEY is required for a live model scenario")
         if self._client is None:
             try:
                 from openai import OpenAI
@@ -91,7 +100,7 @@ class OpenAIRatePlanModel:
         request = {
             "role": "user",
             "content": json.dumps({
-                "instruction": "Return only one JSON object matching the response_contract. You only propose a plan; Runtime has final authority.",
+                "instruction": "Return only one JSON object matching the response_contract. You only make a proposal; Runtime has final authority.",
                 "prompt": prompt,
                 "repair_error": repair_error,
             }, sort_keys=True),
@@ -133,6 +142,26 @@ def build_plan_prompt(goal, allowed_tools):
     }
 
 
+def build_intent_prompt(goal):
+    """A narrower model contract: propose whether to start the fixed run."""
+    return {
+        "role": "rate_intent_proposer",
+        "goal": goal,
+        "response_contract": {
+            "format": "JSON object only",
+            "exact_fields": ["intent", "reason"],
+            "allowed_intents": sorted(SAFE_RATE_INTENTS),
+            "constraints": ["no tools", "no arguments", "no orders", "no markdown fences"],
+        },
+        "runtime_mapping": {
+            "RUN_2S10S_PAPER_SIMULATION": "Runtime maps this to its fixed paper-only task template",
+            "ABSTAIN": "Runtime starts no Tools",
+        },
+        "decision_rule": "For this fixed paper-only teaching goal, choose RUN_2S10S_PAPER_SIMULATION unless the goal cannot be met without adding an undeclared capability; otherwise choose ABSTAIN.",
+        "authority": "proposal_only_runtime_must_validate_and_map",
+    }
+
+
 def parse_plan_proposal(raw_output):
     if not isinstance(raw_output, str):
         raise ModelPlanParseError("model output must be text")
@@ -145,6 +174,31 @@ def parse_plan_proposal(raw_output):
     if not isinstance(proposal, dict):
         raise ModelPlanParseError("model output must decode to an object")
     return proposal
+
+
+def parse_intent_proposal(raw_output):
+    """Parse model text without granting it any authority."""
+    return parse_plan_proposal(raw_output)
+
+
+def validate_intent_proposal(proposal):
+    reasons = []
+    if set(proposal) != {"intent", "reason"}:
+        reasons.append("intent proposal fields must be exactly intent and reason")
+    intent = proposal.get("intent")
+    if intent not in SAFE_RATE_INTENTS:
+        reasons.append(f"intent {intent!r} is not Runtime-allowlisted")
+    if not isinstance(proposal.get("reason"), str) or not proposal["reason"].strip():
+        reasons.append("intent reason must be a non-empty string")
+    if reasons:
+        raise ModelIntentRejected(dict.fromkeys(reasons))
+    return {
+        "artifact_type": "validated_model_intent",
+        "accepted": True,
+        "intent": intent,
+        "reason": proposal["reason"],
+        "checks": {"schema": True, "intent_allowlist": True, "no_arguments": True, "paper_only_mapping": True},
+    }
 
 
 def validate_plan_proposal(proposal, *, allowed_tools, expected_tasks=None):
