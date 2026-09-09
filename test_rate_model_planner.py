@@ -3,7 +3,8 @@ import json
 import unittest
 
 from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
-                                ModelPlanRejected, ScriptedRatePlanModel,
+                                ModelPlanRejected, OpenAIRatePlanModel,
+                                RatePlanModelUnavailable, ScriptedRatePlanModel,
                                 build_plan_prompt, parse_plan_proposal,
                                 validate_plan_proposal)
 from rate_parallel import ParallelRunError, RateParallelAgent
@@ -57,6 +58,34 @@ class ModelPlanContractTests(unittest.TestCase):
         self.assertFalse(model.is_real_llm)
         self.assertEqual(parse_plan_proposal(model.complete({}))["tasks"], SAFE_RATE_TASKS)
 
+    def test_live_adapter_requires_explicit_local_key_and_never_places_it_in_prompt(self):
+        with self.assertRaisesRegex(RatePlanModelUnavailable, "OPENAI_API_KEY"):
+            OpenAIRatePlanModel(api_key=None).complete({"goal": "test"})
+
+        response_text = json.dumps(self.valid_proposal())
+
+        class Response:
+            output_text = response_text
+
+        class Responses:
+            def __init__(self):
+                self.calls = []
+
+            def create(self, **kwargs):
+                self.calls.append(kwargs)
+                return Response()
+
+        class Client:
+            def __init__(self):
+                self.responses = Responses()
+
+        client = Client()
+        raw = OpenAIRatePlanModel(model="test-model", client=client, api_key="local-secret").complete({"goal": "test"})
+        self.assertEqual(parse_plan_proposal(raw)["tasks"], SAFE_RATE_TASKS)
+        serialized_request = json.dumps(client.responses.calls[0])
+        self.assertNotIn("local-secret", serialized_request)
+        self.assertEqual(client.responses.calls[0]["text"]["format"]["type"], "json_object")
+
 
 class ModelPlannerIntegrationTests(unittest.TestCase):
     def agent(self):
@@ -91,6 +120,13 @@ class ModelPlannerIntegrationTests(unittest.TestCase):
         self.assertEqual(rejected["decision"], "ABSTAIN")
         self.assertTrue(any("place_real_order" in reason for reason in rejected["reasons"]))
         self.assertFalse(any(e["event"] == "tool_execution_started" for e in events))
+
+    def test_missing_local_key_abstains_before_any_tool_execution(self):
+        with self.assertRaises(ParallelRunError) as caught:
+            self.agent().run_once(demo_scenario="model_live")
+        self.assertEqual(caught.exception.code, "MODEL_PROVIDER_UNAVAILABLE")
+        self.assertTrue(any(e["event"] == "model_provider_failed" for e in caught.exception.trace))
+        self.assertFalse(any(e["event"] == "tool_execution_started" for e in caught.exception.trace))
 
 
 if __name__ == "__main__":
