@@ -5,25 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Operations Studio · 2s10s Paper Lab</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=22">
-  <script defer src="/rate_console_core.js?v=22"></script>
-  <script defer src="/rate_console.js?v=22"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=23">
+  <script defer src="/rate_console_core.js?v=23"></script>
+  <script defer src="/rate_console.js?v=23"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Operations Studio</h1><p>观察模型、Runtime、Tools 与 Guardrails 如何协作 <span>/</span> 2s10s 仅作纸面教学场景</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
-        <optgroup label="本课：Paper Ledger Reconciliation"><option value="live">正常运行 · 写入、重放并对账</option><option value="ledger_mismatch">故障演示 · 篡改账本后阻断 E1</option></optgroup>
-        <optgroup label="本课：部分成交与取消竞态"><option value="execution_race">确认丢失 · 部分成交、取消竞态与去重</option></optgroup>
-        <optgroup label="上一课：Paper Fill Accounting"><option value="paper_fill_accounting">报价不是成交 · 纸面成交、对冲风险与已实现 P&amp;L</option></optgroup>
-        <optgroup label="本课：Paper Portfolio Risk"><option value="paper_portfolio_risk">组合限额 · 原子预检 · 纸面风险容量</option></optgroup>
-        <optgroup label="本课：可选真实 Model Adapter"><option value="intent_live" selected>本地 OpenAI Key · 受限 Intent，Runtime 映射固定任务图</option><option value="model_live">本地 OpenAI Key · 模型只提议，Runtime 决定</option></optgroup>
-        <optgroup label="上一课：Replayable Event Stream"><option value="outbox_retry">先完成一次 Outbox Run，再重放事件</option><option value="outbox_fenced">先完成一次 Fencing Run，再重放事件</option></optgroup>
-        <optgroup label="上一课：Lease &amp; Fencing"><option value="lease_failover">Runtime A 失联 · Runtime B 接管</option><option value="lease_renewal">Runtime A 续租 · 保持执行权</option></optgroup>
-        <optgroup label="上一课：Durable Approval"><option value="approval_durable_restart">批准后重启 · 从磁盘恢复并继续</option><option value="approval_durable_stale">参数已变化 · 旧批准失效</option></optgroup>
-        <optgroup label="更早课程：Human Approval"><option value="approval_interactive">高风险 Scope · 等待人工 Approve / Deny</option></optgroup>
-        <optgroup label="更早课程"><option value="capability_wrong_tool">票据 Tool 不匹配 · 调用前 DENIED</option><option value="capability_valid">最小权限票据 · 单次完整运行</option><option value="capability_expired">票据已过期 · 调用前 DENIED</option><option value="injection_mixed">恶意内容混入 · 隔离后继续</option><option value="injection_blocked">唯一证据含攻击 · 调用前 ABSTAIN</option><option value="injection_clean">干净资料 · 正常传播</option><option value="rag_stale">高相关旧资料 · Citation Gate 拒绝</option><option value="rag_topk">Top-K · 只召回双期限官方资料</option><option value="rag_insufficient">证据缺一腿 · 调用前 ABSTAIN</option><option value="context_compression">长历史超预算 · 压缩后装入</option><option value="context_relevant">相关信息 · 保留，无关信息 · 丢弃</option><option value="context_conflict">新旧指令冲突 · 以当前目标为准</option><option value="route_fallback">主模型超时 · 有界 Fallback</option><option value="route_primary">经济模型成功 · 不升级</option><option value="route_budget">预算不足 · 调用前 ABSTAIN</option><option value="model_repair">模型格式错误 · 修复后执行</option><option value="model_valid">模型计划合法 · Runtime 放行</option><option value="model_unsafe">模型越权 · ABSTAIN</option><option value="replan_success">重规划 · 修订后成功</option><option value="replan_loop">循环检测 · 重复计划停止</option><option value="replan_budget">预算耗尽 · ABSTAIN</option><option value="breaker_recovery">熔断 · 冷却后恢复</option><option value="breaker_open">熔断 · 阻止第三次调用</option><option value="backpressure">背压 · 排队后放行</option><option value="overload_rejected">过载 · 队满立即拒绝</option><option value="deadline">演示 · 1 秒预算</option><option value="manual_cancel">演示 · 手动停止</option><option value="late_result">演示 · 晚到结果</option><option value="two_year_slow">演示 · 2Y 较慢</option><option value="ten_year_slow">演示 · 10Y 较慢</option><option value="ten_year_fail">演示 · 10Y 失败</option></optgroup>
+        <optgroup label="当前课程：Model Adapter"><option value="intent_live" selected>真实模型 · 受限 Intent → Runtime 固定任务图</option><option value="model_live">真实模型 · 自由提议 → Runtime 严格校验</option></optgroup>
       </select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
@@ -34,7 +25,8 @@
           <label>持有窗口 <span>有效观测日</span><input name="holding_days" type="number" value="20" min="1" step="1" required></label>
           <label>DV01 <span>USD / bp</span><input name="dv01_usd_per_bp" type="number" value="100" min="0.01" step="any" required></label>
           <label>往返成本 <span>bp</span><input name="round_trip_cost_bps" type="number" value="1" min="0" step="any" required></label>
-          <label>OpenAI API Key <span>仅 model_live / intent_live 本次请求使用，不保存</span><input id="model-api-key" name="model_api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…"></label>
+          <label>OpenAI API Key <span>仅保存在当前标签页会话；不进入服务器配置或 Trace</span><input id="model-api-key" name="model_api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="首次运行输入 sk-…"></label>
+          <div class="key-session"><span id="key-session-status">本标签页尚未记住 Key</span><button id="forget-model-key" type="button">清除 Key</button></div>
         </form>
       </details>
       <button class="run-button" id="run-button" type="button"><span aria-hidden="true">▶</span> Run Agent</button>
@@ -44,6 +36,26 @@
 
   <main>
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
+    <section class="course-focus" aria-label="课程进度">
+      <div class="course-now"><span>当前课程</span><strong>真实模型接入与 Runtime 权限边界</strong><small>观察模型提议、结构化校验、修复与拒绝。</small></div>
+      <ol class="course-roadmap" aria-label="后续课程安排">
+        <li><b>01</b><span><strong>Model Evals</strong><small>Golden Trace · 回归评测</small></span></li>
+        <li><b>02</b><span><strong>Agent Memory</strong><small>短期状态 · 长期记忆 · 脱敏</small></span></li>
+        <li><b>03</b><span><strong>Multi-Agent Handoff</strong><small>职责边界 · 交接契约</small></span></li>
+      </ol>
+      <details class="lesson-archive" id="lesson-archive">
+        <summary>历史课程 <span>默认收起</span></summary>
+        <div class="archive-picker">
+          <label for="archive-scenario">选择需要复习的旧场景</label>
+          <select id="archive-scenario">
+            <optgroup label="纸面执行与账本"><option value="paper_portfolio_risk">组合限额 · 原子预检</option><option value="paper_fill_accounting">纸面成交、对冲风险与结算 P&amp;L</option><option value="execution_race">部分成交、取消竞态与去重</option><option value="live">写入、重放并对账</option><option value="ledger_mismatch">篡改账本后阻断 E1</option></optgroup>
+            <optgroup label="可靠性与审批"><option value="outbox_retry">Outbox 重试与重放</option><option value="outbox_fenced">Outbox Fencing</option><option value="lease_failover">Runtime 租约接管</option><option value="lease_renewal">Runtime 租约续期</option><option value="approval_durable_restart">持久审批后重启</option><option value="approval_durable_stale">参数变化使旧批准失效</option><option value="approval_interactive">人工 Approve / Deny</option></optgroup>
+            <optgroup label="安全、上下文与模型"><option value="capability_wrong_tool">Tool 权限不匹配</option><option value="capability_valid">最小权限票据</option><option value="capability_expired">权限票据过期</option><option value="injection_mixed">恶意内容隔离</option><option value="injection_blocked">恶意证据导致 ABSTAIN</option><option value="rag_stale">旧资料被 Citation Gate 拒绝</option><option value="rag_topk">RAG Top-K</option><option value="rag_insufficient">证据不足</option><option value="context_compression">上下文压缩</option><option value="context_conflict">新旧指令冲突</option><option value="route_fallback">模型 Fallback</option><option value="route_budget">模型预算不足</option><option value="model_repair">模型输出修复</option><option value="model_unsafe">模型越权拒绝</option><option value="replan_success">重规划成功</option><option value="replan_loop">重规划循环检测</option><option value="breaker_open">Circuit Breaker</option><option value="backpressure">背压控制</option><option value="deadline">运行预算超时</option><option value="manual_cancel">人工停止</option><option value="late_result">晚到结果</option><option value="ten_year_fail">10Y Tool 失败</option></optgroup>
+          </select>
+          <button id="load-archive-scenario" type="button">载入历史场景</button>
+        </div>
+      </details>
+    </section>
     <section class="approval-panel" id="approval-panel" aria-live="assertive" hidden><div class="approval-copy"><span>H1 · HUMAN APPROVAL REQUIRED</span><strong id="approval-tool">—</strong><small id="approval-fingerprint">—</small></div><div class="approval-actions"><button class="deny-button" id="deny-button" type="button">Deny</button><button class="approve-button" id="approve-button" type="button">Approve once</button></div></section>
     <section class="agent-studio" aria-labelledby="studio-title">
       <div class="studio-heading">
