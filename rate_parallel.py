@@ -178,7 +178,7 @@ class RateParallelAgent:
     def run_once(self, *, lookback_days=60, entry_z=1.0, holding_days=20,
                  dv01_usd_per_bp=100.0, round_trip_cost_bps=1.0, start_date=None,
                  run_id=None, event_sink=None, demo_scenario="live", control=None,
-                 approval_registry=None):
+                 approval_registry=None, model_api_key=None):
         if demo_scenario not in SCENARIOS:
             raise ValueError("unknown parallel demo_scenario")
         control = control or RunControl()
@@ -852,7 +852,8 @@ class RateParallelAgent:
                 completed.add("MR1")
             if demo_scenario in MODEL_SCENARIOS:
                 current_task = "M1"
-                model_adapter = OpenAIRatePlanModel() if demo_scenario == "model_live" else ScriptedRatePlanModel(demo_scenario)
+                model_adapter = (OpenAIRatePlanModel(api_key=model_api_key)
+                                 if demo_scenario == "model_live" else ScriptedRatePlanModel(demo_scenario))
                 repaired = False
                 while True:
                     emit("model_request_started", task_id="M1", model=model_adapter.model_name,
