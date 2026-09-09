@@ -53,7 +53,7 @@ class RateUIContractTests(unittest.TestCase):
         css = (ROOT / "web" / "rate_console.css").read_text(encoding="utf-8")
         for anchor in ("overview", "agents", "handoff", "engineering-details"):
             self.assertIn(f'href="#{anchor}"', html)
-        for constraint in ("PAPER ONLY", "3 ROLES", "RUNTIME GATED"):
+        for constraint in ("PAPER ONLY", "4 ROLES", "RUNTIME GATED"):
             self.assertIn(constraint, html)
         self.assertIn('class="lab-rail"', html)
         self.assertIn('class="lab-summary"', html)
@@ -65,6 +65,20 @@ class RateUIContractTests(unittest.TestCase):
         bootstrap = source.split("window.RateConsole;", 1)[0]
         self.assertIn("roleForEvent", bootstrap)
         self.assertIn("roleForEvent(event)", source)
+
+    def test_supervisor_lesson_exposes_all_scenarios_and_control_surface(self):
+        html = (ROOT / "web" / "rate_console.html").read_text(encoding="utf-8")
+        source = (ROOT / "web" / "rate_console.js").read_text(encoding="utf-8")
+        for scenario in ("orchestration_normal", "orchestration_revision",
+                         "orchestration_timeout_reassign", "orchestration_loop_block",
+                         "orchestration_authority_block"):
+            self.assertIn(f'value="{scenario}"', html)
+            self.assertIn(scenario, source)
+        for element_id in ("orchestration-panel", "orchestration-owner",
+                           "orchestration-action", "orchestration-assignments",
+                           "orchestration-revisions", "orchestration-tokens",
+                           "orchestration-decisions"):
+            self.assertIn(f'id="{element_id}"', html)
 
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
