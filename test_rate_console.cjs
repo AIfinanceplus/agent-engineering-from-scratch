@@ -1,6 +1,24 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+const { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+
+test('studio assigns real events to personified roles without inventing extra LLMs', () => {
+  assert.deepEqual(STUDIO_ROLES.map(role => role.id), ['principal', 'model', 'runtime', 'data', 'risk', 'auditor']);
+  assert.equal(STUDIO_ROLES.filter(role => role.type === 'LLM').length, 1);
+  assert.equal(roleForEvent({ event: 'model_response_received', task_id: 'M1' }), 'model');
+  assert.equal(roleForEvent({ event: 'tool_observation', task_id: 'D1' }), 'data');
+  assert.equal(roleForEvent({ event: 'ledger_reconciliation_completed', task_id: 'LG1' }), 'auditor');
+});
+
+test('studio separates information, decision and risk flows with evidence-backed handoffs', () => {
+  assert.equal(flowForEvent({ event: 'model_response_received' }), 'information');
+  assert.equal(flowForEvent({ event: 'model_intent_accepted' }), 'decision');
+  assert.equal(flowForEvent({ event: 'capability_rejected' }), 'risk');
+  assert.deepEqual(handoffForEvent({ event: 'model_response_received' }), {
+    from: 'model', to: 'runtime', flow: 'information', title: '返回未经信任的模型输出',
+  });
+  assert.equal(handoffForEvent({ event: 'tool_retry_scheduled' }), null);
+});
 
 function setup() {
   const state = createState();
