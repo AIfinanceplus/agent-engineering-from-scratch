@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+import os
 
 
 SAFE_RATE_TASKS = [
@@ -55,6 +56,58 @@ class ScriptedRatePlanModel:
             })
             proposal["claims"]["automatic_execution"] = True
         return json.dumps(proposal, sort_keys=True, separators=(",", ":"))
+
+
+class RatePlanModelUnavailable(RuntimeError):
+    """The explicitly requested local LLM adapter cannot make a call."""
+
+
+class OpenAIRatePlanModel:
+    """Optional local OpenAI adapter that returns text for Runtime validation.
+
+    The adapter never receives credentials in its prompt and cannot execute a
+    Tool.  It is only constructed for the explicit ``model_live`` scenario;
+    CI continues to exercise ``ScriptedRatePlanModel`` instead.
+    """
+
+    is_real_llm = True
+
+    def __init__(self, *, model=None, client=None, api_key=None):
+        self.model_name = model or os.environ.get("RATE_OPENAI_MODEL", "gpt-5.6")
+        self._client = client
+        self._api_key = api_key if api_key is not None else os.environ.get("OPENAI_API_KEY")
+        self.calls = 0
+
+    def complete(self, prompt, *, repair_error=None):
+        if not self._api_key:
+            raise RatePlanModelUnavailable("OPENAI_API_KEY is required for the model_live scenario")
+        if self._client is None:
+            try:
+                from openai import OpenAI
+                self._client = OpenAI(api_key=self._api_key)
+            except Exception as exc:  # dependency/client setup is a provider boundary
+                raise RatePlanModelUnavailable(f"OpenAI adapter unavailable: {exc}") from exc
+        self.calls += 1
+        request = {
+            "role": "user",
+            "content": json.dumps({
+                "instruction": "Return only one JSON object matching the response_contract. You only propose a plan; Runtime has final authority.",
+                "prompt": prompt,
+                "repair_error": repair_error,
+            }, sort_keys=True),
+        }
+        try:
+            response = self._client.responses.create(
+                model=self.model_name,
+                input=[request],
+                text={"format": {"type": "json_object"}},
+            )
+        except Exception as exc:
+            raise RatePlanModelUnavailable(f"OpenAI request failed: {exc}") from exc
+        output = getattr(response, "output_text", None)
+        if not isinstance(output, str) or not output.strip():
+            raise RatePlanModelUnavailable("OpenAI response contained no text output")
+        return output
 
 
 def build_plan_prompt(goal, allowed_tools):
