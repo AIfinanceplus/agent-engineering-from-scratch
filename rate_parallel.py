@@ -22,11 +22,12 @@ from rate_control import RunControl, RunStopped, check_run_control
 from rate_resilience import AdmissionController, CircuitBreaker, CircuitOpen
 from rate_replanning import (PlanRevisionGuard, ReplanBudgetExhausted,
                              ReplanLoopDetected, validate_rate_history_observation)
-from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
-                                ModelPlanRejected, OpenAIRatePlanModel,
+from rate_model_planner import (SAFE_RATE_TASKS, ModelIntentRejected,
+                                ModelPlanParseError, ModelPlanRejected, OpenAIRatePlanModel,
                                 RatePlanModelUnavailable, ScriptedRatePlanModel,
-                                build_plan_prompt, parse_plan_proposal,
-                                validate_plan_proposal)
+                                build_intent_prompt, build_plan_prompt,
+                                parse_intent_proposal, parse_plan_proposal,
+                                validate_intent_proposal, validate_plan_proposal)
 from rate_model_routing import (ModelProviderUnavailable, ModelRouter,
                                 ModelTokenBudget, ModelTokenBudgetExceeded,
                                 ScriptedRoutedModel)
@@ -49,7 +50,7 @@ from tools import TOOL_REGISTRY, Tool, resolve_tool
 SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result",
              "breaker_open", "breaker_recovery", "backpressure", "overload_rejected",
              "replan_success", "replan_loop", "replan_budget",
-             "model_valid", "model_repair", "model_unsafe", "model_live",
+             "model_valid", "model_repair", "model_unsafe", "model_live", "intent_live",
              "route_primary", "route_fallback", "route_budget",
              "context_relevant", "context_compression", "context_conflict",
              "rag_topk", "rag_stale", "rag_insufficient",
@@ -62,6 +63,7 @@ ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
 REPLAN_SCENARIOS = {"replan_success", "replan_loop", "replan_budget"}
 MODEL_SCENARIOS = {"model_valid", "model_repair", "model_unsafe", "model_live"}
+INTENT_SCENARIOS = {"intent_live"}
 ROUTING_SCENARIOS = {"route_primary", "route_fallback", "route_budget"}
 CONTEXT_SCENARIOS = {"context_relevant", "context_compression", "context_conflict"}
 RAG_SCENARIOS = {"rag_topk", "rag_stale", "rag_insufficient"}
@@ -220,7 +222,7 @@ class RateParallelAgent:
 
         def teaching_pause(seconds=0.35):
             """Give the browser one paint window between teaching states."""
-            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | AUTHORIZATION_SCENARIOS | LEASE_SCENARIOS | OUTBOX_SCENARIOS:
+            if demo_scenario not in REPLAN_SCENARIOS | MODEL_SCENARIOS | INTENT_SCENARIOS | ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | AUTHORIZATION_SCENARIOS | LEASE_SCENARIOS | OUTBOX_SCENARIOS:
                 return
             if self.sleep is time.sleep:
                 control.wait(seconds)
@@ -850,7 +852,77 @@ class RateParallelAgent:
                 emit("model_routing_bypassed", task_id="MR1",
                      reason="该历史场景不演示模型选择或 token 预算。")
                 completed.add("MR1")
-            if demo_scenario in MODEL_SCENARIOS:
+            if demo_scenario in INTENT_SCENARIOS:
+                current_task = "M1"
+                model_adapter = OpenAIRatePlanModel(api_key=model_api_key)
+                intent_prompt = build_intent_prompt(goal)
+                repaired = False
+                while True:
+                    emit("model_request_started", task_id="M1", model=model_adapter.model_name,
+                         is_real_llm=model_adapter.is_real_llm, prompt=intent_prompt,
+                         purpose="intent_proposal", attempt=model_adapter.calls + 1)
+                    teaching_pause(0.3)
+                    try:
+                        raw_output = model_adapter.complete(
+                            intent_prompt,
+                            repair_error=("return exactly one JSON object with intent and reason; choose only an allowed intent" if repaired else None),
+                        )
+                    except RatePlanModelUnavailable as exc:
+                        emit("model_provider_failed", task_id="M1", model=model_adapter.model_name,
+                             provider="openai", error_type=type(exc).__name__, error_message=str(exc),
+                             retry_same_model=False, decision="ABSTAIN")
+                        emit("model_intent_rejected", task_id="P1", reasons=[str(exc)], decision="ABSTAIN")
+                        raise ParallelRunError(str(exc), "M1", trace, {"M1": str(exc)},
+                                               code="MODEL_PROVIDER_UNAVAILABLE") from exc
+                    emit("model_response_received", task_id="M1", model=model_adapter.model_name,
+                         is_real_llm=model_adapter.is_real_llm, raw_output=raw_output,
+                         output_characters=len(raw_output), attempt=model_adapter.calls)
+                    teaching_pause()
+                    emit("intent_parse_started", task_id="P1", response_attempt=model_adapter.calls)
+                    try:
+                        proposal = parse_intent_proposal(raw_output)
+                    except ModelPlanParseError as exc:
+                        emit("intent_parse_failed", task_id="P1", error_type=type(exc).__name__,
+                             error_message=str(exc), raw_output=raw_output)
+                        reasons = [str(exc)]
+                    else:
+                        emit("model_intent_parsed", task_id="P1", proposal=proposal)
+                        emit("intent_validation_started", task_id="P1",
+                             checks=["exact_schema", "intent_allowlist", "no_arguments", "paper_only_runtime_mapping"])
+                        try:
+                            validated_intent = validate_intent_proposal(proposal)
+                        except ModelIntentRejected as exc:
+                            emit("intent_validation_completed", task_id="P1", accepted=False,
+                                 reasons=exc.reasons, decision="ABSTAIN")
+                            reasons = exc.reasons
+                        else:
+                            emit("intent_validation_completed", task_id="P1", accepted=True,
+                                 output=validated_intent, decision=validated_intent["intent"])
+                            emit("model_intent_accepted", task_id="P1", model=model_adapter.model_name,
+                                 intent=validated_intent["intent"], reason=validated_intent["reason"],
+                                 decision=validated_intent["intent"])
+                            if validated_intent["intent"] == "ABSTAIN":
+                                emit("model_intent_abstained", task_id="P1", reason=validated_intent["reason"],
+                                     decision="ABSTAIN", tools_started=False)
+                                raise ParallelRunError("model selected ABSTAIN: " + validated_intent["reason"],
+                                                       "P1", trace, {"P1": validated_intent["reason"]},
+                                                       code="MODEL_INTENT_ABSTAIN")
+                            plan = deepcopy(SAFE_RATE_TASKS)
+                            by_id = {task["task_id"]: task for task in plan}
+                            planner_name = "runtime_mapped_model_intent"
+                            completed.add("M1")
+                            break
+                    if not repaired:
+                        repaired = True
+                        emit("model_repair_requested", task_id="M1", reasons=reasons,
+                             repair_kind="intent_contract",
+                             repair_contract="Return exactly intent and reason; intent must be RUN_2S10S_PAPER_SIMULATION or ABSTAIN; do not add tools, arguments, or orders")
+                        teaching_pause(0.45)
+                        continue
+                    emit("model_intent_rejected", task_id="P1", reasons=reasons, decision="ABSTAIN")
+                    raise ParallelRunError("model intent rejected: " + "; ".join(reasons), "P1", trace,
+                                           {"P1": "; ".join(reasons)}, code="MODEL_INTENT_REJECTED")
+            elif demo_scenario in MODEL_SCENARIOS:
                 current_task = "M1"
                 model_adapter = (OpenAIRatePlanModel(api_key=model_api_key)
                                  if demo_scenario == "model_live" else ScriptedRatePlanModel(demo_scenario))
@@ -912,7 +984,7 @@ class RateParallelAgent:
                     planner_name = "validated_model_proposal"
                     completed.add("M1")
                     break
-            elif demo_scenario not in ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS:
+            elif demo_scenario not in ROUTING_SCENARIOS | CONTEXT_SCENARIOS | RETRIEVAL_SCENARIOS | INTENT_SCENARIOS:
                 emit("model_bypassed", task_id="M1",
                      reason="该历史场景使用已验证的确定性 Planner，不调用模型。")
                 completed.add("M1")
@@ -1259,6 +1331,8 @@ class RateParallelAgent:
             lesson_topic = "context_engineering"
         elif demo_scenario in ROUTING_SCENARIOS:
             lesson_topic = "model_routing"
+        elif demo_scenario in INTENT_SCENARIOS:
+            lesson_topic = "model_intent_runtime_mapping"
         elif demo_scenario in MODEL_SCENARIOS:
             lesson_topic = "model_planner_authority"
         elif demo_scenario in REPLAN_SCENARIOS:
