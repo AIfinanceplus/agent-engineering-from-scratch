@@ -25,14 +25,52 @@ class AdvancedRateLessonTests(unittest.TestCase):
         self.assertFalse(result["guardrails"]["automatic_execution"])
         return result
 
-    def test_all_six_teaching_scenarios_are_runnable(self):
-        self.assertEqual(len(ADVANCED_SCENARIOS), 6)
+    def test_all_teaching_scenarios_are_runnable(self):
+        self.assertEqual(len(ADVANCED_SCENARIOS), 11)
         for scenario in sorted(ADVANCED_SCENARIOS):
             result = self.run_lesson(scenario)
             if scenario == "eval_regression_fail":
                 self.assertFalse(result["eval"]["passed"])
             else:
                 self.assertTrue(result["eval"]["passed"], scenario)
+
+    def test_supervisor_keeps_orchestration_authority_separate_from_runtime(self):
+        contract = ROLE_CONTRACTS["orchestration_supervisor"]
+        self.assertIn("assign_task", contract["authority"])
+        self.assertIn("execute_tool", contract["forbidden_actions"])
+        result = self.run_lesson("orchestration_normal")
+        actions = [row["action"] for row in result["trace"]
+                   if row["event"] == "orchestration_decision_recorded"]
+        self.assertEqual(actions, ["ASSIGN", "ASSIGN", "ASSIGN", "COMPLETE"])
+        self.assertTrue(result["eval"]["checks"]["single_owner_preserved"])
+
+    def test_supervisor_revision_is_bounded_and_revalidated(self):
+        result = self.run_lesson("orchestration_revision")
+        returns = [row for row in result["trace"]
+                   if row["event"] == "task_returned_for_revision"]
+        self.assertEqual(len(returns), 1)
+        reviews = [row for row in result["trace"] if row["event"] == "risk_review_completed"]
+        self.assertEqual([row["approved"] for row in reviews], [False, True])
+        self.assertTrue(result["eval"]["checks"]["revision_then_approved"])
+
+    def test_supervisor_revokes_timed_out_owner_before_reassignment(self):
+        result = self.run_lesson("orchestration_timeout_reassign")
+        names = [row["event"] for row in result["trace"]]
+        self.assertLess(names.index("task_ownership_revoked"),
+                        names.index("task_ownership_changed", names.index("task_ownership_revoked")))
+        owners = [row["to_owner"] for row in result["trace"]
+                  if row["event"] == "task_ownership_changed"]
+        self.assertIn("analyst-worker-b", owners)
+
+    def test_supervisor_stops_loop_and_authority_escalation_without_runtime(self):
+        for scenario, guard_event in (("orchestration_loop_block", "orchestration_loop_detected"),
+                                      ("orchestration_authority_block", "orchestration_authority_violation_detected")):
+            result = self.run_lesson(scenario)
+            self.assertIn(guard_event, [row["event"] for row in result["trace"]])
+            self.assertFalse(any(row["event"] == "paper_runtime_mapped" for row in result["trace"]))
+            stopped = next(row for row in result["trace"] if row["event"] == "orchestration_stopped")
+            self.assertTrue(stopped["safe_stop"])
+            self.assertEqual(stopped["effect_count"], 0)
 
     def test_golden_eval_compares_behavior_not_wording(self):
         candidate = {
