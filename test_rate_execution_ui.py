@@ -17,7 +17,7 @@ class PartialFillConsoleContractTests(unittest.TestCase):
         self.assertIn('value="intent_live"', html)
         self.assertIn('name="model_api_key"', html)
         self.assertIn('id="role-grid"', html)
-        self.assertIn('三位 Agent 协作室', html)
+        self.assertIn('四位 Agent 协作室', html)
         self.assertIn('data-journey="risk-verify"', html)
         self.assertIn('沟通格式', html)
         self.assertIn('id="model-inspector-title"', html)
