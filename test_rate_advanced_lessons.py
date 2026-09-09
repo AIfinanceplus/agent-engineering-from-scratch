@@ -78,6 +78,19 @@ class AdvancedRateLessonTests(unittest.TestCase):
         self.assertFalse(rejected["passed"])
         self.assertIn("contract hash mismatch", rejected["reasons"])
 
+    def test_handoff_trace_activates_all_roles_only_after_acceptance(self):
+        passed = self.run_lesson("handoff_contract_pass")
+        activations = [row["actor_role"] for row in passed["trace"]
+                       if row["event"] == "agent_role_activated"]
+        self.assertEqual(activations, ["strategy_analyst", "risk_controller", "runtime_supervisor"])
+
+        rejected = self.run_lesson("handoff_contract_reject")
+        activations = [row["actor_role"] for row in rejected["trace"]
+                       if row["event"] == "agent_role_activated"]
+        self.assertEqual(activations, ["strategy_analyst"])
+        self.assertEqual(next(row for row in rejected["trace"]
+                              if row["event"] == "handoff_rejected")["effect_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
