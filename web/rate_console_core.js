@@ -139,6 +139,9 @@
     if (name === 'run_completed') return { from: event.lesson === 'orchestration' ? 'orchestration_supervisor' : 'runtime_supervisor', to: '你', flow: 'decision', title: '交付完整运行终态' };
     return null;
   }
+  function modeForScenario(scenario = '') {
+    return String(scenario).startsWith('orchestration_') ? 'orchestration' : 'parallel';
+  }
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : mode === 'orchestration' ? ORCHESTRATION_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), agentStates: Object.fromEntries(STUDIO_ROLES.map(role => [role.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
@@ -679,5 +682,5 @@
       default: return common;
     }
   }
-  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe };
+  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe };
 });

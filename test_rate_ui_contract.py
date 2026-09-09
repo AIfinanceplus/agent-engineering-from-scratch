@@ -80,6 +80,20 @@ class RateUIContractTests(unittest.TestCase):
                            "orchestration-decisions"):
             self.assertIn(f'id="{element_id}"', html)
 
+    def test_run_again_rebuilds_matching_graph_and_highlights_lesson_outcome(self):
+        html = (ROOT / "web" / "rate_console.html").read_text(encoding="utf-8")
+        source = (ROOT / "web" / "rate_console.js").read_text(encoding="utf-8")
+        for element_id in ("lesson-outcome-banner", "lesson-outcome-theme",
+                           "lesson-outcome-summary", "lesson-outcome-result"):
+            self.assertIn(f'id="{element_id}"', html)
+        self.assertIn("state = createState(config.execution_mode);", source)
+        self.assertIn("state = createState(replayMode);", source)
+        self.assertGreaterEqual(source.count("buildGraph();"), 4)
+        self.assertIn("updateLessonOutcome();", source)
+        self.assertIn("lesson-outcome-banner').scrollIntoView", source)
+        self.assertEqual(source.count("releaseRunControls();"), 4)
+        self.assertIn("byId('run-button').disabled = false;", source)
+
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")

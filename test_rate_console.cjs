@@ -1,6 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+
+test('run reset selects the graph mode before rendering a scenario again', () => {
+  assert.equal(modeForScenario('orchestration_normal'), 'orchestration');
+  assert.equal(modeForScenario('orchestration_authority_block'), 'orchestration');
+  assert.equal(modeForScenario('handoff_contract_pass'), 'parallel');
+  assert.ok('OS1' in createState(modeForScenario('orchestration_normal')).nodes);
+  assert.ok(!('OS1' in createState(modeForScenario('eval_golden_pass')).nodes));
+});
 
 test('studio assigns real events to personified roles without inventing extra LLMs', () => {
   assert.deepEqual(STUDIO_ROLES.map(role => role.id), ['orchestration_supervisor', 'strategy_analyst', 'risk_controller', 'runtime_supervisor']);

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Operations Studio · 2s10s Paper Lab</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=29">
-  <script defer src="/rate_console_core.js?v=29"></script>
-  <script defer src="/rate_console.js?v=29"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=30">
+  <script defer src="/rate_console_core.js?v=30"></script>
+  <script defer src="/rate_console.js?v=30"></script>
 </head>
 <body>
   <aside class="lab-rail" aria-label="实验台导航">
@@ -49,6 +49,11 @@
 
   <main id="overview">
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
+    <section class="lesson-outcome-banner" id="lesson-outcome-banner" aria-live="polite" tabindex="-1" hidden>
+      <div class="outcome-mark" aria-hidden="true"><span>LESSON</span><b>✓</b></div>
+      <div class="outcome-copy"><span>本次运行的课程结论</span><strong id="lesson-outcome-theme">—</strong><p id="lesson-outcome-summary">—</p></div>
+      <div class="outcome-tags"><span id="lesson-outcome-scenario">SCENARIO · —</span><b id="lesson-outcome-result">—</b><span id="lesson-outcome-effect">SIDE EFFECTS · —</span></div>
+    </section>
     <section class="lab-summary" aria-label="实验台约束摘要">
       <div><span>STRATEGY</span><strong>2s10s</strong><small>DGS2 − DGS10</small></div>
       <div><span>EXECUTION MODE</span><strong class="summary-good">PAPER ONLY</strong><small>无真实订单</small></div>

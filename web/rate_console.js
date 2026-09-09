@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
+  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
   const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', abstained: '主动停止', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
   let state = createState('parallel');
@@ -54,6 +54,39 @@
   const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'model_live', 'intent_live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
 
   const lessonForScenario = scenario => scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : scenario.startsWith('orchestration_') ? 'orchestration' : 'eval';
+  const lessonOutcomeCopy = {
+    eval_golden_pass: ['Golden Trace 固定安全行为，不固定模型措辞', '候选运行保留了事件顺序、风险门禁与 paper-only 结果，模型可以升级。'],
+    eval_regression_fail: ['回归评测的价值，是在上线前阻止行为退化', '越权 Tool 与缺失风险门禁已被 Golden Trace 检出；候选模型没有进入 Runtime。'],
+    memory_redaction_pass: ['长期记忆只保存脱敏、可追溯的知识', '敏感值停留在短期状态；通过 Privacy Gate 的记录才带着 Scope 与来源进入长期层。'],
+    memory_privacy_block: ['隐私门禁必须发生在长期写入之前', '违规记录在落盘前被阻断，长期记忆副作用为零。'],
+    handoff_contract_pass: ['交接传递的是有边界的合约，不是隐式信任', 'Analyst、Risk 与 Runtime 逐级验约；只有通过的 Payload 与权限进入接收方。'],
+    handoff_contract_reject: ['接收方必须重新验证，不能继承发送方的信任', 'automatic_execution 越权在 Risk 边界被拒绝，下游 Runtime 未激活。'],
+    orchestration_normal: ['Supervisor 编排责任，不替 Agent 做业务决定', '任务按单一 Owner 推进；Supervisor 只记录 ASSIGN 与 COMPLETE，Runtime 仍受 paper-only 门禁约束。'],
+    orchestration_revision: ['退回不是无限重做：Revision 必须有理由和预算', 'Risk 给出明确 DV01 修改要求；Supervisor 只安排一次有界修订，再交回 Risk 独立复核。'],
+    orchestration_timeout_reassign: ['重分配前必须先撤销旧 Owner', '超时 Worker 的所有权先失效，再由新 Worker 接管同一个受限任务，避免双重所有者。'],
+    orchestration_loop_block: ['循环不是继续重试：预算耗尽后必须安全停止', '重复退回被 Loop Guard 识别；Runtime 未激活，副作用为零。'],
+    orchestration_authority_block: ['Supervisor 也受权限边界约束', 'automatic_execution 越权请求被阻断；Supervisor 无权改策略、批风险或调用执行 Tool。'],
+  };
+  function updateLessonOutcome() {
+    const banner = byId('lesson-outcome-banner');
+    const scenario = state.result?.scenario || byId('scenario').value;
+    const lesson = advancedScenarios.has(scenario) ? lessonForScenario(scenario) : null;
+    const visible = state.terminal;
+    banner.hidden = !visible;
+    document.querySelector('.course-focus').dataset.completed = String(visible);
+    document.querySelectorAll('.course-roadmap li').forEach(item => item.classList.toggle('run-completed', visible && item.dataset.lesson === lesson));
+    if (!visible) return;
+    const copy = lessonOutcomeCopy[scenario] || (lesson ? [lessonCopy[lesson].watchTitle, lessonCopy[lesson].watch] : ['本次历史能力已运行', '完整结果与边界证据保留在 Trace & Evals 工程检查台。']);
+    const terminalAction = state.result?.eval?.terminal_action;
+    const passed = Boolean(state.result) && state.result.eval?.passed !== false;
+    const effectEvent = [...state.events].reverse().find(event => Number.isFinite(event.effect_count));
+    banner.dataset.outcome = terminalAction === 'STOP' ? 'stopped' : passed ? 'pass' : 'blocked';
+    byId('lesson-outcome-theme').textContent = copy[0];
+    byId('lesson-outcome-summary').textContent = copy[1];
+    byId('lesson-outcome-scenario').textContent = `SCENARIO · ${scenario}`;
+    byId('lesson-outcome-result').textContent = !state.result ? 'RUN ERROR' : terminalAction === 'STOP' ? 'SAFE STOP' : passed ? 'CONTRACT PASS' : 'REGRESSION BLOCKED';
+    byId('lesson-outcome-effect').textContent = `SIDE EFFECTS · ${effectEvent?.effect_count ?? 0}`;
+  }
   function sourceNote(scenario) {
     if (scenario.startsWith('eval_')) return '可重复模型候选 · Golden Trace 比较语义行为 · 回归失败阻止升级';
     if (scenario.startsWith('memory_')) return '短期状态仅本次 Run · 长期记忆先脱敏并绑定来源 · 无敏感值进入 Trace';
@@ -557,11 +590,19 @@
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
     byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? (state.replayed ? '历史事件已重放 · 未重新调用 Tool' : '事件流已完成 · 完整输入与输出已保留') : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
+    updateLessonOutcome();
     updateOverview();
     updateStudio();
   }
   function scrollToLatest() {
     if (byId('follow').checked) byId('stream-scroll').scrollTop = byId('stream-scroll').scrollHeight;
+  }
+  function releaseRunControls() {
+    inFlight = false;
+    byId('run-button').disabled = false;
+    byId('scenario').disabled = false;
+    for (const input of byId('parameters').elements) input.disabled = false;
+    byId('run-button').textContent = state.terminal ? '↻  Run again' : '▶  Run Agent';
   }
   function showSource(data) {
     if (!data) return;
@@ -654,8 +695,8 @@
     const modelApiKey = enteredModelApiKey || readSessionKey();
     delete config.model_api_key;
     for (const key of ['lookback_days', 'entry_z', 'holding_days', 'dv01_usd_per_bp', 'round_trip_cost_bps']) config[key] = Number(config[key]);
-    config.execution_mode = 'parallel';
     config.demo_scenario = byId('scenario').value;
+    config.execution_mode = modeForScenario(config.demo_scenario);
     config.budget_ms = scenarioBudget();
     if (['model_live', 'intent_live'].includes(config.demo_scenario)) {
       if (!modelApiKey) {
@@ -671,17 +712,18 @@
     cancelPending = false;
     cancelNote = '';
     inFlight = true;
-    state = createState('parallel');
-    state.phase = 'connecting';
-    filter = null;
-    selectedRole = null;
-    rows.length = 0;
-    byId('event-list').replaceChildren();
-    byId('settings').open = false;
-    byId('follow').checked = true;
-    byId('source-note').textContent = sourceNote(config.demo_scenario);
-    update();
     try {
+      state = createState(config.execution_mode);
+      state.phase = 'connecting';
+      filter = null;
+      selectedRole = null;
+      rows.length = 0;
+      byId('event-list').replaceChildren();
+      byId('settings').open = false;
+      byId('follow').checked = true;
+      byId('source-note').textContent = sourceNote(config.demo_scenario);
+      buildGraph();
+      update();
       const endpoint = advancedScenarios.has(config.demo_scenario) ? '/api/rates/advanced-lesson' : config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : config.demo_scenario === 'paper_fill_accounting' ? '/api/rates/paper-fill' : config.demo_scenario === 'paper_portfolio_risk' ? '/api/rates/paper-portfolio' : '/api/rates/stream';
       const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(config) });
       if (!response.ok) {
@@ -693,14 +735,20 @@
       failState(state, { code: 'STREAM_ERROR', message: error.message, task_id: state.activeTask });
       showError();
     } finally {
-      inFlight = false;
-      update();
-      scrollToLatest();
+      releaseRunControls();
+      try {
+        update();
+        scrollToLatest();
+        if (state.terminal) byId('lesson-outcome-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } finally {
+        releaseRunControls();
+      }
     }
   }
   async function replayLast() {
     if (inFlight || !state.runId || !state.terminal) return;
     const runId = state.runId;
+    const replayMode = state.mode;
     inFlight = true;
     cancelPending = false;
     cancelNote = '';
@@ -708,10 +756,11 @@
     selectedRole = null;
     rows.length = 0;
     byId('event-list').replaceChildren();
-    state = createState('parallel');
-    state.phase = 'connecting';
-    update();
     try {
+      state = createState(replayMode);
+      state.phase = 'connecting';
+      buildGraph();
+      update();
       const response = await fetch('/api/rates/replay', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ run_id: runId, after_sequence: 0 }) });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
@@ -722,9 +771,14 @@
       failState(state, { code: 'REPLAY_ERROR', message: error.message, task_id: state.activeTask });
       showError();
     } finally {
-      inFlight = false;
-      update();
-      scrollToLatest();
+      releaseRunControls();
+      try {
+        update();
+        scrollToLatest();
+        if (state.terminal) byId('lesson-outcome-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } finally {
+        releaseRunControls();
+      }
     }
   }
   byId('run-button').addEventListener('click', run);
