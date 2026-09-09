@@ -1,16 +1,24 @@
 (function () {
   'use strict';
-  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
+  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
-  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
+  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', abstained: '主动停止', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
   let state = createState('parallel');
   let inFlight = false;
   let filter = null;
+  let selectedRole = null;
+  let flowMode = 'information';
   let cancelPending = false;
   let cancelNote = '';
   const rows = [];
   const nodeElements = new Map();
   const edgeElements = [];
+  const roleElements = new Map();
+  const flowCopy = {
+    information: ['信息流', 'Goal → Context → Intent → Observation → Result', '展示真正传递的数据；没有进入 Trace 的信息不会被画成已传递。'],
+    decision: ['决策流', 'Model Proposal → Runtime Validation → Fixed Plan → Outcome', '区分模型提议与 Runtime 决定；模型不能直接启动 Tool。'],
+    risk: ['风控流', 'Evidence → Guardrail → Allow / Block → Audit', '展示检查对象、规则与影响；被绕过的历史能力不会显示成已通过。'],
+  };
   const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'model_live', 'intent_live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
 
   function element(tag, className, text) {
@@ -70,6 +78,129 @@
   }
   buildGraph();
 
+  function buildStudio() {
+    roleElements.clear();
+    byId('role-grid').replaceChildren();
+    for (const role of STUDIO_ROLES) {
+      const button = element('button', 'role-card');
+      button.type = 'button';
+      button.dataset.role = role.id;
+      button.dataset.status = 'waiting';
+      button.setAttribute('aria-pressed', 'false');
+      const top = element('span', 'role-top');
+      top.append(element('span', 'role-avatar', role.icon), element('span', 'role-type', role.type));
+      const footer = element('span', 'role-footer');
+      footer.append(element('span', 'role-state', '等待运行'), element('span', 'role-evidence', '0 events'));
+      button.append(top, element('strong', 'role-name', role.name), element('span', 'role-activity', role.idle), footer);
+      button.addEventListener('click', () => {
+        selectedRole = selectedRole === role.id ? null : role.id;
+        filter = null;
+        byId('engineering-details').open = true;
+        update();
+        byId('engineering-details').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      roleElements.set(role.id, button);
+      byId('role-grid').append(button);
+    }
+  }
+  buildStudio();
+
+  function roleStatus(role) {
+    const statuses = role.tasks.map(task => state.nodes[task]).filter(Boolean);
+    const failed = ['failed', 'rejected', 'open', 'expired', 'fenced', 'budget_blocked', 'abstained'];
+    const active = ['ready', 'running', 'proposed', 'repairing', 'retrieving', 'ranking', 'topk', 'verifying', 'scanning', 'quarantining', 'waiting_human', 'restarting', 'restoring', 'acquired', 'renewing', 'taking_over', 'retrying', 'writing', 'issuing', 'issued', 'authorizing', 'selecting', 'compressing', 'selected', 'reserved', 'fallback'];
+    if (statuses.some(status => failed.includes(status))) return 'failed';
+    if (statuses.some(status => active.includes(status))) return 'active';
+    if (statuses.some(status => status === 'completed')) return 'completed';
+    if (statuses.some(status => status === 'blocked')) return 'blocked';
+    return 'waiting';
+  }
+
+  function renderHandoffs() {
+    const handoffs = state.events.map(event => ({ event, handoff: handoffForEvent(event) })).filter(item => item.handoff);
+    const list = byId('handoff-list');
+    list.replaceChildren();
+    byId('handoff-count').textContent = `${handoffs.length} 个关键交接`;
+    if (!handoffs.length) {
+      list.append(element('li', 'handoff-empty', '运行后，这里只显示影响信息、决策或风险边界的关键交接。'));
+      return;
+    }
+    for (const { event, handoff } of handoffs) {
+      const item = element('li', 'handoff-item');
+      item.dataset.flow = handoff.flow;
+      item.dataset.filtered = String(handoff.flow !== flowMode);
+      const meta = element('div', 'handoff-meta');
+      meta.append(element('span', '', `#${event.sequence}`), element('span', '', handoff.flow.toUpperCase()));
+      const from = STUDIO_ROLES.find(role => role.id === handoff.from)?.name || handoff.from;
+      const to = STUDIO_ROLES.find(role => role.id === handoff.to)?.name || handoff.to;
+      const evidence = element('button', 'handoff-evidence', '查看原始事件 ↗');
+      evidence.type = 'button';
+      evidence.addEventListener('click', () => {
+        selectedRole = null;
+        filter = event.task_id || null;
+        byId('engineering-details').open = true;
+        update();
+        const row = byId('event-list').querySelector(`[data-sequence="${event.sequence}"]`);
+        if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      item.append(meta, element('div', 'handoff-actors', `${from}  →  ${to}`), element('strong', 'handoff-title', handoff.title), evidence);
+      list.append(item);
+    }
+  }
+
+  function updateModelInspector() {
+    const requests = state.events.filter(event => event.event === 'model_request_started');
+    const responses = state.events.filter(event => event.event === 'model_response_received');
+    const repairs = state.events.filter(event => event.event === 'model_repair_requested');
+    const lastRequest = requests.at(-1);
+    const lastResponse = responses.at(-1);
+    const accepted = [...state.events].reverse().find(event => ['model_intent_accepted', 'model_plan_accepted'].includes(event.event));
+    const rejected = [...state.events].reverse().find(event => ['model_intent_rejected', 'model_plan_rejected', 'model_intent_abstained'].includes(event.event));
+    const bypassed = state.events.find(event => event.event === 'model_bypassed');
+    byId('model-call-count').textContent = requests.length;
+    byId('model-repair-count').textContent = repairs.length;
+    byId('model-output-size').textContent = lastResponse?.output_characters ?? '—';
+    byId('model-name').textContent = lastRequest?.model || (bypassed ? '本次未调用大模型' : '尚未调用模型');
+    byId('model-presence-detail').textContent = lastRequest ? `${lastRequest.is_real_llm ? '真实 LLM' : '可重复教学模型'} · ${lastRequest.purpose || 'proposal'}` : (bypassed?.reason || '真实 LLM 与教学模型都会明确标记');
+    byId('model-input-title').textContent = lastRequest ? `Attempt ${lastRequest.attempt} · ${lastRequest.purpose || 'proposal'}` : '等待 Model Input';
+    byId('model-input').textContent = lastRequest ? JSON.stringify(lastRequest.prompt, null, 2) : '本次运行尚未向模型发送内容。';
+    byId('model-output-title').textContent = lastResponse ? `未经信任 · ${lastResponse.output_characters} characters` : '等待 Raw Output';
+    byId('model-output').textContent = lastResponse?.raw_output || '模型输出在 Runtime 校验前始终是不可信文本。';
+    if (accepted) {
+      byId('model-authority').textContent = accepted.event === 'model_intent_accepted' ? `Runtime 接受 Intent：${accepted.intent}` : 'Runtime 接受受限 Plan';
+      byId('model-decision').textContent = accepted.event === 'model_intent_accepted' ? 'Runtime 根据允许列表校验 Intent，并映射为自己持有的固定 2s10s 纸面任务图。' : 'Schema、Tool allowlist、DAG 与 paper-only 合约由 Runtime 校验后才可执行。';
+    } else if (rejected) {
+      byId('model-authority').textContent = 'Runtime 已阻止模型提议';
+      byId('model-decision').textContent = rejected.reason || rejected.reasons?.join(' · ') || '没有 Tool 获得执行机会。';
+    } else {
+      byId('model-authority').textContent = 'Runtime 保留最终权限';
+      byId('model-decision').textContent = '模型不能直接选择 Tool、修改执行参数或创建订单。';
+    }
+  }
+
+  function updateStudio() {
+    const relevantHandoffs = state.events.map(handoffForEvent).filter(Boolean).filter(handoff => handoff.flow === flowMode);
+    for (const role of STUDIO_ROLES) {
+      const button = roleElements.get(role.id);
+      const roleEvents = state.events.filter(event => role.tasks.includes(event.task_id) || (role.id === 'model' && event.event === 'model_response_received'));
+      const latest = roleEvents.at(-1);
+      const status = roleStatus(role);
+      button.dataset.status = status;
+      button.dataset.flowMuted = String(state.events.length > 0 && !relevantHandoffs.some(handoff => [handoff.from, handoff.to].includes(role.id)));
+      button.setAttribute('aria-pressed', String(selectedRole === role.id));
+      button.querySelector('.role-state').textContent = status === 'active' ? '正在工作' : status === 'completed' ? '本次已完成' : status === 'failed' ? '已停止 / 阻断' : status === 'blocked' ? '下游未执行' : '等待运行';
+      button.querySelector('.role-evidence').textContent = `${roleEvents.length} events`;
+      button.querySelector('.role-activity').textContent = latest ? describe(latest).title : role.idle;
+    }
+    const copy = flowCopy[flowMode];
+    byId('flow-route').dataset.flow = flowMode;
+    byId('flow-route').querySelector('.route-label').textContent = copy[0];
+    byId('flow-route-title').textContent = copy[1];
+    byId('flow-route-detail').textContent = copy[2];
+    renderHandoffs();
+    updateModelInspector();
+  }
+
   function addDetails(row, label, payload) {
     const details = element('details', 'event-details');
     details.append(element('summary', '', label));
@@ -83,6 +214,7 @@
     row.dataset.kind = view.kind;
     row.dataset.node = event.task_id || 'END';
     row.dataset.event = event.event || view.label || '';
+    row.dataset.sequence = event.sequence || '';
     const impact = eventImpact(event, view);
     row.dataset.phase = impact.phase.toLowerCase().replace(/\s+/g, '-');
     const metadata = element('div', 'event-meta');
@@ -188,10 +320,13 @@
     byId('run-budget').textContent = `运行预算 ${(state.budgetMs ?? scenarioBudget()) / 1000}s`;
     byId('event-count').textContent = state.events.length;
     byId('empty-state').hidden = rows.length > 0 || !!filter;
-    byId('stream-scope').textContent = filter ? `${filter} · ${definitions().find(n => n.id === filter).title}` : `全部节点 · 调用 · 结果${state.activeTasks.length ? ` · 活跃 ${state.activeTasks.length}` : ''}`;
-    byId('clear-filter').hidden = !filter;
-    rows.forEach(row => { row.hidden = !!filter && row.dataset.node !== filter && !(filter === 'R1' && row.dataset.node === 'END'); });
-    byId('filter-empty').hidden = !filter || rows.some(row => !row.hidden);
+    const roleFilter = selectedRole ? STUDIO_ROLES.find(role => role.id === selectedRole) : null;
+    byId('stream-scope').textContent = roleFilter ? `${roleFilter.name} · ${roleFilter.tasks.join(' / ')}` : filter ? `${filter} · ${definitions().find(n => n.id === filter).title}` : `全部节点 · 调用 · 结果${state.activeTasks.length ? ` · 活跃 ${state.activeTasks.length}` : ''}`;
+    byId('clear-filter').hidden = !filter && !roleFilter;
+    rows.forEach(row => {
+      row.hidden = roleFilter ? !roleFilter.tasks.includes(row.dataset.node) : !!filter && row.dataset.node !== filter && !(filter === 'R1' && row.dataset.node === 'END');
+    });
+    byId('filter-empty').hidden = (!filter && !roleFilter) || rows.some(row => !row.hidden);
     byId('download').disabled = !state.events.length;
     byId('replay-button').hidden = !state.terminal || !state.runId || inFlight;
     byId('replay-button').disabled = inFlight;
@@ -210,6 +345,7 @@
     for (const input of byId('parameters').elements) input.disabled = inFlight;
     byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? (state.replayed ? '历史事件已重放 · 未重新调用 Tool' : '事件流已完成 · 完整输入与输出已保留') : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
     updateOverview();
+    updateStudio();
   }
   function scrollToLatest() {
     if (byId('follow').checked) byId('stream-scroll').scrollTop = byId('stream-scroll').scrollHeight;
@@ -322,6 +458,7 @@
     state = createState('parallel');
     state.phase = 'connecting';
     filter = null;
+    selectedRole = null;
     rows.length = 0;
     byId('event-list').replaceChildren();
     byId('settings').open = false;
@@ -352,6 +489,7 @@
     cancelPending = false;
     cancelNote = '';
     filter = null;
+    selectedRole = null;
     rows.length = 0;
     byId('event-list').replaceChildren();
     state = createState('parallel');
@@ -383,7 +521,16 @@
     update();
   });
   byId('parameters').addEventListener('submit', event => { event.preventDefault(); run(); });
-  byId('clear-filter').addEventListener('click', () => { filter = null; update(); });
+  byId('clear-filter').addEventListener('click', () => { filter = null; selectedRole = null; update(); });
+  document.querySelectorAll('.flow-tab').forEach(button => button.addEventListener('click', () => {
+    flowMode = button.dataset.flow;
+    document.querySelectorAll('.flow-tab').forEach(tab => {
+      const selected = tab === button;
+      tab.classList.toggle('active', selected);
+      tab.setAttribute('aria-selected', String(selected));
+    });
+    updateStudio();
+  }));
   byId('follow').addEventListener('change', scrollToLatest);
   // Reading older events should never be interrupted by automatic scrolling.
   byId('stream-scroll').addEventListener('wheel', event => { if (event.deltaY < 0) byId('follow').checked = false; }, { passive: true });
