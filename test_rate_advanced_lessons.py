@@ -5,7 +5,7 @@ import unittest
 from rate_advanced_lessons import (ADVANCED_SCENARIOS, GOLDEN_BEHAVIOR,
                                    JsonlRateMemoryStore, ROLE_CONTRACTS,
                                    RateAdvancedLessons, evaluate_golden_trace,
-                                   validate_handoff, _handoff)
+                                   validate_handoff, validate_task_graph, _handoff)
 
 
 class AdvancedRateLessonTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class AdvancedRateLessonTests(unittest.TestCase):
         return result
 
     def test_all_teaching_scenarios_are_runnable(self):
-        self.assertEqual(len(ADVANCED_SCENARIOS), 11)
+        self.assertEqual(len(ADVANCED_SCENARIOS), 23)
         for scenario in sorted(ADVANCED_SCENARIOS):
             result = self.run_lesson(scenario)
             if scenario == "eval_regression_fail":
@@ -71,6 +71,74 @@ class AdvancedRateLessonTests(unittest.TestCase):
             stopped = next(row for row in result["trace"] if row["event"] == "orchestration_stopped")
             self.assertTrue(stopped["safe_stop"])
             self.assertEqual(stopped["effect_count"], 0)
+
+    def test_dynamic_graph_validates_before_dispatch_and_blocks_cycles(self):
+        passed = self.run_lesson("decomposition_dynamic_pass")
+        names = [row["event"] for row in passed["trace"]]
+        self.assertLess(names.index("task_graph_validated"), names.index("dynamic_worker_dispatched"))
+        self.assertEqual(names.count("dynamic_worker_completed"), 3)
+        blocked = self.run_lesson("decomposition_cycle_block")
+        self.assertFalse(any(row["event"] == "dynamic_worker_dispatched" for row in blocked["trace"]))
+        rejected = next(row for row in blocked["trace"] if row["event"] == "task_graph_rejected")
+        self.assertEqual((rejected["workers_dispatched"], rejected["effect_count"]), (0, 0))
+
+    def test_graph_validator_rejects_unknown_edges_and_cycles(self):
+        tasks = [{"task_id": "A"}, {"task_id": "B"}]
+        self.assertTrue(validate_task_graph(tasks, [["A", "B"]])["passed"])
+        self.assertFalse(validate_task_graph(tasks, [["A", "C"]])["checks"]["valid_edge_references"])
+        self.assertFalse(validate_task_graph(tasks, [["A", "B"], ["B", "A"]])["checks"]["acyclic"])
+
+    def test_agent_tool_manager_keeps_control_and_scope_block_is_safe(self):
+        passed = self.run_lesson("agent_tool_parallel_pass")
+        results = [row for row in passed["trace"] if row["event"] == "agent_tool_result_received"]
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(row["manager_retains_control"] for row in results))
+        blocked = self.run_lesson("agent_tool_scope_block")
+        self.assertFalse(any(row["event"] == "paper_runtime_mapped" for row in blocked["trace"]))
+        rejection = next(row for row in blocked["trace"] if row["event"] == "agent_tool_scope_rejected")
+        self.assertEqual(rejection["effect_count"], 0)
+
+    def test_observability_slo_controls_runtime_without_capturing_content(self):
+        passed = self.run_lesson("observability_slo_pass")
+        self.assertTrue(any(row["event"] == "paper_runtime_mapped" for row in passed["trace"]))
+        spans = [row for row in passed["trace"] if row["event"] == "span_completed"]
+        self.assertTrue(all(row["parent_span_id"] == "root-01" and not row["content_captured"] for row in spans))
+        blocked = self.run_lesson("observability_slo_breach")
+        self.assertEqual(blocked["eval"]["terminal_action"], "STOP")
+        self.assertFalse(any(row["event"] == "paper_runtime_mapped" for row in blocked["trace"]))
+
+    def test_durable_resume_reuses_committed_outputs_and_rejects_stale_bindings(self):
+        resumed = self.run_lesson("durable_resume_pass")
+        restored = [row["task_id"] for row in resumed["trace"]
+                    if row["event"] == "task_restored_from_checkpoint"]
+        self.assertEqual(restored, ["W1", "W2"])
+        self.assertEqual(resumed["eval"]["checks"]["completed_tasks_not_repeated"], True)
+        stale = self.run_lesson("durable_stale_checkpoint_block")
+        rejection = next(row for row in stale["trace"] if row["event"] == "stale_checkpoint_rejected")
+        self.assertEqual((rejection["resumed_tasks"], rejection["effect_count"]), (0, 0))
+        self.assertFalse(any(row["event"] == "unfinished_task_resumed" for row in stale["trace"]))
+
+    def test_saga_compensates_in_reverse_or_escalates_truthfully(self):
+        compensated = self.run_lesson("saga_compensation_pass")
+        actions = [row["action"] for row in compensated["trace"]
+                   if row["event"] == "compensation_applied"]
+        self.assertEqual(actions, ["mark_paper_intent_compensated", "release_paper_risk"])
+        terminal = next(row for row in compensated["trace"] if row["event"] == "saga_compensated")
+        self.assertEqual(terminal["open_paper_effects"], 0)
+        escalated = self.run_lesson("saga_compensation_escalate")
+        self.assertFalse(any(row["event"] == "saga_compensated" for row in escalated["trace"]))
+        self.assertIn("reconciliation_required", [row["event"] for row in escalated["trace"]])
+
+    def test_release_uses_shadow_canary_and_safe_rollback(self):
+        promoted = self.run_lesson("release_canary_promote")
+        shadow = next(row for row in promoted["trace"] if row["event"] == "shadow_run_started")
+        self.assertFalse(shadow["result_authority"])
+        self.assertEqual(promoted["eval"]["terminal_action"], "PROMOTE")
+        rolled_back = self.run_lesson("release_canary_rollback")
+        self.assertEqual(rolled_back["eval"]["terminal_action"], "ROLLBACK")
+        rollback = next(row for row in rolled_back["trace"] if row["event"] == "release_rolled_back")
+        self.assertEqual(rollback["candidate_traffic_percent"], 0)
+        self.assertTrue(rollback["candidate_traces_preserved"])
 
     def test_golden_eval_compares_behavior_not_wording(self):
         candidate = {

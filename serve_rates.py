@@ -19,7 +19,7 @@ from rate_approval import ApprovalRegistry
 from rate_event_log import EventLogError, RateEventLog
 from rate_execution import PaperExecutionTracker, partial_fill_cancel_race_demo, replay_execution
 from rate_advanced_lessons import (ADVANCED_SCENARIOS, JsonlRateMemoryStore,
-                                   RateAdvancedLessons)
+                                   RateAdvancedLessons, execution_mode_for_scenario)
 from r12_paper import JsonlR12PaperLedgerStore, R12PaperLedger, evaluate_r12_paper_trade
 from serve_r12 import R12VisualizerHandler
 
@@ -412,7 +412,7 @@ class RateStrategyHandler(R12VisualizerHandler):
             self.wfile.flush()
 
         try:
-            send("start", strategy="2s10s", execution_mode="orchestration" if scenario.startswith("orchestration_") else "parallel",
+            send("start", strategy="2s10s", execution_mode=execution_mode_for_scenario(scenario),
                  cancel_supported=False, budget_ms=30000,
                  lesson=scenario, deterministic_teaching_fixture=True)
             result = ADVANCED_LESSONS.run(

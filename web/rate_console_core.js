@@ -48,10 +48,66 @@
     NODES[5],
   ];
   const ORCHESTRATION_ROWS = ORCHESTRATION_NODES.map(node => [node.id]);
+  const DECOMPOSITION_NODES = [
+    NODES[0], { id: 'DG1', title: 'Decomposer', description: '目标 → 有类型的动态子任务' },
+    { id: 'GV1', title: 'Graph validator', description: '引用完整 · 无环 · 先验约' },
+    { id: 'W1', title: 'Curve worker', description: '2Y/10Y 证据与利差' },
+    { id: 'W2', title: 'Regime worker', description: '市场状态分析' },
+    { id: 'W3', title: 'Stress worker', description: '纸面风险边界' },
+    { id: 'J1', title: 'Dynamic join', description: '3/3 类型输出才放行' },
+    { id: 'SY1', title: 'Synthesizer', description: '汇总为纸面研究简报' }, NODES[5],
+  ];
+  const DECOMPOSITION_ROWS = [['G1'], ['DG1'], ['GV1'], ['W1', 'W2', 'W3'], ['J1'], ['SY1'], ['E1']];
+  const AGENT_TOOL_NODES = [
+    NODES[0], { id: 'MG1', title: 'Manager', description: '保留控制权与最终回答权' },
+    { id: 'AT1', title: 'Curve specialist', description: 'Agent-as-Tool · 只分析曲线' },
+    { id: 'AT2', title: 'Risk specialist', description: 'Agent-as-Tool · 只检查限额' },
+    { id: 'J1', title: 'Tool results', description: '结构化结果回到 Manager' },
+    { id: 'R1', title: 'Paper Runtime', description: '仅接收 Manager 的已验约提议' }, NODES[5],
+  ];
+  const AGENT_TOOL_ROWS = [['G1'], ['MG1'], ['AT1', 'AT2'], ['J1'], ['R1'], ['E1']];
+  const OBSERVABILITY_NODES = [
+    NODES[0], { id: 'TR1', title: 'Root trace', description: 'Trace ID · 隐私采集策略' },
+    { id: 'SP1', title: 'Plan span', description: '父子关系 · latency · tokens' },
+    { id: 'SP2', title: 'Curve span', description: '父子关系 · latency · tokens' },
+    { id: 'SP3', title: 'Risk span', description: '父子关系 · latency · tokens' },
+    { id: 'SLO1', title: 'SLO gate', description: '延迟 · token · 副作用门禁' },
+    { id: 'R1', title: 'Paper Runtime', description: 'SLO 通过后才激活' }, NODES[5],
+  ];
+  const OBSERVABILITY_ROWS = [['G1'], ['TR1'], ['SP1', 'SP2', 'SP3'], ['SLO1'], ['R1'], ['E1']];
+  const DURABLE_NODES = [
+    NODES[0], { id: 'DW1', title: 'Durable workflow', description: '版本绑定的多 Agent 运行' },
+    { id: 'CP1', title: 'Checkpoint', description: '原子提交 · fsync · 输出收据' },
+    { id: 'RV1', title: 'Resume validator', description: 'Run · 图版本 · 输入指纹 · Guardrail' },
+    { id: 'W1', title: 'Restored W1', description: '从 Checkpoint 恢复 · 不重跑' },
+    { id: 'W2', title: 'Restored W2', description: '从 Checkpoint 恢复 · 不重跑' },
+    { id: 'W3', title: 'Resumed W3', description: '只继续未完成任务' },
+    { id: 'J1', title: 'Recovery join', description: '恢复与新结果全部到齐' },
+    { id: 'RC1', title: 'Recovery terminal', description: '完成或拒绝旧 Checkpoint' }, NODES[5],
+  ];
+  const DURABLE_ROWS = [['G1'], ['DW1'], ['CP1'], ['RV1'], ['W1', 'W2', 'W3'], ['J1'], ['RC1'], ['E1']];
+  const SAGA_NODES = [
+    NODES[0], { id: 'SG1', title: 'Saga coordinator', description: '正向步骤与补偿契约' },
+    { id: 'F1', title: 'Reserve risk', description: '纸面风险额度' },
+    { id: 'F2', title: 'Create intent', description: '追加纸面意图' },
+    { id: 'F3', title: 'Ledger write', description: '教学故障点' },
+    { id: 'C2', title: 'Compensate intent', description: '追加补偿记录' },
+    { id: 'C1', title: 'Release risk', description: '恢复纸面风险额度' },
+    { id: 'RC1', title: 'Reconcile', description: 'COMPENSATED 或人工介入' }, NODES[5],
+  ];
+  const SAGA_ROWS = SAGA_NODES.map(node => [node.id]);
+  const RELEASE_NODES = [
+    NODES[0], { id: 'RB1', title: 'Release bundle', description: 'Model · Prompt · Graph · Policy' },
+    { id: 'GE1', title: 'Golden gate', description: '行为合约回归评测' },
+    { id: 'SH1', title: 'Shadow', description: '同输入 · 0% 结果权限' },
+    { id: 'CA1', title: '5% Canary', description: '少量纸面 Run 灰度' },
+    { id: 'RG1', title: 'Release gate', description: '晋级或自动回滚' }, NODES[5],
+  ];
+  const RELEASE_ROWS = RELEASE_NODES.map(node => [node.id]);
   const STUDIO_ROLES = [
     {
       id: 'orchestration_supervisor', name: '编排主管', type: '确定性 Supervisor', icon: 'S',
-      tasks: ['OS1'],
+      tasks: ['OS1', 'DG1', 'SY1', 'MG1', 'DW1', 'SG1'],
       mission: '分配、退回、重分配或停止有界任务',
       input: 'Goal · Task Result · Worker Health', output: 'orchestration_decision_v1',
       functions: ['选择下一责任人', '跟踪 Revision 与 Token 预算', '检测循环和超时'],
@@ -60,7 +116,7 @@
     },
     {
       id: 'strategy_analyst', name: '策略分析师', type: 'LLM + 规则', icon: 'A',
-      tasks: ['G1', 'RG1', 'CT1', 'MR1', 'M1', 'P1', 'D1', 'A2', 'A10', 'J1', 'S1'],
+      tasks: ['G1', 'RG1', 'CT1', 'MR1', 'M1', 'P1', 'D1', 'A2', 'A10', 'J1', 'S1', 'W1', 'W2', 'AT1'],
       mission: '研究 2s10s，并提出有证据的纸面策略',
       input: '目标 · DGS2/DGS10 · Context', output: 'strategy_handoff_v1',
       functions: ['解释数据', '生成策略提议', '绑定 Evidence IDs'],
@@ -69,7 +125,7 @@
     },
     {
       id: 'risk_controller', name: '风险主管', type: '确定性规则', icon: 'R',
-      tasks: ['CG1', 'TG1', 'H1', 'AZ1', 'C1', 'V1', 'Q1', 'E1'],
+      tasks: ['CG1', 'TG1', 'H1', 'AZ1', 'C1', 'V1', 'Q1', 'E1', 'GV1', 'W3', 'AT2', 'SLO1', 'RV1', 'F1', 'GE1', 'RG1'],
       mission: '独立验约，只决定 ALLOW 或 BLOCK',
       input: 'strategy_handoff_v1', output: 'risk_handoff_v1 / REJECT',
       functions: ['检查 Schema 与路由', '核对证据和 Hash', '执行 Paper-only 门禁'],
@@ -78,7 +134,7 @@
     },
     {
       id: 'runtime_supervisor', name: '执行主管', type: 'Runtime', icon: 'E',
-      tasks: ['R1', 'L1', 'O1', 'LG1'],
+      tasks: ['R1', 'L1', 'O1', 'LG1', 'TR1', 'SP1', 'SP2', 'SP3', 'CP1', 'F2', 'F3', 'C2', 'SH1', 'CA1', 'RC1'],
       mission: '只把已批准合约映射到固定纸面任务图',
       input: 'risk_handoff_v1', output: 'runtime_decision_v1 · Trace',
       functions: ['重新验证交接', '映射固定 DAG', '持久化完整终态'],
@@ -86,8 +142,8 @@
       idle: '等待风险主管放行',
     },
   ];
-  const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|privacy|memory_write_blocked|handoff_validation|handoff_rejected|authority_violation|loop_detected|orchestration_stopped|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
-  const DECISION_EVENT = /(orchestration|task_ownership|task_returned|model_intent|model_plan|model_regression|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|agent_role|handoff_contract|handoff_accepted|join_|run_completed)/;
+  const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|privacy|memory_write_blocked|handoff_validation|handoff_rejected|authority_violation|scope_rejected|graph_rejected|checkpoint_binding|stale_checkpoint|compensation_failed|reconciliation_required|canary_gate|rolled_back|slo_|safe_stop|loop_detected|orchestration_stopped|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
+  const DECISION_EVENT = /(orchestration|task_graph|dynamic_|manager_|agent_tool|durable_|checkpoint_|task_restored|unfinished_task|resume_|recovery_|saga_|compensation_|release_|shadow_|canary_|task_ownership|task_returned|model_intent|model_plan|model_regression|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|agent_role|handoff_contract|handoff_accepted|join_|run_completed)/;
   function flowForEvent(event) {
     const name = event?.event || '';
     if (RISK_EVENT.test(name)) return 'risk';
@@ -104,7 +160,28 @@
   function handoffForEvent(event) {
     const name = event?.event || '';
     const flow = flowForEvent(event);
-    if (name === 'goal_received') return { from: '你', to: String(event.scenario || '').startsWith('orchestration_') ? 'orchestration_supervisor' : 'strategy_analyst', flow, title: '提交 2s10s 教学目标' };
+    if (name === 'goal_received') return { from: '你', to: /^(orchestration_|decomposition_|agent_tool_)/.test(String(event.scenario || '')) ? 'orchestration_supervisor' : 'strategy_analyst', flow, title: '提交 2s10s 教学目标' };
+    if (name === 'task_graph_proposed') return { from: 'orchestration_supervisor', to: 'risk_controller', flow: 'decision', title: '提交动态任务图验约' };
+    if (name === 'task_graph_validated') return { from: 'risk_controller', to: 'runtime_supervisor', flow: 'risk', title: '任务图无环，可以派发 Worker' };
+    if (name === 'task_graph_rejected') return { from: 'risk_controller', to: 'orchestration_supervisor', flow: 'risk', title: '任务图有环，Worker 派发为零' };
+    if (name === 'dynamic_worker_dispatched') return { from: 'orchestration_supervisor', to: event.actor_role, flow: 'decision', title: `派发 ${event.task_id} 类型任务` };
+    if (name === 'dynamic_worker_completed') return { from: event.actor_role, to: 'runtime_supervisor', flow: 'information', title: `${event.task_id} 返回 ${event.output_type}` };
+    if (name === 'manager_control_started') return { from: '你', to: 'orchestration_supervisor', flow: 'decision', title: 'Manager 接管最终回答权' };
+    if (name === 'agent_tool_call_started') return { from: 'orchestration_supervisor', to: event.actor_role, flow: 'decision', title: `调用专家 ${event.tool_name}` };
+    if (name === 'agent_tool_result_received') return { from: event.actor_role, to: 'orchestration_supervisor', flow: 'information', title: `${event.tool_name} 返回结构化结果` };
+    if (name === 'agent_tool_scope_rejected') return { from: event.actor_role, to: 'orchestration_supervisor', flow: 'risk', title: '专家越权请求被拒绝' };
+    if (name === 'span_completed') return { from: 'runtime_supervisor', to: 'risk_controller', flow: 'information', title: `${event.span_name} 指标已上报` };
+    if (name === 'slo_evaluation_completed') return { from: 'risk_controller', to: event.passed ? 'runtime_supervisor' : '你', flow: 'risk', title: event.passed ? 'SLO 门禁通过' : 'SLO 门禁拒绝运行' };
+    if (name === 'checkpoint_committed') return { from: 'runtime_supervisor', to: 'runtime_supervisor', flow: 'information', title: '原子提交恢复点' };
+    if (name === 'checkpoint_binding_validated') return { from: 'runtime_supervisor', to: 'risk_controller', flow: 'risk', title: event.passed ? 'Checkpoint 绑定有效' : 'Checkpoint 已过期' };
+    if (name === 'task_restored_from_checkpoint') return { from: 'runtime_supervisor', to: 'orchestration_supervisor', flow: 'information', title: `${event.task_id} 从收据恢复，不重跑 Tool` };
+    if (name === 'unfinished_task_resumed') return { from: 'orchestration_supervisor', to: event.actor_role, flow: 'decision', title: `只恢复未完成任务 ${event.task_id}` };
+    if (name === 'saga_step_failed') return { from: event.actor_role, to: 'orchestration_supervisor', flow: 'risk', title: '正向步骤失败，启动逆序补偿' };
+    if (name === 'compensation_applied') return { from: event.actor_role, to: 'orchestration_supervisor', flow: 'decision', title: `补偿完成：${event.action}` };
+    if (name === 'compensation_failed') return { from: event.actor_role, to: '你', flow: 'risk', title: '补偿失败，需要人工对账' };
+    if (name === 'shadow_comparison_completed') return { from: 'runtime_supervisor', to: 'risk_controller', flow: 'information', title: 'Shadow 指标交付 Release Gate' };
+    if (name === 'canary_gate_evaluated') return { from: 'risk_controller', to: 'orchestration_supervisor', flow: 'risk', title: event.passed ? 'Canary 可以晋级' : 'Canary 必须回滚' };
+    if (name === 'release_promoted' || name === 'release_rolled_back') return { from: 'orchestration_supervisor', to: '你', flow: 'decision', title: name === 'release_promoted' ? 'Candidate 晋级为 Active' : '流量切回 Current' };
     if (name === 'orchestration_started') return { from: '你', to: 'orchestration_supervisor', flow: 'decision', title: '启动有界编排策略' };
     if (name === 'orchestration_decision_recorded') return { from: 'orchestration_supervisor', to: event.to_owner || '你', flow, title: `${event.action} · ${event.reason}` };
     if (name === 'task_ownership_changed') return { from: event.from_owner || 'orchestration_supervisor', to: event.assignee_role, flow: 'decision', title: `任务所有权 v${event.ownership_version}` };
@@ -140,10 +217,21 @@
     return null;
   }
   function modeForScenario(scenario = '') {
-    return String(scenario).startsWith('orchestration_') ? 'orchestration' : 'parallel';
+    const value = String(scenario);
+    if (value.startsWith('decomposition_')) return 'decomposition';
+    if (value.startsWith('agent_tool_')) return 'agent_tool';
+    if (value.startsWith('observability_')) return 'observability';
+    if (value.startsWith('durable_')) return 'durable';
+    if (value.startsWith('saga_')) return 'saga';
+    if (value.startsWith('release_')) return 'release';
+    return value.startsWith('orchestration_') ? 'orchestration' : 'parallel';
   }
   function createState(mode = 'serial') {
-    const definitions = mode === 'parallel' ? PARALLEL_NODES : mode === 'orchestration' ? ORCHESTRATION_NODES : NODES;
+    const graphs = { parallel: PARALLEL_NODES, orchestration: ORCHESTRATION_NODES,
+      decomposition: DECOMPOSITION_NODES, agent_tool: AGENT_TOOL_NODES,
+      observability: OBSERVABILITY_NODES, durable: DURABLE_NODES,
+      saga: SAGA_NODES, release: RELEASE_NODES };
+    const definitions = graphs[mode] || NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), agentStates: Object.fromEntries(STUDIO_ROLES.map(role => [role.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
   }
   function failState(state, error) {
@@ -201,6 +289,67 @@
         state.agentStates.runtime_supervisor = 'completed';
         break;
       case 'orchestration_stopped': state.nodes.OS1 = 'abstained'; break;
+      case 'task_graph_proposed': state.nodes.DG1 = 'completed'; state.nodes.GV1 = 'ready'; break;
+      case 'task_graph_validation_started': state.nodes.GV1 = 'verifying'; break;
+      case 'task_graph_validated': state.nodes.GV1 = 'completed'; break;
+      case 'task_graph_rejected':
+        state.nodes.GV1 = 'rejected';
+        for (const worker of ['W1', 'W2', 'W3', 'J1', 'SY1']) if (worker in state.nodes) state.nodes[worker] = 'blocked';
+        break;
+      case 'dynamic_worker_dispatched': state.nodes[id] = 'running'; state.agentStates[event.actor_role] = 'active'; break;
+      case 'dynamic_worker_completed': state.nodes[id] = 'completed'; state.agentStates[event.actor_role] = 'completed'; break;
+      case 'dynamic_join_released': state.nodes.J1 = 'completed'; break;
+      case 'dynamic_synthesis_completed': state.nodes.SY1 = 'completed'; break;
+      case 'manager_control_started': state.nodes.MG1 = 'running'; state.agentStates.orchestration_supervisor = 'active'; break;
+      case 'agent_tool_registered': state.nodes.MG1 = 'ready'; break;
+      case 'agent_tool_call_started': state.nodes[id] = 'running'; state.agentStates[event.actor_role] = 'active'; break;
+      case 'agent_tool_result_received':
+        state.nodes[id] = 'completed';
+        state.agentStates[event.actor_role] = 'completed';
+        if (['AT1', 'AT2'].every(task => !(task in state.nodes) || state.nodes[task] === 'completed')) state.nodes.J1 = 'completed';
+        break;
+      case 'agent_tool_scope_rejected': state.nodes[id] = 'rejected'; state.nodes.J1 = 'blocked'; state.nodes.R1 = 'blocked'; state.agentStates[event.actor_role] = 'rejected'; break;
+      case 'manager_synthesis_completed': state.nodes.MG1 = 'completed'; break;
+      case 'manager_run_stopped': state.nodes.MG1 = 'abstained'; break;
+      case 'trace_root_started': state.nodes.TR1 = 'running'; state.agentStates.runtime_supervisor = 'active'; break;
+      case 'span_started': state.nodes[id] = 'running'; break;
+      case 'span_completed': state.nodes[id] = 'completed'; break;
+      case 'telemetry_aggregated': state.nodes.TR1 = 'completed'; state.nodes.SLO1 = 'ready'; break;
+      case 'slo_evaluation_started': state.nodes.SLO1 = 'verifying'; break;
+      case 'slo_evaluation_completed': state.nodes.SLO1 = event.passed ? 'completed' : 'rejected'; break;
+      case 'slo_breach_detected': state.nodes.SLO1 = 'rejected'; state.nodes.R1 = 'blocked'; break;
+      case 'observability_safe_stop': state.nodes.SLO1 = 'abstained'; break;
+      case 'durable_run_started': state.nodes.DW1 = 'running'; break;
+      case 'durable_task_completed': state.nodes[id] = 'completed'; break;
+      case 'checkpoint_committed': state.nodes.CP1 = 'completed'; break;
+      case 'runtime_interrupted': state.nodes.CP1 = 'failed'; break;
+      case 'checkpoint_loaded': state.nodes.RV1 = 'verifying'; break;
+      case 'checkpoint_binding_validated': state.nodes.RV1 = event.passed ? 'completed' : 'rejected'; break;
+      case 'stale_checkpoint_rejected':
+        state.nodes.RV1 = 'rejected';
+        for (const task of ['W1', 'W2', 'W3', 'J1', 'RC1']) state.nodes[task] = 'blocked';
+        break;
+      case 'task_restored_from_checkpoint': state.nodes[id] = 'completed'; break;
+      case 'unfinished_task_resumed': state.nodes[id] = 'running'; break;
+      case 'resume_join_released': state.nodes.J1 = 'completed'; break;
+      case 'recovery_completed': state.nodes.RC1 = 'completed'; state.nodes.DW1 = 'completed'; break;
+      case 'saga_started': state.nodes.SG1 = 'running'; break;
+      case 'saga_step_applied': state.nodes[id] = 'completed'; break;
+      case 'saga_step_failed': state.nodes[id] = 'failed'; break;
+      case 'compensation_started': state.nodes.C2 = 'running'; break;
+      case 'compensation_applied': state.nodes[id] = 'completed'; break;
+      case 'compensation_failed': state.nodes[id] = 'failed'; break;
+      case 'saga_compensated': state.nodes.RC1 = 'completed'; state.nodes.SG1 = 'completed'; break;
+      case 'reconciliation_required': state.nodes.RC1 = 'waiting_human'; state.nodes.SG1 = 'abstained'; break;
+      case 'release_bundle_created': state.nodes.RB1 = 'completed'; break;
+      case 'release_golden_eval_completed': state.nodes.GE1 = event.passed ? 'completed' : 'rejected'; break;
+      case 'shadow_run_started': state.nodes.SH1 = 'running'; break;
+      case 'shadow_comparison_completed': state.nodes.SH1 = event.passed ? 'completed' : 'rejected'; break;
+      case 'canary_started': state.nodes.CA1 = 'running'; break;
+      case 'canary_gate_evaluated': state.nodes.RG1 = event.passed ? 'ready' : 'rejected'; break;
+      case 'canary_allocation_stopped': state.nodes.CA1 = 'abstained'; break;
+      case 'release_promoted': state.nodes.RG1 = 'completed'; break;
+      case 'release_rolled_back': state.nodes.RG1 = 'completed'; break;
       case 'retrieval_bypassed': state.nodes.RG1 = 'completed'; break;
       case 'retrieval_query_created': state.nodes.RG1 = 'retrieving'; break;
       case 'retrieval_candidate_scored': state.nodes.RG1 = 'ranking'; break;
@@ -406,6 +555,16 @@
           state.nodes.OS1 = 'completed';
           if (state.nodes.R1 === 'waiting') state.nodes.R1 = 'blocked';
           state.agentStates.orchestration_supervisor = 'completed';
+        } else if (state.mode === 'decomposition') {
+          if (state.nodes.SY1 === 'waiting') state.nodes.SY1 = 'blocked';
+          state.agentStates.orchestration_supervisor = state.nodes.SY1 === 'completed' ? 'completed' : 'rejected';
+        } else if (state.mode === 'agent_tool') {
+          if (state.nodes.MG1 !== 'abstained') state.nodes.MG1 = 'completed';
+          if (state.nodes.R1 === 'waiting') state.nodes.R1 = 'blocked';
+        } else if (state.mode === 'observability') {
+          if (state.nodes.R1 === 'waiting') state.nodes.R1 = 'blocked';
+        } else if (['durable', 'saga', 'release'].includes(state.mode)) {
+          // Their terminal nodes already encode COMPLETE, STOP, ESCALATE, PROMOTE, or ROLLBACK.
         } else {
           state.nodes.R1 = 'completed';
           if (state.agentStates.runtime_supervisor !== 'waiting') state.agentStates.runtime_supervisor = 'completed';
@@ -493,6 +652,57 @@
     const common = { kind: 'node', label: 'NODE', title: event.event, description: '', detailLabel: '完整事件', payload: event };
     switch (event.event) {
       case 'goal_received': return { ...common, label: 'INPUT', title: 'Goal received', description: event.goal, detailLabel: '目标与运行参数' };
+      case 'task_graph_proposed': return { ...common, kind: 'handoff', label: 'TASK GRAPH', title: `${event.tasks.length} typed tasks · ${event.edges.length} edges`, description: 'Decomposer 只提出拓扑；Graph Validator 通过前不得派发 Worker。', detailLabel: '动态任务与依赖', payload: event };
+      case 'task_graph_validation_started': return { ...common, kind: 'security', label: 'GRAPH GATE', title: 'Validate before dispatch', description: event.checks.join(' · '), detailLabel: '图验证规则', payload: event };
+      case 'task_graph_validated': return { ...common, kind: 'result', label: 'DAG PASS', title: event.topological_order.join(' → '), description: '引用完整且无环；现在才允许并行派发。', detailLabel: '拓扑排序与检查', payload: event };
+      case 'task_graph_rejected': return { ...common, kind: 'error', label: 'CYCLE BLOCK', title: event.reasons.join(' · '), description: `Worker 派发 ${event.workers_dispatched} · 副作用 ${event.effect_count}`, detailLabel: '拒绝的完整任务图', payload: event };
+      case 'dynamic_worker_dispatched': return { ...common, kind: 'call', label: 'DYNAMIC WORKER', title: `${event.task_id} → ${event.actor_role}`, description: `${event.task_contract.output} · ${event.input_scope}`, detailLabel: 'Worker 输入输出合约', payload: event };
+      case 'dynamic_worker_completed': return { ...common, kind: 'result', label: 'WORKER RESULT', title: `${event.task_id} · ${event.output_type}`, description: '结构化结果返回 Join；Worker 不能自行启动下一任务。', detailLabel: '完整 Worker 输出', payload: event.output };
+      case 'dynamic_join_released': return { ...common, kind: 'result', label: '3/3 JOIN', title: event.received.join(' + '), description: '所有必需的类型化结果到齐，Synthesizer 才能运行。', detailLabel: 'Join 条件', payload: event };
+      case 'dynamic_synthesis_completed': return { ...common, kind: 'result', label: 'SYNTHESIS', title: 'Paper research brief ready', description: '只汇总为研究提议，不产生订单或自动执行。', detailLabel: '综合结果', payload: event.synthesis };
+      case 'manager_control_started': return { ...common, kind: 'handoff', label: 'MANAGER', title: 'Control stays with manager', description: '专家是可调用能力，不接管对话，也不能交付最终答案。', detailLabel: '控制权合约', payload: event };
+      case 'agent_tool_registered': return { ...common, kind: 'capability', label: 'AGENT TOOL', title: event.tool.tool_name, description: `${event.tool.input} → ${event.tool.output} · ${event.tool.authority.join(' · ')}`, detailLabel: '专家能力声明', payload: event.tool };
+      case 'agent_tool_call_started': return { ...common, kind: 'call', label: 'DELEGATE', title: event.tool_name, description: `Manager 保留控制权 · scope ${event.requested_scope.join(' · ')}`, detailLabel: '委派请求', payload: event };
+      case 'agent_tool_result_received': return { ...common, kind: 'result', label: 'RETURN TO MANAGER', title: `${event.tool_name} · ${event.output_schema}`, description: '专家结果回到 Manager，不能直接进入 Runtime。', detailLabel: '结构化专家输出', payload: event.output };
+      case 'agent_tool_scope_rejected': return { ...common, kind: 'error', label: 'SCOPE BLOCK', title: `${event.tool_name} cannot ${event.requested_action}`, description: `允许：${event.allowed_actions.join(' · ')} · 副作用 ${event.effect_count}`, detailLabel: '越权请求', payload: event };
+      case 'manager_synthesis_completed': return { ...common, kind: 'result', label: 'MANAGER SYNTHESIS', title: event.sources.join(' + '), description: 'Manager 组合专家结果并承担最终提议责任。', detailLabel: 'Manager 输出', payload: event.proposal };
+      case 'manager_run_stopped': return { ...common, kind: 'error', label: 'SAFE STOP', title: event.reason, description: `Manager 保留控制并停止 · 副作用 ${event.effect_count}`, detailLabel: '停止终态', payload: event };
+      case 'trace_root_started': return { ...common, kind: 'observability', label: 'ROOT TRACE', title: event.trace_id, description: '只采集结构化指标；Prompt 与 Secret 均不进入 Trace。', detailLabel: 'Trace 与隐私策略', payload: event };
+      case 'span_started': return { ...common, kind: 'observability', label: 'SPAN START', title: event.span_name, description: `${event.span_id} ← ${event.parent_span_id}`, detailLabel: 'Span 上下文', payload: event };
+      case 'span_completed': return { ...common, kind: 'observability', label: 'SPAN END', title: event.span_name, description: `${event.latency_ms}ms · ${event.tokens} tokens · content captured=${event.content_captured}`, detailLabel: 'Span 指标', payload: event };
+      case 'telemetry_aggregated': return { ...common, kind: 'observability', label: 'METRICS', title: `${event.metrics.span_count} spans aggregated`, description: `p95 ${event.metrics.p95_latency_ms}ms · ${event.metrics.tokens_used} tokens · effects ${event.metrics.effect_count}`, detailLabel: '聚合指标', payload: event.metrics };
+      case 'slo_evaluation_started': return { ...common, kind: 'security', label: 'SLO GATE', title: 'Operational policy check', description: `p95 ≤ ${event.policy.p95_latency_ms_max}ms · tokens ≤ ${event.policy.token_budget_max}`, detailLabel: 'SLO 策略', payload: event.policy };
+      case 'slo_evaluation_completed': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'SLO PASS' : 'SLO BREACH', title: event.passed ? 'Runtime may activate' : 'Runtime remains blocked', description: Object.entries(event.checks).map(([key, ok]) => `${ok ? '✓' : '✕'} ${key}`).join(' · '), detailLabel: 'SLO 检查', payload: event };
+      case 'slo_breach_detected': return { ...common, kind: 'error', label: 'BREACH', title: event.failed_metrics.join(' · '), description: `违反运行政策 · 副作用 ${event.effect_count}`, detailLabel: '超标指标', payload: event };
+      case 'observability_safe_stop': return { ...common, kind: 'error', label: 'SAFE STOP', title: event.reason, description: `Paper Runtime 未激活 · 副作用 ${event.effect_count}`, detailLabel: '停止终态', payload: event };
+      case 'durable_run_started': return { ...common, kind: 'durable', label: 'DURABLE RUN', title: event.graph_version, description: `任务：${event.tasks.join(' · ')}；完成状态必须先持久化才能恢复。`, detailLabel: '运行身份', payload: event };
+      case 'durable_task_completed': return { ...common, kind: 'result', label: 'COMMITTED OUTPUT', title: `${event.task_id} · ${event.output_receipt.output_type}`, description: '输出收据带内容哈希，可在恢复时验证而无需重跑 Tool。', detailLabel: '输出收据', payload: event.output_receipt };
+      case 'checkpoint_committed': return { ...common, kind: 'durable', label: 'CHECKPOINT', title: event.checkpoint.checkpoint_id, description: '先原子追加并 fsync，再承认恢复点存在。', detailLabel: '完整 Checkpoint', payload: event.checkpoint };
+      case 'runtime_interrupted': return { ...common, kind: 'error', label: 'PROCESS CRASH', title: event.reason, description: `没有已提交输出：${event.committed_output_absent_for.join(' · ')}`, detailLabel: '中断边界', payload: event };
+      case 'checkpoint_loaded': return { ...common, kind: 'durable', label: 'LOAD', title: event.checkpoint_id, description: '加载不等于信任；下一步必须重新校验所有绑定。', detailLabel: '恢复请求', payload: event };
+      case 'checkpoint_binding_validated': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'BINDING PASS' : 'STALE', title: event.passed ? 'Checkpoint may resume' : 'Checkpoint cannot resume', description: Object.entries(event.checks).map(([name, ok]) => `${ok ? '✓' : '✕'} ${name}`).join(' · '), detailLabel: '绑定对比', payload: event };
+      case 'stale_checkpoint_rejected': return { ...common, kind: 'error', label: 'STALE BLOCK', title: event.reasons.join(' · '), description: `恢复任务 ${event.resumed_tasks} · 副作用 ${event.effect_count}`, detailLabel: '拒绝终态', payload: event };
+      case 'task_restored_from_checkpoint': return { ...common, kind: 'durable', label: 'RESTORED', title: `${event.task_id} · 0 repeated calls`, description: '验证输出收据后恢复节点状态，不重新调用已完成 Tool。', detailLabel: '恢复证据', payload: event };
+      case 'unfinished_task_resumed': return { ...common, kind: 'call', label: 'RESUME', title: `${event.task_id} · attempt ${event.resume_attempt}`, description: event.reason, detailLabel: '恢复范围', payload: event };
+      case 'resume_join_released': return { ...common, kind: 'result', label: 'RECOVERY JOIN', title: `${event.required}/${event.required} dependencies`, description: `恢复 ${event.restored.join(' + ')} · 新完成 ${event.newly_completed.join(' + ')}`, detailLabel: 'Join 状态', payload: event };
+      case 'recovery_completed': return { ...common, kind: 'result', label: 'RECOVERED', title: `Resumed ${event.resumed_tasks.join(' · ')}`, description: `已完成 Tool 重复调用 ${event.repeated_tool_calls} 次 · paper-only`, detailLabel: '恢复终态', payload: event };
+      case 'saga_started': return { ...common, kind: 'handoff', label: 'SAGA', title: event.saga_id, description: '每个正向步骤都声明对应补偿；失败时按相反顺序执行。', detailLabel: 'Saga 步骤', payload: event };
+      case 'saga_step_applied': return { ...common, kind: 'ledger', label: 'FORWARD', title: event.action, description: `纸面效果累计 ${event.paper_effect_count} · 补偿 ${event.compensation}`, detailLabel: '正向步骤', payload: event };
+      case 'saga_step_failed': return { ...common, kind: 'error', label: 'STEP FAILED', title: event.action, description: `${event.error_type} · 真实订单效果 ${event.real_order_effect_count}`, detailLabel: '失败边界', payload: event };
+      case 'compensation_started': return { ...common, kind: 'control', label: 'REVERSE', title: 'Compensation starts', description: event.pending.join(' → '), detailLabel: '逆序补偿计划', payload: event };
+      case 'compensation_applied': return { ...common, kind: 'result', label: 'COMPENSATE', title: event.action, description: `追加记录，不删除历史 · 未补偿纸面效果 ${event.open_paper_effects}`, detailLabel: '补偿结果', payload: event };
+      case 'compensation_failed': return { ...common, kind: 'error', label: 'COMPENSATION FAILED', title: event.action, description: `仍有 ${event.open_paper_effects} 个未解决纸面效果；不得宣称恢复。`, detailLabel: '补偿故障', payload: event };
+      case 'saga_compensated': return { ...common, kind: 'result', label: 'COMPENSATED', title: event.status, description: `未解决纸面效果 ${event.open_paper_effects} · 真实订单效果 ${event.real_order_effect_count}`, detailLabel: 'Saga 终态', payload: event };
+      case 'reconciliation_required': return { ...common, kind: 'error', label: 'MANUAL REVIEW', title: event.status, description: '自动补偿失败；冻结继续执行并要求人工对账。', detailLabel: '升级终态', payload: event };
+      case 'release_bundle_created': return { ...common, kind: 'durable', label: 'RELEASE BUNDLE', title: event.candidate.release_id, description: 'Model、Prompt、Graph 与 Risk Policy 绑定为不可变版本。', detailLabel: 'Current 与 Candidate', payload: event };
+      case 'release_golden_eval_completed': return { ...common, kind: event.passed ? 'eval' : 'error', label: 'GOLDEN GATE', title: `${event.release_id} · score ${event.score}`, description: '行为回归通过后才允许进入 Shadow。', detailLabel: '发布前 Eval', payload: event };
+      case 'shadow_run_started': return { ...common, kind: 'observability', label: 'SHADOW', title: `${event.release_id} · 0% authority`, description: '接收相同输入，但 Candidate 结果不能发布。', detailLabel: 'Shadow 边界', payload: event };
+      case 'shadow_comparison_completed': return { ...common, kind: event.passed ? 'result' : 'error', label: 'SHADOW COMPARE', title: event.passed ? 'Candidate may enter canary' : 'Candidate blocked', description: `发布结果 ${event.metrics.published_results} · p95 ${event.metrics.p95_latency_ms}ms`, detailLabel: '对比指标', payload: event.metrics };
+      case 'canary_started': return { ...common, kind: 'control', label: 'CANARY', title: `${event.traffic_percent}% → ${event.release_id}`, description: `其余流量继续使用 ${event.current_release_id}`, detailLabel: '灰度配置', payload: event };
+      case 'canary_gate_evaluated': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'CANARY PASS' : 'CANARY BREACH', title: event.passed ? 'Eligible for promotion' : 'Automatic rollback required', description: Object.entries(event.checks).map(([name, ok]) => `${ok ? '✓' : '✕'} ${name}`).join(' · '), detailLabel: '发布门禁', payload: event };
+      case 'canary_allocation_stopped': return { ...common, kind: 'error', label: 'STOP TRAFFIC', title: event.release_id, description: `失败项：${event.failed_checks.join(' · ')}`, detailLabel: '停止分配', payload: event };
+      case 'release_promoted': return { ...common, kind: 'result', label: 'PROMOTE', title: `${event.from_release} → ${event.to_release}`, description: `Candidate 获得 ${event.traffic_percent}% 纸面流量 · 仍为 paper-only`, detailLabel: '晋级决定', payload: event };
+      case 'release_rolled_back': return { ...common, kind: 'result', label: 'ROLLBACK', title: `Active: ${event.active_release}`, description: `Candidate 新流量 ${event.candidate_traffic_percent}% · 失败 Trace 保留`, detailLabel: '回滚终态', payload: event };
       case 'golden_trace_loaded': return { ...common, kind: 'eval', label: 'GOLDEN TRACE', title: event.golden.golden_id, description: '固定必须满足的事件顺序、Guardrails、禁用 Tool 与最低分；不要求模型逐字复现答案。', detailLabel: '批准的行为基准', payload: event.golden };
       case 'model_regression_started': return { ...common, kind: 'eval', label: 'REGRESSION', title: `${event.candidate_version} vs ${event.golden_id}`, description: '候选版本在同一行为合约上接受评测。', detailLabel: '评测身份', payload: event };
       case 'model_eval_assertion_checked': return { ...common, kind: event.passed ? 'eval' : 'error', label: event.passed ? 'ASSERT PASS' : 'ASSERT FAIL', title: event.assertion, description: event.passed ? '候选行为满足 Golden Trace。' : '检测到行为退化；不会用总分掩盖硬性安全失败。', detailLabel: '断言结果', payload: event };
@@ -682,5 +892,10 @@
       default: return common;
     }
   }
-  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe };
+  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS,
+    DECOMPOSITION_NODES, DECOMPOSITION_ROWS, AGENT_TOOL_NODES, AGENT_TOOL_ROWS,
+    OBSERVABILITY_NODES, OBSERVABILITY_ROWS, DURABLE_NODES, DURABLE_ROWS,
+    SAGA_NODES, SAGA_ROWS, RELEASE_NODES, RELEASE_ROWS,
+    STUDIO_ROLES, flowForEvent, roleForEvent,
+    handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe };
 });

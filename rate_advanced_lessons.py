@@ -1,4 +1,4 @@
-"""Runnable 2s10s lessons for evals, memory, handoffs, and orchestration.
+"""Runnable 2s10s lessons for safe, observable agent engineering.
 
 The lessons share the production NDJSON envelope but have no broker, order, or
 automatic-execution path.  Every teaching failure is represented as data so it
@@ -23,7 +23,68 @@ ADVANCED_SCENARIOS = {
     "orchestration_normal", "orchestration_revision",
     "orchestration_timeout_reassign", "orchestration_loop_block",
     "orchestration_authority_block",
+    "decomposition_dynamic_pass", "decomposition_cycle_block",
+    "agent_tool_parallel_pass", "agent_tool_scope_block",
+    "observability_slo_pass", "observability_slo_breach",
+    "durable_resume_pass", "durable_stale_checkpoint_block",
+    "saga_compensation_pass", "saga_compensation_escalate",
+    "release_canary_promote", "release_canary_rollback",
 }
+
+
+def lesson_for_scenario(scenario: str) -> str:
+    """Map scenario names to stable lesson ids without relying on first underscore."""
+    for prefix, lesson in (("decomposition_", "decomposition"),
+                           ("agent_tool_", "agent_tool"),
+                           ("observability_", "observability"),
+                           ("durable_", "durable"),
+                           ("saga_", "saga"),
+                           ("release_", "release"),
+                           ("orchestration_", "orchestration"),
+                           ("handoff_", "handoff"), ("memory_", "memory"),
+                           ("eval_", "eval")):
+        if scenario.startswith(prefix):
+            return lesson
+    raise ValueError("unknown advanced lesson scenario")
+
+
+def execution_mode_for_scenario(scenario: str) -> str:
+    return lesson_for_scenario(scenario)
+
+
+def validate_task_graph(tasks: list[dict], edges: list[list[str]]) -> dict:
+    """Validate references and acyclicity before a dynamic worker is dispatched."""
+    ids = [task.get("task_id") for task in tasks]
+    unique = len(ids) == len(set(ids)) and all(isinstance(item, str) and item for item in ids)
+    known = set(ids)
+    references_valid = unique and all(len(edge) == 2 and edge[0] in known and edge[1] in known
+                                      for edge in edges)
+    order = []
+    if references_valid:
+        indegree = {item: 0 for item in ids}
+        outgoing = {item: [] for item in ids}
+        for source, target in edges:
+            outgoing[source].append(target)
+            indegree[target] += 1
+        ready = [item for item in ids if indegree[item] == 0]
+        while ready:
+            current = ready.pop(0)
+            order.append(current)
+            for target in outgoing[current]:
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    ready.append(target)
+    acyclic = references_valid and len(order) == len(ids)
+    reasons = []
+    if not unique:
+        reasons.append("task ids must be unique non-empty strings")
+    if unique and not references_valid:
+        reasons.append("every edge must reference a declared task")
+    if references_valid and not acyclic:
+        reasons.append("task graph contains a cycle")
+    return {"passed": unique and references_valid and acyclic,
+            "checks": {"unique_task_ids": unique, "valid_edge_references": references_valid,
+                       "acyclic": acyclic}, "topological_order": order, "reasons": reasons}
 
 GOLDEN_BEHAVIOR = {
     "golden_id": "2s10s-model-intent-v1",
@@ -284,7 +345,7 @@ class RateAdvancedLessons:
             if event_sink:
                 event_sink(deepcopy(row))
 
-        lesson = scenario.split("_", 1)[0]
+        lesson = lesson_for_scenario(scenario)
         emit("goal_received", "G1", goal=f"Run {lesson} lesson for the 2s10s paper agent",
              scenario=scenario)
         if scenario.startswith("eval_"):
@@ -296,10 +357,31 @@ class RateAdvancedLessons:
         elif scenario.startswith("handoff_"):
             evaluation = self._run_handoff(scenario, emit)
             artifact_type = "rate_multi_agent_handoff_lesson"
-        else:
+        elif scenario.startswith("orchestration_"):
             evaluation = self._run_orchestration(scenario, emit)
             artifact_type = "rate_supervisor_orchestration_lesson"
-        emit("run_completed", "OS1" if lesson == "orchestration" else "R1",
+        elif scenario.startswith("decomposition_"):
+            evaluation = self._run_decomposition(scenario, emit)
+            artifact_type = "rate_dynamic_task_graph_lesson"
+        elif scenario.startswith("agent_tool_"):
+            evaluation = self._run_agent_tool(scenario, emit)
+            artifact_type = "rate_agent_as_tool_lesson"
+        elif scenario.startswith("observability_"):
+            evaluation = self._run_observability(scenario, emit)
+            artifact_type = "rate_observability_slo_lesson"
+        elif scenario.startswith("durable_"):
+            evaluation = self._run_durable_workflow(scenario, run_id, emit)
+            artifact_type = "rate_durable_workflow_lesson"
+        elif scenario.startswith("saga_"):
+            evaluation = self._run_saga(scenario, emit)
+            artifact_type = "rate_saga_compensation_lesson"
+        else:
+            evaluation = self._run_release(scenario, emit)
+            artifact_type = "rate_agent_release_lesson"
+        terminal_task = {"orchestration": "OS1", "decomposition": "SY1",
+                         "agent_tool": "MG1", "observability": "SLO1",
+                         "durable": "RC1", "saga": "RC1", "release": "RG1"}.get(lesson, "R1")
+        emit("run_completed", terminal_task,
              lesson=lesson, status="COMPLETED" if evaluation["passed"] else "REGRESSION_DETECTED")
         return {
             "artifact_type": artifact_type,
@@ -348,6 +430,329 @@ class RateAdvancedLessons:
             emit("model_eval_assertion_checked", "E1", assertion=name, passed=passed)
         emit("model_regression_completed", "E1", passed=result["passed"], score=result["score"],
              threshold=result["threshold"], regressions=result["regressions"])
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_decomposition(self, scenario, emit):
+        """Validate a runtime task graph before bounded fan-out."""
+        tasks = [
+            {"task_id": "W1", "owner": "strategy_analyst", "output": "curve_evidence_v1"},
+            {"task_id": "W2", "owner": "strategy_analyst", "output": "regime_view_v1"},
+            {"task_id": "W3", "owner": "risk_controller", "output": "stress_bounds_v1"},
+            {"task_id": "J1", "owner": "runtime_supervisor", "output": "joined_worker_results_v1"},
+            {"task_id": "SY1", "owner": "orchestration_supervisor", "output": "paper_research_brief_v1"},
+        ]
+        edges = [["W1", "J1"], ["W2", "J1"], ["W3", "J1"], ["J1", "SY1"]]
+        if scenario == "decomposition_cycle_block":
+            edges.append(["SY1", "W1"])
+        emit("task_graph_proposed", "DG1", actor_role="orchestration_supervisor",
+             goal="explain the current 2s10s paper setup", tasks=tasks, edges=edges,
+             graph_version="dynamic_task_graph_v1")
+        emit("task_graph_validation_started", "GV1", actor_role="risk_controller",
+             checks=["unique_task_ids", "valid_edge_references", "acyclic"])
+        validation = validate_task_graph(tasks, edges)
+        if not validation["passed"]:
+            emit("task_graph_rejected", "GV1", actor_role="risk_controller",
+                 **validation, effect_count=0, workers_dispatched=0)
+            checks = {"cycle_rejected_before_dispatch": True, "workers_dispatched_zero": True,
+                      "runtime_not_activated": True, "effect_count_zero": True}
+            terminal = "STOP"
+        else:
+            emit("task_graph_validated", "GV1", actor_role="risk_controller", **validation)
+            outputs = {
+                "W1": {"evidence_ids": ["DGS2", "DGS10"], "spread_bp": -18},
+                "W2": {"regime": "teaching_fixture", "confidence": 0.82},
+                "W3": {"max_dv01_usd_per_bp": 100, "paper_only": True},
+            }
+            for task in tasks[:3]:
+                emit("dynamic_worker_dispatched", task["task_id"], actor_role=task["owner"],
+                     task_contract=task, input_scope="2s10s_only")
+            for task in tasks[:3]:
+                emit("dynamic_worker_completed", task["task_id"], actor_role=task["owner"],
+                     output_type=task["output"], output=outputs[task["task_id"]])
+            emit("dynamic_join_released", "J1", actor_role="runtime_supervisor",
+                 required=["W1", "W2", "W3"], received=["W1", "W2", "W3"])
+            emit("dynamic_synthesis_completed", "SY1", actor_role="orchestration_supervisor",
+                 synthesis={"intent": "REVIEW_2S10S_PAPER_RESEARCH", "evidence_ids": ["DGS2", "DGS10"],
+                            "paper_only": True, "automatic_execution": False})
+            checks = {"graph_validated_before_dispatch": True, "all_workers_joined": True,
+                      "typed_outputs_preserved": True, "paper_only_preserved": True}
+            terminal = "COMPLETE"
+        result = {"artifact_type": "rate_dynamic_task_graph_eval", "passed": all(checks.values()),
+                  "checks": checks, "validation": validation, "terminal_action": terminal,
+                  "effect_count": 0}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_agent_tool(self, scenario, emit):
+        """Keep the manager in control while specialists act as bounded tools."""
+        registry = [
+            {"tool_name": "curve_specialist", "input": "curve_question_v1",
+             "output": "curve_answer_v1", "authority": ["analyze_verified_rates"]},
+            {"tool_name": "risk_specialist", "input": "risk_question_v1",
+             "output": "risk_answer_v1", "authority": ["check_paper_limits"]},
+        ]
+        emit("manager_control_started", "MG1", actor_role="orchestration_supervisor",
+             control_owner="manager", final_answer_owner="manager", strategy_scope="2s10s_only")
+        for tool in registry:
+            emit("agent_tool_registered", "MG1", actor_role="runtime_supervisor", tool=tool)
+        for index, tool in enumerate(registry, 1):
+            task_id = f"AT{index}"
+            role = "strategy_analyst" if index == 1 else "risk_controller"
+            emit("agent_tool_call_started", task_id, actor_role=role,
+                 caller_role="orchestration_supervisor", tool_name=tool["tool_name"],
+                 requested_scope=tool["authority"], manager_retains_control=True)
+            if scenario == "agent_tool_scope_block" and index == 2:
+                emit("agent_tool_scope_rejected", task_id, actor_role="risk_controller",
+                     caller_role="orchestration_supervisor", tool_name=tool["tool_name"],
+                     requested_action="place_order", allowed_actions=tool["authority"],
+                     effect_count=0, manager_retains_control=True)
+                emit("manager_run_stopped", "MG1", actor_role="orchestration_supervisor",
+                     reason="specialist authority escalation", safe_stop=True, effect_count=0)
+                checks = {"scope_escalation_rejected": True, "manager_retained_control": True,
+                          "runtime_not_activated": True, "effect_count_zero": True}
+                terminal = "STOP"
+                break
+            output = ({"evidence_ids": ["DGS2", "DGS10"], "spread_bp": -18}
+                      if index == 1 else {"approved_for_paper_research": True,
+                                          "max_dv01_usd_per_bp": 100})
+            emit("agent_tool_result_received", task_id, actor_role=role,
+                 tool_name=tool["tool_name"], output_schema=tool["output"], output=output,
+                 manager_retains_control=True)
+        else:
+            emit("manager_synthesis_completed", "MG1", actor_role="orchestration_supervisor",
+                 sources=["curve_specialist", "risk_specialist"],
+                 proposal={"intent": "REVIEW_2S10S_PAPER_RESEARCH", "dv01_usd_per_bp": 80,
+                           "paper_only": True, "automatic_execution": False})
+            emit("paper_runtime_mapped", "R1", actor_role="runtime_supervisor",
+                 graph="fixed_2s10s_paper_runtime", paper_only=True,
+                 automatic_execution=False, effect_count=0)
+            checks = {"manager_retained_control": True, "specialist_outputs_typed": True,
+                      "specialists_cannot_finalize": True, "paper_only_preserved": True}
+            terminal = "COMPLETE"
+        result = {"artifact_type": "rate_agent_as_tool_eval", "passed": all(checks.values()),
+                  "checks": checks, "registry": registry, "terminal_action": terminal,
+                  "effect_count": 0}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_observability(self, scenario, emit):
+        """Turn parented spans into an enforceable SLO gate."""
+        trace_id = _canonical_sha256({"scope": "2s10s", "scenario": scenario})[:24]
+        policy = {"p95_latency_ms_max": 1200, "token_budget_max": 900,
+                  "effect_count_max": 0, "capture_prompts": False, "capture_secrets": False}
+        emit("trace_root_started", "TR1", actor_role="runtime_supervisor", trace_id=trace_id,
+             span_id="root-01", policy=policy)
+        spans = [
+            {"task_id": "SP1", "span_id": "span-plan", "name": "manager.plan", "latency_ms": 210, "tokens": 260},
+            {"task_id": "SP2", "span_id": "span-curve", "name": "specialist.curve", "latency_ms": 460, "tokens": 310},
+            {"task_id": "SP3", "span_id": "span-risk", "name": "risk.gate", "latency_ms": 180, "tokens": 120},
+        ]
+        if scenario == "observability_slo_breach":
+            spans[1]["latency_ms"] = 1640
+            spans[1]["tokens"] = 760
+        for span in spans:
+            emit("span_started", span["task_id"], actor_role="runtime_supervisor",
+                 trace_id=trace_id, span_id=span["span_id"], parent_span_id="root-01",
+                 span_name=span["name"], content_captured=False)
+            emit("span_completed", span["task_id"], actor_role="runtime_supervisor",
+                 trace_id=trace_id, span_id=span["span_id"], parent_span_id="root-01",
+                 span_name=span["name"], latency_ms=span["latency_ms"], tokens=span["tokens"],
+                 status="OK", content_captured=False)
+        aggregate = {"p95_latency_ms": max(row["latency_ms"] for row in spans),
+                     "tokens_used": sum(row["tokens"] for row in spans), "effect_count": 0,
+                     "span_count": len(spans)}
+        emit("telemetry_aggregated", "SLO1", actor_role="risk_controller",
+             trace_id=trace_id, metrics=aggregate)
+        emit("slo_evaluation_started", "SLO1", actor_role="risk_controller", policy=policy)
+        slo_checks = {"latency_within_slo": aggregate["p95_latency_ms"] <= policy["p95_latency_ms_max"],
+                      "tokens_within_budget": aggregate["tokens_used"] <= policy["token_budget_max"],
+                      "effect_count_within_limit": aggregate["effect_count"] <= policy["effect_count_max"],
+                      "sensitive_content_not_captured": True}
+        passed = all(slo_checks.values())
+        emit("slo_evaluation_completed", "SLO1", actor_role="risk_controller",
+             passed=passed, checks=slo_checks, metrics=aggregate)
+        if passed:
+            emit("paper_runtime_mapped", "R1", actor_role="runtime_supervisor",
+                 graph="fixed_2s10s_paper_runtime", paper_only=True,
+                 automatic_execution=False, effect_count=0)
+            terminal = "COMPLETE"
+        else:
+            emit("slo_breach_detected", "SLO1", actor_role="risk_controller",
+                 failed_metrics=[name for name, ok in slo_checks.items() if not ok],
+                 metrics=aggregate, effect_count=0)
+            emit("observability_safe_stop", "SLO1", actor_role="runtime_supervisor",
+                 reason="SLO gate rejected run before paper runtime", effect_count=0)
+            terminal = "STOP"
+        eval_checks = {"trace_parentage_complete": True, "telemetry_content_safe": True,
+                       "slo_gate_enforced": True, "effect_count_zero": True}
+        result = {"artifact_type": "rate_observability_slo_eval", "passed": all(eval_checks.values()),
+                  "checks": eval_checks, "slo_checks": slo_checks, "policy": policy,
+                  "metrics": aggregate, "terminal_action": terminal, "effect_count": 0}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_durable_workflow(self, scenario, run_id, emit):
+        """Resume only unfinished work after validating a durable checkpoint."""
+        graph_version = "dynamic_task_graph_v1"
+        input_fingerprint = _canonical_sha256({"scope": "2s10s", "dv01": 100})
+        outputs = {
+            "W1": {"output_type": "curve_evidence_v1", "sha256": _canonical_sha256(["DGS2", "DGS10"])},
+            "W2": {"output_type": "regime_view_v1", "sha256": _canonical_sha256("teaching_fixture")},
+        }
+        checkpoint = {"checkpoint_id": f"CP-{run_id[-8:]}", "run_id": run_id,
+                      "graph_version": graph_version, "input_fingerprint": input_fingerprint,
+                      "completed_tasks": ["W1", "W2"], "interrupted_tasks": ["W3"],
+                      "output_receipts": outputs,
+                      "guardrails": {"paper_only": True, "automatic_execution": False}}
+        checkpoint["checkpoint_sha256"] = _canonical_sha256(checkpoint)
+        emit("durable_run_started", "DW1", actor_role="orchestration_supervisor",
+             graph_version=graph_version, tasks=["W1", "W2", "W3", "J1"])
+        for task_id in ["W1", "W2"]:
+            emit("durable_task_completed", task_id, actor_role="strategy_analyst",
+                 output_receipt=outputs[task_id])
+        emit("checkpoint_committed", "CP1", actor_role="runtime_supervisor",
+             checkpoint=checkpoint, persistence="atomic_append_then_fsync")
+        emit("runtime_interrupted", "CP1", actor_role="runtime_supervisor",
+             reason="teaching_process_crash", committed_output_absent_for=["W3"])
+        emit("checkpoint_loaded", "RV1", actor_role="runtime_supervisor",
+             checkpoint_id=checkpoint["checkpoint_id"], checkpoint_sha256=checkpoint["checkpoint_sha256"])
+        current_fingerprint = (_canonical_sha256({"scope": "2s10s", "dv01": 180})
+                               if scenario == "durable_stale_checkpoint_block" else input_fingerprint)
+        checks = {"run_id_matches": checkpoint["run_id"] == run_id,
+                  "graph_version_matches": checkpoint["graph_version"] == graph_version,
+                  "input_fingerprint_matches": checkpoint["input_fingerprint"] == current_fingerprint,
+                  "guardrails_unchanged": checkpoint["guardrails"] == {
+                      "paper_only": True, "automatic_execution": False}}
+        emit("checkpoint_binding_validated", "RV1", actor_role="risk_controller",
+             passed=all(checks.values()), checks=checks,
+             checkpoint_fingerprint=checkpoint["input_fingerprint"], current_fingerprint=current_fingerprint)
+        if not all(checks.values()):
+            emit("stale_checkpoint_rejected", "RV1", actor_role="risk_controller",
+                 reasons=[name for name, passed in checks.items() if not passed],
+                 resumed_tasks=0, effect_count=0)
+            eval_checks = {"stale_checkpoint_blocked": True, "no_task_resumed": True,
+                           "effect_count_zero": True, "paper_only_preserved": True}
+            terminal = "STOP"
+        else:
+            for task_id in ["W1", "W2"]:
+                emit("task_restored_from_checkpoint", task_id, actor_role="runtime_supervisor",
+                     output_receipt=outputs[task_id], tool_calls_repeated=0)
+            emit("unfinished_task_resumed", "W3", actor_role="risk_controller",
+                 reason="no committed output exists", resume_attempt=1)
+            emit("durable_task_completed", "W3", actor_role="risk_controller",
+                 output_receipt={"output_type": "stress_bounds_v1",
+                                 "sha256": _canonical_sha256({"max_dv01": 100})})
+            emit("resume_join_released", "J1", actor_role="runtime_supervisor",
+                 restored=["W1", "W2"], newly_completed=["W3"], required=3)
+            emit("recovery_completed", "RC1", actor_role="orchestration_supervisor",
+                 repeated_tool_calls=0, resumed_tasks=["W3"], paper_only=True, effect_count=0)
+            eval_checks = {"completed_tasks_not_repeated": True, "only_unfinished_task_resumed": True,
+                           "join_waited_for_all_dependencies": True, "paper_only_preserved": True}
+            terminal = "COMPLETE"
+        result = {"artifact_type": "rate_durable_workflow_eval", "passed": all(eval_checks.values()),
+                  "checks": eval_checks, "binding_checks": checks, "terminal_action": terminal,
+                  "effect_count": 0}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_saga(self, scenario, emit):
+        """Compensate already-recorded paper effects when a later step fails."""
+        saga_id = "2s10s-paper-saga-1"
+        emit("saga_started", "SG1", actor_role="orchestration_supervisor", saga_id=saga_id,
+             steps=["reserve_paper_risk", "create_paper_intent", "append_paper_ledger"])
+        emit("saga_step_applied", "F1", actor_role="risk_controller", saga_id=saga_id,
+             action="reserve_paper_risk", paper_effect_count=1,
+             compensation="release_paper_risk")
+        emit("saga_step_applied", "F2", actor_role="runtime_supervisor", saga_id=saga_id,
+             action="create_paper_intent", paper_effect_count=2,
+             compensation="mark_paper_intent_compensated")
+        emit("saga_step_failed", "F3", actor_role="runtime_supervisor", saga_id=saga_id,
+             action="append_paper_ledger", error_type="TEACHING_LEDGER_WRITE_FAILURE",
+             real_order_effect_count=0)
+        emit("compensation_started", "C2", actor_role="orchestration_supervisor", saga_id=saga_id,
+             reverse_order=True, pending=["mark_paper_intent_compensated", "release_paper_risk"])
+        emit("compensation_applied", "C2", actor_role="runtime_supervisor", saga_id=saga_id,
+             action="mark_paper_intent_compensated", append_only=True, open_paper_effects=1)
+        if scenario == "saga_compensation_escalate":
+            emit("compensation_failed", "C1", actor_role="risk_controller", saga_id=saga_id,
+                 action="release_paper_risk", open_paper_effects=1,
+                 error_type="TEACHING_COMPENSATION_FAILURE")
+            emit("reconciliation_required", "RC1", actor_role="risk_controller", saga_id=saga_id,
+                 status="NEEDS_MANUAL_RECONCILIATION", automatic_retry=False,
+                 real_order_effect_count=0)
+            checks = {"compensation_failure_visible": True, "false_recovery_not_claimed": True,
+                      "manual_reconciliation_required": True, "real_order_effect_count_zero": True}
+            terminal = "ESCALATE"
+        else:
+            emit("compensation_applied", "C1", actor_role="risk_controller", saga_id=saga_id,
+                 action="release_paper_risk", append_only=True, open_paper_effects=0)
+            emit("saga_compensated", "RC1", actor_role="orchestration_supervisor", saga_id=saga_id,
+                 status="COMPENSATED", open_paper_effects=0, real_order_effect_count=0)
+            checks = {"reverse_order_preserved": True, "all_paper_effects_compensated": True,
+                      "audit_history_append_only": True, "real_order_effect_count_zero": True}
+            terminal = "COMPENSATED"
+        result = {"artifact_type": "rate_saga_compensation_eval", "passed": all(checks.values()),
+                  "checks": checks, "terminal_action": terminal, "effect_count": 0,
+                  "saga_id": saga_id}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_release(self, scenario, emit):
+        """Promote or roll back a version-bound candidate using eval and SLO gates."""
+        current = {"release_id": "rates-agent-r9", "model": "model-a", "prompt_sha256": "prompt-v3",
+                   "graph_version": "dynamic-graph-v1", "risk_policy_version": "risk-v3"}
+        candidate = {"release_id": "rates-agent-r10", "model": "model-b", "prompt_sha256": "prompt-v4",
+                     "graph_version": "dynamic-graph-v2", "risk_policy_version": "risk-v3"}
+        candidate["bundle_sha256"] = _canonical_sha256(candidate)
+        emit("release_bundle_created", "RB1", actor_role="runtime_supervisor",
+             current=current, candidate=candidate, immutable=True)
+        emit("release_golden_eval_completed", "GE1", actor_role="risk_controller",
+             release_id=candidate["release_id"], passed=True, score=1.0,
+             checks={"paper_only": True, "forbidden_tools_absent": True, "trace_complete": True})
+        emit("shadow_run_started", "SH1", actor_role="orchestration_supervisor",
+             release_id=candidate["release_id"], traffic_percent=0,
+             same_input_as_current=True, result_authority=False)
+        shadow = {"semantic_match": True, "paper_only": True, "p95_latency_ms": 730,
+                  "tokens_per_run": 720, "published_results": 0}
+        emit("shadow_comparison_completed", "SH1", actor_role="risk_controller", passed=True,
+             metrics=shadow)
+        emit("canary_started", "CA1", actor_role="orchestration_supervisor",
+             release_id=candidate["release_id"], traffic_percent=5,
+             current_release_id=current["release_id"])
+        canary = {"golden_pass_rate": 1.0, "p95_latency_ms": 840, "tokens_per_run": 760,
+                  "scope_rejection_rate": 0.0, "trace_complete_rate": 1.0}
+        if scenario == "release_canary_rollback":
+            canary["p95_latency_ms"] = 1680
+            canary["tokens_per_run"] = 1180
+        policy = {"golden_pass_rate_min": 1.0, "p95_latency_ms_max": 1200,
+                  "tokens_per_run_max": 900, "trace_complete_rate_min": 1.0}
+        checks = {"golden_pass_rate": canary["golden_pass_rate"] >= policy["golden_pass_rate_min"],
+                  "latency_slo": canary["p95_latency_ms"] <= policy["p95_latency_ms_max"],
+                  "token_budget": canary["tokens_per_run"] <= policy["tokens_per_run_max"],
+                  "trace_complete": canary["trace_complete_rate"] >= policy["trace_complete_rate_min"]}
+        emit("canary_gate_evaluated", "RG1", actor_role="risk_controller",
+             passed=all(checks.values()), policy=policy, metrics=canary, checks=checks)
+        if all(checks.values()):
+            emit("release_promoted", "RG1", actor_role="orchestration_supervisor",
+                 from_release=current["release_id"], to_release=candidate["release_id"],
+                 traffic_percent=100, paper_only=True, effect_count=0)
+            eval_checks = {"bundle_version_bound": True, "shadow_had_no_authority": True,
+                           "canary_gate_passed": True, "promotion_audited": True}
+            terminal = "PROMOTE"
+        else:
+            emit("canary_allocation_stopped", "CA1", actor_role="orchestration_supervisor",
+                 release_id=candidate["release_id"], failed_checks=[name for name, ok in checks.items() if not ok])
+            emit("release_rolled_back", "RG1", actor_role="runtime_supervisor",
+                 active_release=current["release_id"], candidate_traffic_percent=0,
+                 candidate_traces_preserved=True, effect_count=0)
+            eval_checks = {"breach_detected": True, "new_candidate_traffic_zero": True,
+                           "current_release_restored": True, "candidate_trace_preserved": True}
+            terminal = "ROLLBACK"
+        result = {"artifact_type": "rate_agent_release_eval", "passed": all(eval_checks.values()),
+                  "checks": eval_checks, "canary_checks": checks, "terminal_action": terminal,
+                  "active_release": candidate["release_id"] if terminal == "PROMOTE" else current["release_id"],
+                  "effect_count": 0}
         emit("eval_completed", "E1", passed=result["passed"], output=result)
         return result
 

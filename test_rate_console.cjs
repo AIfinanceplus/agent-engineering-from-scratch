@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, DECOMPOSITION_NODES, AGENT_TOOL_NODES, OBSERVABILITY_NODES, DURABLE_NODES, SAGA_NODES, RELEASE_NODES, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
 
 test('run reset selects the graph mode before rendering a scenario again', () => {
   assert.equal(modeForScenario('orchestration_normal'), 'orchestration');
@@ -8,6 +8,18 @@ test('run reset selects the graph mode before rendering a scenario again', () =>
   assert.equal(modeForScenario('handoff_contract_pass'), 'parallel');
   assert.ok('OS1' in createState(modeForScenario('orchestration_normal')).nodes);
   assert.ok(!('OS1' in createState(modeForScenario('eval_golden_pass')).nodes));
+  assert.equal(modeForScenario('decomposition_dynamic_pass'), 'decomposition');
+  assert.equal(modeForScenario('agent_tool_parallel_pass'), 'agent_tool');
+  assert.equal(modeForScenario('observability_slo_pass'), 'observability');
+  assert.ok('DG1' in createState('decomposition').nodes && DECOMPOSITION_NODES.length === 9);
+  assert.ok('MG1' in createState('agent_tool').nodes && AGENT_TOOL_NODES.length === 7);
+  assert.ok('SLO1' in createState('observability').nodes && OBSERVABILITY_NODES.length === 8);
+  assert.equal(modeForScenario('durable_resume_pass'), 'durable');
+  assert.equal(modeForScenario('saga_compensation_pass'), 'saga');
+  assert.equal(modeForScenario('release_canary_promote'), 'release');
+  assert.ok('CP1' in createState('durable').nodes && DURABLE_NODES.length === 10);
+  assert.ok('SG1' in createState('saga').nodes && SAGA_NODES.length === 9);
+  assert.ok('RB1' in createState('release').nodes && RELEASE_NODES.length === 7);
 });
 
 test('studio assigns real events to personified roles without inventing extra LLMs', () => {
@@ -630,4 +642,117 @@ test('supervisor orchestration exposes ownership, bounded decisions, and safe st
   assert.equal(flowForEvent({ event: 'orchestration_loop_detected' }), 'risk');
   assert.equal(handoffForEvent({ event: 'task_ownership_changed', from_owner: null, assignee_role: 'strategy_analyst', ownership_version: 1 }).to, 'strategy_analyst');
   assert.equal(describe({ event: 'orchestration_stopped', reason: 'budget', effect_count: 0 }).label, 'SAFE STOP');
+});
+
+function lessonState(mode) {
+  const state = createState(mode);
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: `${mode}-run`, type, ...payload });
+  applyMessage(state, message('start', { execution_mode: mode }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', {
+    event: { event, task_id, run_id: state.runId, sequence: state.events.length + 1,
+      timestamp: '2026-09-01T01:02:03.000Z', ...extras },
+  }));
+  return { state, emit };
+}
+
+test('dynamic graph waits for validation and preserves a cycle rejection', () => {
+  const { state, emit } = lessonState('decomposition');
+  emit('goal_received', 'G1');
+  emit('task_graph_proposed', 'DG1');
+  emit('task_graph_validation_started', 'GV1');
+  emit('task_graph_rejected', 'GV1', { passed: false, reasons: ['cycle'], effect_count: 0, workers_dispatched: 0 });
+  emit('eval_completed', 'E1', { passed: true, output: { checks: {} } });
+  emit('run_completed', 'SY1');
+  assert.equal(state.nodes.GV1, 'rejected');
+  assert.equal(state.nodes.W1, 'blocked');
+  assert.equal(state.nodes.SY1, 'blocked');
+  assert.equal(describe({ event: 'task_graph_rejected', reasons: ['cycle'], effect_count: 0, workers_dispatched: 0 }).label, 'CYCLE BLOCK');
+});
+
+test('agent-as-tool scope rejection never becomes a completed runtime', () => {
+  const { state, emit } = lessonState('agent_tool');
+  emit('goal_received', 'G1');
+  emit('manager_control_started', 'MG1');
+  emit('agent_tool_call_started', 'AT2', { actor_role: 'risk_controller' });
+  emit('agent_tool_scope_rejected', 'AT2', { actor_role: 'risk_controller' });
+  emit('manager_run_stopped', 'MG1');
+  emit('eval_completed', 'E1', { passed: true, output: { checks: {} } });
+  emit('run_completed', 'MG1');
+  assert.equal(state.nodes.MG1, 'abstained');
+  assert.equal(state.nodes.AT2, 'rejected');
+  assert.equal(state.nodes.R1, 'blocked');
+});
+
+test('SLO breach keeps paper runtime blocked while the lesson eval passes', () => {
+  const { state, emit } = lessonState('observability');
+  emit('goal_received', 'G1');
+  emit('trace_root_started', 'TR1');
+  emit('span_started', 'SP2');
+  emit('span_completed', 'SP2');
+  emit('telemetry_aggregated', 'SLO1');
+  emit('slo_evaluation_completed', 'SLO1', { passed: false });
+  emit('slo_breach_detected', 'SLO1');
+  emit('observability_safe_stop', 'SLO1');
+  emit('eval_completed', 'E1', { passed: true, output: { checks: {} } });
+  emit('run_completed', 'SLO1');
+  assert.equal(state.nodes.SLO1, 'abstained');
+  assert.equal(state.nodes.R1, 'blocked');
+  assert.equal(state.nodes.E1, 'completed');
+});
+
+test('durable workflow restores committed nodes and blocks stale checkpoints', () => {
+  const restored = lessonState('durable');
+  restored.emit('durable_run_started', 'DW1');
+  restored.emit('checkpoint_committed', 'CP1');
+  restored.emit('checkpoint_loaded', 'RV1');
+  restored.emit('checkpoint_binding_validated', 'RV1', { passed: true });
+  restored.emit('task_restored_from_checkpoint', 'W1');
+  restored.emit('unfinished_task_resumed', 'W3');
+  restored.emit('durable_task_completed', 'W3');
+  restored.emit('resume_join_released', 'J1');
+  restored.emit('recovery_completed', 'RC1');
+  assert.equal(restored.state.nodes.W1, 'completed');
+  assert.equal(restored.state.nodes.W3, 'completed');
+  assert.equal(restored.state.nodes.RC1, 'completed');
+  const stale = lessonState('durable');
+  stale.emit('checkpoint_binding_validated', 'RV1', { passed: false });
+  stale.emit('stale_checkpoint_rejected', 'RV1');
+  assert.equal(stale.state.nodes.RV1, 'rejected');
+  assert.equal(stale.state.nodes.W3, 'blocked');
+});
+
+test('saga distinguishes compensated from manual reconciliation terminal states', () => {
+  const safe = lessonState('saga');
+  safe.emit('saga_started', 'SG1');
+  safe.emit('saga_step_applied', 'F1');
+  safe.emit('saga_step_failed', 'F3');
+  safe.emit('compensation_started', 'C2');
+  safe.emit('compensation_applied', 'C2');
+  safe.emit('compensation_applied', 'C1');
+  safe.emit('saga_compensated', 'RC1');
+  assert.equal(safe.state.nodes.RC1, 'completed');
+  const failed = lessonState('saga');
+  failed.emit('compensation_failed', 'C1');
+  failed.emit('reconciliation_required', 'RC1');
+  assert.equal(failed.state.nodes.C1, 'failed');
+  assert.equal(failed.state.nodes.RC1, 'waiting_human');
+});
+
+test('release reducer preserves promotion and rollback evidence', () => {
+  const promoted = lessonState('release');
+  promoted.emit('release_bundle_created', 'RB1');
+  promoted.emit('release_golden_eval_completed', 'GE1', { passed: true });
+  promoted.emit('shadow_run_started', 'SH1');
+  promoted.emit('shadow_comparison_completed', 'SH1', { passed: true });
+  promoted.emit('canary_started', 'CA1');
+  promoted.emit('canary_gate_evaluated', 'RG1', { passed: true });
+  promoted.emit('release_promoted', 'RG1');
+  assert.equal(promoted.state.nodes.RG1, 'completed');
+  const rollback = lessonState('release');
+  rollback.emit('canary_started', 'CA1');
+  rollback.emit('canary_gate_evaluated', 'RG1', { passed: false });
+  rollback.emit('canary_allocation_stopped', 'CA1');
+  rollback.emit('release_rolled_back', 'RG1');
+  assert.equal(rollback.state.nodes.CA1, 'abstained');
+  assert.equal(rollback.state.nodes.RG1, 'completed');
 });
