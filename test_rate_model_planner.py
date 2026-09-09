@@ -3,11 +3,12 @@ import json
 import unittest
 from unittest.mock import patch
 
-from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
-                                ModelPlanRejected, OpenAIRatePlanModel,
+from rate_model_planner import (SAFE_RATE_INTENTS, SAFE_RATE_TASKS, ModelIntentRejected,
+                                ModelPlanParseError, ModelPlanRejected, OpenAIRatePlanModel,
                                 RatePlanModelUnavailable, ScriptedRatePlanModel,
-                                build_plan_prompt, parse_plan_proposal,
-                                validate_plan_proposal)
+                                build_intent_prompt, build_plan_prompt,
+                                parse_intent_proposal, parse_plan_proposal,
+                                validate_intent_proposal, validate_plan_proposal)
 from rate_parallel import ParallelRunError, RateParallelAgent
 
 
@@ -29,6 +30,18 @@ class ModelPlanContractTests(unittest.TestCase):
         for raw in ('{"tasks":[', '[]', 'null'):
             with self.subTest(raw=raw), self.assertRaises(ModelPlanParseError):
                 parse_plan_proposal(raw)
+
+    def test_intent_prompt_and_validator_grant_no_tool_or_parameter_authority(self):
+        prompt = build_intent_prompt("test goal")
+        self.assertEqual(prompt["response_contract"]["allowed_intents"], sorted(SAFE_RATE_INTENTS))
+        self.assertIn("no tools", prompt["response_contract"]["constraints"])
+        accepted = validate_intent_proposal(parse_intent_proposal(
+            '{"intent":"RUN_2S10S_PAPER_SIMULATION","reason":"fixed paper lesson"}'
+        ))
+        self.assertTrue(accepted["accepted"])
+        self.assertTrue(all(accepted["checks"].values()))
+        with self.assertRaises(ModelIntentRejected):
+            validate_intent_proposal({"intent": "RUN_ANYTHING", "reason": "unsafe", "tasks": []})
 
     def test_validator_accepts_only_the_registered_paper_template(self):
         allowed = {task["tool_name"] for task in SAFE_RATE_TASKS}
@@ -176,6 +189,54 @@ class ModelPlannerIntegrationTests(unittest.TestCase):
         repair = next(event for event in events if event["event"] == "model_repair_requested")
         self.assertEqual(repair["repair_kind"], "semantic_contract")
         self.assertTrue(run["eval"]["passed"])
+
+    def test_live_model_intent_is_validated_then_runtime_maps_fixed_plan_before_tools(self):
+        class Adapter:
+            model_name = "stub-live-intent-model"
+            is_real_llm = True
+
+            def __init__(self, *, api_key):
+                self.api_key = api_key
+                self.calls = 0
+
+            def complete(self, prompt, *, repair_error=None):
+                self.calls += 1
+                self.prompt = prompt
+                self.repair_error = repair_error
+                return json.dumps({"intent": "RUN_2S10S_PAPER_SIMULATION", "reason": "fixed paper lesson"})
+
+        with patch("rate_parallel.OpenAIRatePlanModel", Adapter):
+            run = self.agent().run_once(demo_scenario="intent_live", model_api_key="ui-only-secret")
+        events = run["trace"]
+        accepted = next(e["sequence"] for e in events if e["event"] == "model_intent_accepted")
+        first_tool = next(e["sequence"] for e in events if e["event"] == "tool_execution_started")
+        self.assertLess(accepted, first_tool)
+        self.assertEqual(run["architecture"]["planner"], "runtime_mapped_model_intent")
+        self.assertTrue(run["architecture"]["model_is_real_llm"])
+        self.assertEqual(run["lesson"]["topic"], "model_intent_runtime_mapping")
+        self.assertEqual([task["task_id"] for task in run["plan"]["tasks"]],
+                         [task["task_id"] for task in SAFE_RATE_TASKS])
+        self.assertNotIn("ui-only-secret", json.dumps(run))
+
+    def test_live_model_abstain_starts_no_tool(self):
+        class Adapter:
+            model_name = "stub-live-intent-model"
+            is_real_llm = True
+
+            def __init__(self, *, api_key):
+                del api_key
+                self.calls = 0
+
+            def complete(self, prompt, *, repair_error=None):
+                del prompt, repair_error
+                self.calls += 1
+                return json.dumps({"intent": "ABSTAIN", "reason": "need a human decision"})
+
+        with patch("rate_parallel.OpenAIRatePlanModel", Adapter), self.assertRaises(ParallelRunError) as caught:
+            self.agent().run_once(demo_scenario="intent_live", model_api_key="ui-only-secret")
+        self.assertEqual(caught.exception.code, "MODEL_INTENT_ABSTAIN")
+        self.assertTrue(any(e["event"] == "model_intent_abstained" for e in caught.exception.trace))
+        self.assertFalse(any(e["event"] == "tool_execution_started" for e in caught.exception.trace))
 
 
 if __name__ == "__main__":
