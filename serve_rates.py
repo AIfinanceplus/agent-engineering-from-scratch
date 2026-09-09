@@ -30,7 +30,7 @@ EVENT_LOG = RateEventLog(os.environ.get("RATE_EVENT_DIR", os.path.join(tempfile.
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V21-AGENT-STUDIO"
+    version_label = "RATE-CONSOLE-V22-COURSE-FOCUS"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -761,7 +761,7 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Operations Studio · RATE-CONSOLE-V21-AGENT-STUDIO")
+    print("Agent Operations Studio · RATE-CONSOLE-V22-COURSE-FOCUS")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> LG1 ledger reconcile -> E1")
