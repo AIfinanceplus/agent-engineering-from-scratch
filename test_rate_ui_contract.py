@@ -60,6 +60,12 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn("FinAgent Lab-inspired institutional cockpit", css)
         self.assertIn("color-scheme:dark", css)
 
+    def test_personified_role_renderer_imports_its_event_mapper(self):
+        source = (ROOT / "web" / "rate_console.js").read_text(encoding="utf-8")
+        bootstrap = source.split("window.RateConsole;", 1)[0]
+        self.assertIn("roleForEvent", bootstrap)
+        self.assertIn("roleForEvent(event)", source)
+
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
