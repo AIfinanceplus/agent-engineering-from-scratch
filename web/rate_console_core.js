@@ -121,6 +121,20 @@
       case 'model_request_started': state.nodes.M1 = 'running'; break;
       case 'model_response_received': state.nodes.M1 = 'proposed'; break;
       case 'model_repair_requested': state.nodes.M1 = 'repairing'; break;
+      case 'intent_parse_started': state.nodes.P1 = 'running'; break;
+      case 'intent_parse_failed': state.nodes.P1 = 'repairing'; break;
+      case 'model_intent_parsed': state.nodes.P1 = 'running'; break;
+      case 'intent_validation_started': state.nodes.P1 = 'running'; break;
+      case 'intent_validation_completed': state.nodes.P1 = event.accepted ? 'ready' : 'failed'; break;
+      case 'model_intent_accepted':
+        state.nodes.M1 = 'completed';
+        state.nodes.P1 = event.intent === 'ABSTAIN' ? 'abstained' : 'completed';
+        break;
+      case 'model_intent_rejected':
+      case 'model_intent_abstained':
+        state.nodes.M1 = 'completed';
+        state.nodes.P1 = 'failed';
+        break;
       case 'plan_parse_started': state.nodes.P1 = 'running'; break;
       case 'plan_parse_failed': state.nodes.P1 = 'repairing'; break;
       case 'plan_parsed': state.nodes.P1 = 'running'; break;
@@ -349,6 +363,14 @@
       case 'model_bypassed': return { ...common, kind: 'model', label: 'MODEL', title: 'Model gateway bypassed', description: event.reason };
       case 'model_request_started': return { ...common, kind: 'model', label: 'MODEL INPUT', title: `${event.model} · proposal ${event.attempt}`, description: event.is_real_llm ? '真实模型调用；模型只能生成提议。' : '可重复的教学模型；不是外部 LLM，也没有执行权限。', detailLabel: '完整 prompt 与权限声明', payload: event.prompt };
       case 'model_response_received': return { ...common, kind: 'model', label: 'RAW OUTPUT', title: `${event.output_characters} characters received`, description: '这是未经信任的模型文本；尚未成为 Plan。', detailLabel: '原始模型输出', payload: { raw_output: event.raw_output, model: event.model, is_real_llm: event.is_real_llm } };
+      case 'intent_parse_started': return { ...common, kind: 'model', label: 'PARSE INTENT', title: 'Parse model output as JSON', description: '解析只证明 JSON 可读，不代表 Intent 被允许。' };
+      case 'intent_parse_failed': return { ...common, kind: 'error', label: 'INTENT PARSE FAILED', title: event.error_type, description: event.error_message, detailLabel: '损坏的原始输出', payload: event.raw_output };
+      case 'model_intent_parsed': return { ...common, kind: 'model', label: 'INTENT JSON', title: 'Intent parsed', description: '模型仍没有 Tool、参数或订单权限。', detailLabel: '解析后的 Intent', payload: event.proposal };
+      case 'intent_validation_started': return { ...common, kind: 'model', label: 'RUNTIME MAP', title: 'Runtime validates Intent', description: event.checks.join(' · '), detailLabel: 'Intent 校验项目', payload: event.checks };
+      case 'intent_validation_completed': return { ...common, kind: event.accepted ? 'result' : 'error', label: event.accepted ? 'INTENT ACCEPTED' : 'INTENT REJECTED', title: event.accepted ? 'Runtime owns the mapping decision' : 'Runtime refuses this Intent', description: event.accepted ? '模型只选择允许的意图；固定任务图仍由 Runtime 创建。' : event.reasons.join(' · '), detailLabel: 'Intent 校验结果', payload: event.output || event.reasons };
+      case 'model_intent_accepted': return { ...common, kind: 'model', label: 'INTENT BOUNDARY', title: event.intent, description: event.intent === 'ABSTAIN' ? 'Runtime 不会启动任何 Tool。' : 'Runtime 将此 Intent 映射为固定的 2s10s 纸面任务图。', detailLabel: '获准的 Intent', payload: event };
+      case 'model_intent_abstained': return { ...common, kind: 'error', label: 'ABSTAIN', title: 'No Tool starts', description: event.reason, detailLabel: '受控无动作终态', payload: event };
+      case 'model_intent_rejected': return { ...common, kind: 'error', label: 'INTENT REJECTED', title: 'Unsafe Intent stopped before Runtime', description: event.reasons.join(' · '), detailLabel: '拒绝原因', payload: event.reasons };
       case 'plan_parse_started': return { ...common, kind: 'model', label: 'PARSE', title: 'Parse model output as JSON', description: '解析只证明 JSON 可读，不代表内容安全。' };
       case 'plan_parse_failed': return { ...common, kind: 'error', label: 'PARSE FAILED', title: event.error_type, description: event.error_message, detailLabel: '损坏的原始输出', payload: event.raw_output };
       case 'model_repair_requested': return { ...common, kind: 'model', label: 'REPAIR 1/1', title: event.repair_kind === 'semantic_contract' ? 'Request one bounded contract repair' : 'Request one bounded format repair', description: '只修复 JSON 或已声明的合约字段；不扩大 Tool 权限。', detailLabel: '修复约束', payload: event };
