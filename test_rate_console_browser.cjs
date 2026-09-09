@@ -72,6 +72,22 @@ server.serve_forever()
     const download = await downloadWait;
     assert.match(download.suggestedFilename(), /^RATE-RUN-.*\.json$/);
 
+    // The same Supervisor lesson can start a genuinely new run after terminal state.
+    await page.locator('#scenario').selectOption('orchestration_normal');
+    await page.locator('#run-button').click();
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    const firstSupervisorRun = await page.locator('#run-id').innerText();
+    assert.equal(await page.locator('#run-button').isDisabled(), false);
+    assert.match(await page.locator('#run-button').innerText(), /Run again/);
+    await page.locator('#run-button').click();
+    await page.waitForFunction(previous => {
+      const id = document.querySelector('#run-id')?.textContent;
+      return id && id !== previous && !id.includes('Runtime');
+    }, firstSupervisorRun);
+    await page.waitForSelector('#run-status[data-phase="completed"]');
+    assert.notEqual(await page.locator('#run-id').innerText(), firstSupervisorRun);
+    assert.equal(await page.locator('#run-button').isDisabled(), false);
+
     // RAG retrieval is visualized as Query → Rank → Top-K → Citation Gate before CT1.
     await page.locator('#scenario').selectOption('rag_stale');
     await page.locator('#run-button').click();

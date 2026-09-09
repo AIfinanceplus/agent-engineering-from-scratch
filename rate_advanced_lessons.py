@@ -1,4 +1,4 @@
-"""Runnable 2s10s lessons for evals, memory, and multi-agent handoffs.
+"""Runnable 2s10s lessons for evals, memory, handoffs, and orchestration.
 
 The lessons share the production NDJSON envelope but have no broker, order, or
 automatic-execution path.  Every teaching failure is represented as data so it
@@ -20,6 +20,9 @@ ADVANCED_SCENARIOS = {
     "eval_golden_pass", "eval_regression_fail",
     "memory_redaction_pass", "memory_privacy_block",
     "handoff_contract_pass", "handoff_contract_reject",
+    "orchestration_normal", "orchestration_revision",
+    "orchestration_timeout_reassign", "orchestration_loop_block",
+    "orchestration_authority_block",
 }
 
 GOLDEN_BEHAVIOR = {
@@ -38,6 +41,20 @@ GOLDEN_BEHAVIOR = {
 }
 
 ROLE_CONTRACTS = {
+    "orchestration_supervisor": {
+        "role_id": "orchestration_supervisor",
+        "mission": "Assign, return, reassign, or stop bounded 2s10s paper tasks.",
+        "inputs": ["goal", "task_result", "risk_decision", "worker_health"],
+        "tools": [],
+        "tasks": ["route_task", "track_budget", "detect_loop", "reassign_owner"],
+        "outputs": ["orchestration_decision_v1"],
+        "acceptance": ["known_role", "budget_available", "authority_unchanged"],
+        "kpi": "safe_terminal_rate",
+        "authority": ["assign_task", "return_task", "reassign_task", "stop_run"],
+        "forbidden_actions": ["rewrite_strategy", "approve_risk", "execute_tool", "place_order"],
+        "handoff_rules": ["typed_task_envelope", "single_owner", "bounded_revision"],
+        "budget_policy": {"max_assignments": 5, "max_revisions": 2, "token_budget": 1200},
+    },
     "strategy_analyst": {
         "role_id": "strategy_analyst",
         "mission": "Propose an evidence-backed 2s10s paper intent.",
@@ -276,10 +293,14 @@ class RateAdvancedLessons:
         elif scenario.startswith("memory_"):
             evaluation = self._run_memory(scenario, run_id, emit)
             artifact_type = "rate_memory_lesson"
-        else:
+        elif scenario.startswith("handoff_"):
             evaluation = self._run_handoff(scenario, emit)
             artifact_type = "rate_multi_agent_handoff_lesson"
-        emit("run_completed", "R1", lesson=lesson, status="COMPLETED" if evaluation["passed"] else "REGRESSION_DETECTED")
+        else:
+            evaluation = self._run_orchestration(scenario, emit)
+            artifact_type = "rate_supervisor_orchestration_lesson"
+        emit("run_completed", "OS1" if lesson == "orchestration" else "R1",
+             lesson=lesson, status="COMPLETED" if evaluation["passed"] else "REGRESSION_DETECTED")
         return {
             "artifact_type": artifact_type,
             "run_id": run_id,
@@ -418,5 +439,134 @@ class RateAdvancedLessons:
                       "automatic_execution_disabled": second["payload"]["guardrails"]["automatic_execution"] is False}
         result = {"artifact_type": "rate_multi_agent_handoff_eval", "passed": all(checks.values()),
                   "checks": checks, "role_contracts": deepcopy(ROLE_CONTRACTS)}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_orchestration(self, scenario, emit):
+        """Run a deterministic supervisor policy without adding execution authority."""
+        policy = {"max_assignments": 5, "max_revisions": 2, "token_budget": 1200,
+                  "deadline_ms": 5000, "single_owner": True}
+        counters = {"assignments": 0, "revisions": 0, "tokens_used": 0}
+
+        def budget():
+            return {**counters, "assignments_remaining": policy["max_assignments"] - counters["assignments"],
+                    "revisions_remaining": policy["max_revisions"] - counters["revisions"],
+                    "tokens_remaining": policy["token_budget"] - counters["tokens_used"]}
+
+        def decide(action, reason, from_owner=None, to_owner=None):
+            emit("orchestration_decision_recorded", "OS1", actor_role="orchestration_supervisor",
+                 action=action, reason=reason, from_owner=from_owner, to_owner=to_owner,
+                 budget=budget(), authority_changed=False)
+
+        def assign(role, worker, reason, tokens=0, action="ASSIGN", previous=None):
+            counters["assignments"] += 1
+            counters["tokens_used"] += tokens
+            decide(action, reason, previous, worker)
+            emit("task_ownership_changed", "OS1", actor_role="orchestration_supervisor",
+                 assignment_id="2s10s-research-1", from_owner=previous, to_owner=worker,
+                 assignee_role=role, ownership_version=counters["assignments"], single_owner=True)
+            emit("orchestration_budget_updated", "OS1", actor_role="orchestration_supervisor", **budget())
+            emit("agent_role_activated", "OS1" if role == "orchestration_supervisor" else
+                 "P1" if role == "strategy_analyst" else "L1" if role == "risk_controller" else "R1",
+                 actor_role=role, worker_id=worker,
+                 role_contract=deepcopy(ROLE_CONTRACTS[role]))
+            emit("agent_task_started", "P1" if role == "strategy_analyst" else
+                 "L1" if role == "risk_controller" else "R1", actor_role=role,
+                 worker_id=worker, assignment_id="2s10s-research-1")
+
+        emit("orchestration_started", "OS1", actor_role="orchestration_supervisor",
+             policy=deepcopy(policy), strategy_scope="2s10s_only")
+        emit("agent_role_activated", "OS1", actor_role="orchestration_supervisor",
+             role_contract=deepcopy(ROLE_CONTRACTS["orchestration_supervisor"]))
+        emit("task_envelope_created", "OS1", actor_role="orchestration_supervisor",
+             assignment_id="2s10s-research-1", required_output="strategy_handoff_v1",
+             allowed_roles=["strategy_analyst", "risk_controller", "runtime_supervisor"],
+             guardrails={"paper_only": True, "automatic_execution": False})
+
+        assign("strategy_analyst", "analyst-worker-a", "initial 2s10s analysis", tokens=220)
+
+        if scenario == "orchestration_timeout_reassign":
+            emit("agent_timeout_detected", "P1", actor_role="strategy_analyst",
+                 worker_id="analyst-worker-a", elapsed_ms=5000, output_committed=False)
+            emit("task_ownership_revoked", "OS1", actor_role="orchestration_supervisor",
+                 owner="analyst-worker-a", reason="lease expired before output commit")
+            assign("strategy_analyst", "analyst-worker-b", "healthy worker takes the same bounded task",
+                   tokens=220, action="REASSIGN", previous="analyst-worker-a")
+
+        unsafe = scenario == "orchestration_authority_block"
+        proposed_dv01 = 180 if scenario in {"orchestration_revision", "orchestration_loop_block"} else 80
+        emit("agent_task_completed", "P1", actor_role="strategy_analyst",
+             worker_id="analyst-worker-b" if scenario == "orchestration_timeout_reassign" else "analyst-worker-a",
+             assignment_id="2s10s-research-1", output={"intent": "RUN_2S10S_PAPER_RESEARCH",
+             "dv01_usd_per_bp": proposed_dv01, "automatic_execution": unsafe,
+             "evidence_ids": ["DGS2", "DGS10"]})
+
+        if unsafe:
+            emit("orchestration_authority_violation_detected", "OS1",
+                 actor_role="orchestration_supervisor", requested="automatic_execution=true",
+                 allowed="paper_only proposal", authority_changed=False, effect_count=0)
+            decide("STOP", "authority escalation rejected before risk or runtime",
+                   "analyst-worker-a", None)
+            emit("orchestration_stopped", "OS1", actor_role="orchestration_supervisor",
+                 reason="authority_violation", safe_stop=True, effect_count=0)
+            checks = {"authority_escalation_blocked": True, "runtime_not_activated": True,
+                      "effect_count_zero": True, "paper_only_preserved": True}
+        else:
+            assign("risk_controller", "risk-worker-a", "independent risk review", previous="analyst-worker-b" if scenario == "orchestration_timeout_reassign" else "analyst-worker-a")
+            emit("risk_review_completed", "L1", actor_role="risk_controller",
+                 approved=proposed_dv01 <= 100, proposed_dv01=proposed_dv01,
+                 limit_dv01=100, may_rewrite_strategy=False)
+
+            if scenario in {"orchestration_revision", "orchestration_loop_block"}:
+                counters["revisions"] += 1
+                decide("RETURN", "DV01 180 exceeds approved limit 100", "risk-worker-a", "analyst-worker-a")
+                emit("task_returned_for_revision", "OS1", actor_role="orchestration_supervisor",
+                     revision=counters["revisions"], reason_code="DV01_LIMIT", requested_change="reduce DV01 to <= 100")
+                assign("strategy_analyst", "analyst-worker-a", "bounded revision", tokens=180,
+                       previous="risk-worker-a")
+                emit("agent_task_completed", "P1", actor_role="strategy_analyst",
+                     worker_id="analyst-worker-a", assignment_id="2s10s-research-1",
+                     output={"intent": "RUN_2S10S_PAPER_RESEARCH", "dv01_usd_per_bp": 80,
+                             "automatic_execution": False, "evidence_ids": ["DGS2", "DGS10"]})
+                assign("risk_controller", "risk-worker-a", "review revised proposal", previous="analyst-worker-a")
+
+                if scenario == "orchestration_loop_block":
+                    counters["revisions"] += 1
+                    emit("risk_review_completed", "L1", actor_role="risk_controller",
+                         approved=False, proposed_dv01=80, limit_dv01=100,
+                         reason="duplicate semantic return without new requirement")
+                    decide("RETURN", "second semantically identical return", "risk-worker-a", "analyst-worker-a")
+                    emit("orchestration_loop_detected", "OS1", actor_role="orchestration_supervisor",
+                         signature="risk-worker-a:DV01_LIMIT", occurrences=2,
+                         max_revisions=policy["max_revisions"])
+                    decide("STOP", "revision loop budget exhausted", "risk-worker-a", None)
+                    emit("orchestration_stopped", "OS1", actor_role="orchestration_supervisor",
+                         reason="revision_loop", safe_stop=True, effect_count=0)
+                    checks = {"loop_detected": True, "revision_budget_enforced": True,
+                              "runtime_not_activated": True, "effect_count_zero": True}
+                else:
+                    emit("risk_review_completed", "L1", actor_role="risk_controller",
+                         approved=True, proposed_dv01=80, limit_dv01=100,
+                         may_rewrite_strategy=False)
+
+            if scenario != "orchestration_loop_block":
+                assign("runtime_supervisor", "runtime-worker-a", "risk-approved fixed paper runtime",
+                       previous="risk-worker-a")
+                emit("paper_runtime_mapped", "R1", actor_role="runtime_supervisor",
+                     graph="fixed_2s10s_paper_runtime", paper_only=True,
+                     automatic_execution=False, effect_count=0)
+                decide("COMPLETE", "fixed paper runtime accepted the approved envelope",
+                       "runtime-worker-a", None)
+                checks = {"single_owner_preserved": True, "budget_not_exceeded": counters["assignments"] <= policy["max_assignments"],
+                          "authority_unchanged": True, "paper_only_preserved": True}
+                if scenario == "orchestration_revision":
+                    checks["revision_then_approved"] = counters["revisions"] == 1
+                if scenario == "orchestration_timeout_reassign":
+                    checks["timed_out_owner_revoked_before_reassign"] = True
+
+        result = {"artifact_type": "rate_supervisor_orchestration_eval",
+                  "passed": all(checks.values()), "checks": checks,
+                  "policy": policy, "budget": budget(), "terminal_action": "STOP" if scenario in {
+                      "orchestration_loop_block", "orchestration_authority_block"} else "COMPLETE"}
         emit("eval_completed", "E1", passed=result["passed"], output=result)
         return result

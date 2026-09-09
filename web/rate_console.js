@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
+  const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
   const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', abstained: '主动停止', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
   let state = createState('parallel');
@@ -20,7 +20,7 @@
     decision: ['决策流', '策略提议 → 独立验约 → 已批准合约 → 固定 Runtime', '每位 Agent 只决定自己职责内的事情，接收方必须重新验证。'],
     risk: ['风控流', 'Claims / Evidence → Contract Gate → ALLOW 或 BLOCK → Audit', '拒绝路径停在风险主管，执行主管保持未激活，副作用为零。'],
   };
-  const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject']);
+  const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject', 'orchestration_normal', 'orchestration_revision', 'orchestration_timeout_reassign', 'orchestration_loop_block', 'orchestration_authority_block']);
   const lessonCopy = {
     eval: {
       title: 'Model Evals · Golden Trace', detail: '判断候选模型行为是否仍满足已批准合约。',
@@ -43,14 +43,55 @@
       watchTitle: '接受后激活，拒绝则下游不启动', watch: '合法合约逐级传递；越权 automatic_execution 会被 Risk 拒绝且副作用为零。',
       overview: 'Role Contract → Handoff Envelope → Recipient Validation → Activation / Reject',
     },
+    orchestration: {
+      title: 'Supervisor · Multi-Agent Orchestration', detail: '让独立编排层管理任务所有权、Revision、超时与预算，而不获得业务执行权。',
+      whyTitle: 'Handoff 解决交接格式，Supervisor 解决下一步由谁负责', why: '真实团队会遇到退回、超时和重复循环；没有编排政策，Agent 容易失去所有权边界或无限消耗预算。',
+      howTitle: 'Assign → Observe → Return / Reassign → Complete / Stop', how: '每次决策都记录责任人、理由、所有权版本和剩余预算；任何时刻只能有一个 Owner。',
+      watchTitle: '所有权先撤销，再重分配', watch: '重点观察 ASSIGN、RETURN、REASSIGN 和 STOP；Supervisor 不能改策略、批风险或执行 Tool。',
+      overview: 'Goal → Supervisor Policy → Single Owner → Bounded Decision → Safe Terminal',
+    },
   };
   const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'model_live', 'intent_live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
 
-  const lessonForScenario = scenario => scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : 'eval';
+  const lessonForScenario = scenario => scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : scenario.startsWith('orchestration_') ? 'orchestration' : 'eval';
+  const lessonOutcomeCopy = {
+    eval_golden_pass: ['Golden Trace 固定安全行为，不固定模型措辞', '候选运行保留了事件顺序、风险门禁与 paper-only 结果，模型可以升级。'],
+    eval_regression_fail: ['回归评测的价值，是在上线前阻止行为退化', '越权 Tool 与缺失风险门禁已被 Golden Trace 检出；候选模型没有进入 Runtime。'],
+    memory_redaction_pass: ['长期记忆只保存脱敏、可追溯的知识', '敏感值停留在短期状态；通过 Privacy Gate 的记录才带着 Scope 与来源进入长期层。'],
+    memory_privacy_block: ['隐私门禁必须发生在长期写入之前', '违规记录在落盘前被阻断，长期记忆副作用为零。'],
+    handoff_contract_pass: ['交接传递的是有边界的合约，不是隐式信任', 'Analyst、Risk 与 Runtime 逐级验约；只有通过的 Payload 与权限进入接收方。'],
+    handoff_contract_reject: ['接收方必须重新验证，不能继承发送方的信任', 'automatic_execution 越权在 Risk 边界被拒绝，下游 Runtime 未激活。'],
+    orchestration_normal: ['Supervisor 编排责任，不替 Agent 做业务决定', '任务按单一 Owner 推进；Supervisor 只记录 ASSIGN 与 COMPLETE，Runtime 仍受 paper-only 门禁约束。'],
+    orchestration_revision: ['退回不是无限重做：Revision 必须有理由和预算', 'Risk 给出明确 DV01 修改要求；Supervisor 只安排一次有界修订，再交回 Risk 独立复核。'],
+    orchestration_timeout_reassign: ['重分配前必须先撤销旧 Owner', '超时 Worker 的所有权先失效，再由新 Worker 接管同一个受限任务，避免双重所有者。'],
+    orchestration_loop_block: ['循环不是继续重试：预算耗尽后必须安全停止', '重复退回被 Loop Guard 识别；Runtime 未激活，副作用为零。'],
+    orchestration_authority_block: ['Supervisor 也受权限边界约束', 'automatic_execution 越权请求被阻断；Supervisor 无权改策略、批风险或调用执行 Tool。'],
+  };
+  function updateLessonOutcome() {
+    const banner = byId('lesson-outcome-banner');
+    const scenario = state.result?.scenario || byId('scenario').value;
+    const lesson = advancedScenarios.has(scenario) ? lessonForScenario(scenario) : null;
+    const visible = state.terminal;
+    banner.hidden = !visible;
+    document.querySelector('.course-focus').dataset.completed = String(visible);
+    document.querySelectorAll('.course-roadmap li').forEach(item => item.classList.toggle('run-completed', visible && item.dataset.lesson === lesson));
+    if (!visible) return;
+    const copy = lessonOutcomeCopy[scenario] || (lesson ? [lessonCopy[lesson].watchTitle, lessonCopy[lesson].watch] : ['本次历史能力已运行', '完整结果与边界证据保留在 Trace & Evals 工程检查台。']);
+    const terminalAction = state.result?.eval?.terminal_action;
+    const passed = Boolean(state.result) && state.result.eval?.passed !== false;
+    const effectEvent = [...state.events].reverse().find(event => Number.isFinite(event.effect_count));
+    banner.dataset.outcome = terminalAction === 'STOP' ? 'stopped' : passed ? 'pass' : 'blocked';
+    byId('lesson-outcome-theme').textContent = copy[0];
+    byId('lesson-outcome-summary').textContent = copy[1];
+    byId('lesson-outcome-scenario').textContent = `SCENARIO · ${scenario}`;
+    byId('lesson-outcome-result').textContent = !state.result ? 'RUN ERROR' : terminalAction === 'STOP' ? 'SAFE STOP' : passed ? 'CONTRACT PASS' : 'REGRESSION BLOCKED';
+    byId('lesson-outcome-effect').textContent = `SIDE EFFECTS · ${effectEvent?.effect_count ?? 0}`;
+  }
   function sourceNote(scenario) {
     if (scenario.startsWith('eval_')) return '可重复模型候选 · Golden Trace 比较语义行为 · 回归失败阻止升级';
     if (scenario.startsWith('memory_')) return '短期状态仅本次 Run · 长期记忆先脱敏并绑定来源 · 无敏感值进入 Trace';
     if (scenario.startsWith('handoff_')) return '确定性教学 Agent · 接收方独立验约 · 仍为 2s10s paper_only';
+    if (scenario.startsWith('orchestration_')) return '确定性 Supervisor · 单一任务所有者 · 有界 Revision / Token · 无执行权限';
     if (scenario === 'live') return '公开数据 · 无延时或故障注入';
     if (scenario === 'execution_race') return '纸面成交事件 · 持久化后发送 · 重复 fill 去重';
     if (scenario === 'paper_fill_accounting') return '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L';
@@ -76,6 +117,8 @@
     const needsKey = ['model_live', 'intent_live'].includes(scenario);
     byId('model-key-field').hidden = !needsKey;
     byId('key-session').hidden = !needsKey;
+    byId('orchestration-panel').hidden = lesson !== 'orchestration';
+    byId('handoff').hidden = lesson === 'orchestration';
     byId('source-note').textContent = sourceNote(scenario);
     if (!state.runId && lesson) {
       byId('overview-title').textContent = copy.title.split(' · ')[0];
@@ -121,14 +164,15 @@
     if (text !== undefined) el.textContent = text;
     return el;
   }
-  const definitions = () => state.mode === 'parallel' ? PARALLEL_NODES : NODES;
+  const definitions = () => state.mode === 'parallel' ? PARALLEL_NODES : state.mode === 'orchestration' ? ORCHESTRATION_NODES : NODES;
   function buildGraph() {
     nodeElements.clear();
     edgeElements.length = 0;
     byId('graph-nodes').replaceChildren();
     byId('graph-nodes').classList.toggle('parallel-graph', state.mode === 'parallel');
+    byId('graph-nodes').classList.toggle('orchestration-graph', state.mode === 'orchestration');
     byId('node-count').textContent = `${definitions().length} nodes`;
-    const graphRows = state.mode === 'parallel' ? PARALLEL_ROWS : NODES.map(n => [n.id]);
+    const graphRows = state.mode === 'parallel' ? PARALLEL_ROWS : state.mode === 'orchestration' ? ORCHESTRATION_ROWS : NODES.map(n => [n.id]);
     graphRows.forEach((ids, index) => {
       const row = element('div', ids.length > 1 ? 'graph-row branch-row' : 'graph-row');
       byId('graph-nodes').append(row);
@@ -315,6 +359,38 @@
     }
   }
 
+  function updateOrchestration() {
+    const panel = byId('orchestration-panel');
+    if (panel.hidden) return;
+    const started = state.events.find(event => event.event === 'orchestration_started');
+    const ownership = state.events.filter(event => event.event === 'task_ownership_changed').at(-1);
+    const revoked = state.events.filter(event => event.event === 'task_ownership_revoked').at(-1);
+    const decisions = state.events.filter(event => event.event === 'orchestration_decision_recorded');
+    const lastDecision = decisions.at(-1);
+    const budget = state.events.filter(event => event.event === 'orchestration_budget_updated').at(-1) || lastDecision?.budget;
+    const policy = started?.policy || { max_assignments: 5, max_revisions: 2, token_budget: 1200 };
+    const owner = lastDecision?.action === 'STOP' || lastDecision?.action === 'COMPLETE' ? '已释放' : revoked && (!ownership || revoked.sequence > ownership.sequence) ? '已撤销' : ownership?.to_owner || '—';
+    byId('orchestration-policy').textContent = started ? `single_owner · ${policy.deadline_ms}ms deadline` : '等待编排策略';
+    byId('orchestration-owner').textContent = owner;
+    byId('orchestration-action').textContent = lastDecision?.action || '—';
+    byId('orchestration-assignments').textContent = `${budget?.assignments || 0} / ${policy.max_assignments}`;
+    byId('orchestration-revisions').textContent = `${budget?.revisions || 0} / ${policy.max_revisions}`;
+    byId('orchestration-tokens').textContent = `${budget?.tokens_used || 0} / ${policy.token_budget}`;
+    const list = byId('orchestration-decisions');
+    list.replaceChildren();
+    if (!decisions.length) {
+      list.append(element('li', '', '运行后逐条显示 ASSIGN、RETURN、REASSIGN、STOP 或 COMPLETE。'));
+      return;
+    }
+    decisions.forEach((decision, index) => {
+      const item = element('li');
+      item.dataset.action = decision.action;
+      item.append(element('b', '', `${String(index + 1).padStart(2, '0')} · ${decision.action}`),
+        element('small', '', `${decision.from_owner || 'Supervisor'} → ${decision.to_owner || '释放'} · ${decision.reason}`));
+      list.append(item);
+    });
+  }
+
   function updateStudio() {
     const relevantHandoffs = state.events.map(handoffForEvent).filter(Boolean).filter(handoff => handoff.flow === flowMode);
     for (const role of STUDIO_ROLES) {
@@ -338,6 +414,7 @@
     renderHandoffs();
     updateHandoffJourney();
     updateModelInspector();
+    updateOrchestration();
   }
 
   function addDetails(row, label, payload) {
@@ -379,6 +456,13 @@
     if (name === 'handoff_rejected') return { phase: 'HANDOFF GATE', state: '状态：接收方拒绝', effect: `副作用：${event.effect_count} 次` };
     if (name === 'handoff_accepted') return { phase: 'HANDOFF', state: '状态：合约已接受', effect: '下游：允许激活' };
     if (name === 'handoff_validation_completed') return { phase: 'CONTRACT', state: `状态：${event.passed ? '通过' : '拒绝'}`, effect: event.passed ? '下游：待激活' : '下游：不启动' };
+    if (name === 'orchestration_decision_recorded') return { phase: 'SUPERVISOR', state: `决策：${event.action}`, effect: `Owner：${event.to_owner || '已释放'}` };
+    if (name === 'task_ownership_changed') return { phase: 'OWNERSHIP', state: `Owner：${event.to_owner}`, effect: `版本：v${event.ownership_version}` };
+    if (name === 'task_returned_for_revision') return { phase: 'REVISION', state: `第 ${event.revision} 次退回`, effect: '下游：重新验约' };
+    if (name === 'agent_timeout_detected') return { phase: 'TIMEOUT', state: '状态：未提交输出', effect: '所有权：待撤销' };
+    if (name === 'orchestration_loop_detected') return { phase: 'LOOP GUARD', state: `重复：${event.occurrences} 次`, effect: '下游：STOP' };
+    if (name === 'orchestration_authority_violation_detected') return { phase: 'AUTHORITY GATE', state: '状态：越权已拒绝', effect: `副作用：${event.effect_count} 次` };
+    if (name === 'orchestration_stopped') return { phase: 'SAFE STOP', state: `原因：${event.reason}`, effect: `副作用：${event.effect_count} 次` };
     if (name === 'ledger_mismatch_detected') return { phase: 'RECONCILIATION FAILURE', state: '状态：账本不一致', effect: '下游：E1 被阻断' };
     if (name === 'ledger_reconciliation_completed') return { phase: 'RECONCILIATION', state: '状态：已对账', effect: `事件：${event.event_count ?? 0} 个` };
     if (name === 'ledger_event_appending' || name === 'ledger_event_appended') return { phase: 'PERSIST', state: `状态：${event.event_type}`, effect: '副作用：纸面账本 · fsync' };
@@ -456,11 +540,11 @@
       byId('ledger-status').dataset.state = state.result?.eval?.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = 'gross DV01 ' + summary.gross_dv01_usd_per_bp + ' USD/bp · limits ' + paperPortfolio.violations.length + ' · realized P&L ' + summary.realized_pnl_usd;
     }
-    const advancedResult = state.result && ['rate_model_eval_lesson', 'rate_memory_lesson', 'rate_multi_agent_handoff_lesson'].includes(state.result.artifact_type) ? state.result : null;
+    const advancedResult = state.result && ['rate_model_eval_lesson', 'rate_memory_lesson', 'rate_multi_agent_handoff_lesson', 'rate_supervisor_orchestration_lesson'].includes(state.result.artifact_type) ? state.result : null;
     if (advancedResult && byId('ledger-status')) {
       const regressions = advancedResult.eval.regressions || [];
       const checks = Object.entries(advancedResult.eval.checks || {});
-      byId('check-label').textContent = advancedResult.artifact_type === 'rate_model_eval_lesson' ? 'MODEL EVAL' : advancedResult.artifact_type === 'rate_memory_lesson' ? 'MEMORY EVAL' : 'HANDOFF EVAL';
+      byId('check-label').textContent = advancedResult.artifact_type === 'rate_model_eval_lesson' ? 'MODEL EVAL' : advancedResult.artifact_type === 'rate_memory_lesson' ? 'MEMORY EVAL' : advancedResult.artifact_type === 'rate_multi_agent_handoff_lesson' ? 'HANDOFF EVAL' : 'ORCHESTRATION EVAL';
       byId('ledger-status').textContent = advancedResult.eval.passed ? 'PASS · CONTRACT PRESERVED' : 'REGRESSION · CANDIDATE BLOCKED';
       byId('ledger-status').dataset.state = advancedResult.eval.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = regressions.length ? regressions.join(' · ') : checks.map(([name, passed]) => `${passed ? '✓' : '✂'} ${name}`).join(' · ');
@@ -506,11 +590,19 @@
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
     byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? (state.replayed ? '历史事件已重放 · 未重新调用 Tool' : '事件流已完成 · 完整输入与输出已保留') : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
+    updateLessonOutcome();
     updateOverview();
     updateStudio();
   }
   function scrollToLatest() {
     if (byId('follow').checked) byId('stream-scroll').scrollTop = byId('stream-scroll').scrollHeight;
+  }
+  function releaseRunControls() {
+    inFlight = false;
+    byId('run-button').disabled = false;
+    byId('scenario').disabled = false;
+    for (const input of byId('parameters').elements) input.disabled = false;
+    byId('run-button').textContent = state.terminal ? '↻  Run again' : '▶  Run Agent';
   }
   function showSource(data) {
     if (!data) return;
@@ -603,8 +695,8 @@
     const modelApiKey = enteredModelApiKey || readSessionKey();
     delete config.model_api_key;
     for (const key of ['lookback_days', 'entry_z', 'holding_days', 'dv01_usd_per_bp', 'round_trip_cost_bps']) config[key] = Number(config[key]);
-    config.execution_mode = 'parallel';
     config.demo_scenario = byId('scenario').value;
+    config.execution_mode = modeForScenario(config.demo_scenario);
     config.budget_ms = scenarioBudget();
     if (['model_live', 'intent_live'].includes(config.demo_scenario)) {
       if (!modelApiKey) {
@@ -620,17 +712,18 @@
     cancelPending = false;
     cancelNote = '';
     inFlight = true;
-    state = createState('parallel');
-    state.phase = 'connecting';
-    filter = null;
-    selectedRole = null;
-    rows.length = 0;
-    byId('event-list').replaceChildren();
-    byId('settings').open = false;
-    byId('follow').checked = true;
-    byId('source-note').textContent = sourceNote(config.demo_scenario);
-    update();
     try {
+      state = createState(config.execution_mode);
+      state.phase = 'connecting';
+      filter = null;
+      selectedRole = null;
+      rows.length = 0;
+      byId('event-list').replaceChildren();
+      byId('settings').open = false;
+      byId('follow').checked = true;
+      byId('source-note').textContent = sourceNote(config.demo_scenario);
+      buildGraph();
+      update();
       const endpoint = advancedScenarios.has(config.demo_scenario) ? '/api/rates/advanced-lesson' : config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : config.demo_scenario === 'paper_fill_accounting' ? '/api/rates/paper-fill' : config.demo_scenario === 'paper_portfolio_risk' ? '/api/rates/paper-portfolio' : '/api/rates/stream';
       const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(config) });
       if (!response.ok) {
@@ -642,14 +735,20 @@
       failState(state, { code: 'STREAM_ERROR', message: error.message, task_id: state.activeTask });
       showError();
     } finally {
-      inFlight = false;
-      update();
-      scrollToLatest();
+      releaseRunControls();
+      try {
+        update();
+        scrollToLatest();
+        if (state.terminal) byId('lesson-outcome-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } finally {
+        releaseRunControls();
+      }
     }
   }
   async function replayLast() {
     if (inFlight || !state.runId || !state.terminal) return;
     const runId = state.runId;
+    const replayMode = state.mode;
     inFlight = true;
     cancelPending = false;
     cancelNote = '';
@@ -657,10 +756,11 @@
     selectedRole = null;
     rows.length = 0;
     byId('event-list').replaceChildren();
-    state = createState('parallel');
-    state.phase = 'connecting';
-    update();
     try {
+      state = createState(replayMode);
+      state.phase = 'connecting';
+      buildGraph();
+      update();
       const response = await fetch('/api/rates/replay', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ run_id: runId, after_sequence: 0 }) });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
@@ -671,9 +771,14 @@
       failState(state, { code: 'REPLAY_ERROR', message: error.message, task_id: state.activeTask });
       showError();
     } finally {
-      inFlight = false;
-      update();
-      scrollToLatest();
+      releaseRunControls();
+      try {
+        update();
+        scrollToLatest();
+        if (state.terminal) byId('lesson-outcome-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } finally {
+        releaseRunControls();
+      }
     }
   }
   byId('run-button').addEventListener('click', run);
@@ -684,7 +789,7 @@
   byId('forget-model-key').addEventListener('click', clearSessionKey);
   byId('load-archive-scenario').addEventListener('click', selectArchivedScenario);
   byId('scenario').addEventListener('change', () => {
-    if (byId('scenario').value.startsWith('handoff_')) {
+    if (byId('scenario').value.startsWith('handoff_') || byId('scenario').value.startsWith('orchestration_')) {
       flowMode = 'decision';
       document.querySelectorAll('.flow-tab').forEach(tab => {
         const selected = tab.dataset.flow === flowMode;

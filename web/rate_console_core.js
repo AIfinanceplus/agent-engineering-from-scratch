@@ -39,7 +39,25 @@
     NODES[5]
   ];
   const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['O1'], ['LG1'], ['E1']];
+  const ORCHESTRATION_NODES = [
+    NODES[0],
+    { id: 'OS1', title: 'Orchestrator', description: '分配 · 退回 · 重分配 · 停止' },
+    NODES[1],
+    { id: 'L1', title: 'Risk review', description: '独立限额验证 · 不改写策略' },
+    { id: 'R1', title: 'Paper Runtime', description: '只映射已批准固定任务图' },
+    NODES[5],
+  ];
+  const ORCHESTRATION_ROWS = ORCHESTRATION_NODES.map(node => [node.id]);
   const STUDIO_ROLES = [
+    {
+      id: 'orchestration_supervisor', name: '编排主管', type: '确定性 Supervisor', icon: 'S',
+      tasks: ['OS1'],
+      mission: '分配、退回、重分配或停止有界任务',
+      input: 'Goal · Task Result · Worker Health', output: 'orchestration_decision_v1',
+      functions: ['选择下一责任人', '跟踪 Revision 与 Token 预算', '检测循环和超时'],
+      constraints: ['不能改写策略', '不能批准风险', '不能执行 Tool 或扩大权限'],
+      idle: '等待可编排的 2s10s 目标',
+    },
     {
       id: 'strategy_analyst', name: '策略分析师', type: 'LLM + 规则', icon: 'A',
       tasks: ['G1', 'RG1', 'CT1', 'MR1', 'M1', 'P1', 'D1', 'A2', 'A10', 'J1', 'S1'],
@@ -68,8 +86,8 @@
       idle: '等待风险主管放行',
     },
   ];
-  const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|privacy|memory_write_blocked|handoff_validation|handoff_rejected|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
-  const DECISION_EVENT = /(model_intent|model_plan|model_regression|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|agent_role|handoff_contract|handoff_accepted|join_|run_completed)/;
+  const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|privacy|memory_write_blocked|handoff_validation|handoff_rejected|authority_violation|loop_detected|orchestration_stopped|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
+  const DECISION_EVENT = /(orchestration|task_ownership|task_returned|model_intent|model_plan|model_regression|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|agent_role|handoff_contract|handoff_accepted|join_|run_completed)/;
   function flowForEvent(event) {
     const name = event?.event || '';
     if (RISK_EVENT.test(name)) return 'risk';
@@ -86,7 +104,14 @@
   function handoffForEvent(event) {
     const name = event?.event || '';
     const flow = flowForEvent(event);
-    if (name === 'goal_received') return { from: '你', to: 'strategy_analyst', flow, title: '提交 2s10s 教学目标' };
+    if (name === 'goal_received') return { from: '你', to: String(event.scenario || '').startsWith('orchestration_') ? 'orchestration_supervisor' : 'strategy_analyst', flow, title: '提交 2s10s 教学目标' };
+    if (name === 'orchestration_started') return { from: '你', to: 'orchestration_supervisor', flow: 'decision', title: '启动有界编排策略' };
+    if (name === 'orchestration_decision_recorded') return { from: 'orchestration_supervisor', to: event.to_owner || '你', flow, title: `${event.action} · ${event.reason}` };
+    if (name === 'task_ownership_changed') return { from: event.from_owner || 'orchestration_supervisor', to: event.assignee_role, flow: 'decision', title: `任务所有权 v${event.ownership_version}` };
+    if (name === 'task_returned_for_revision') return { from: 'risk_controller', to: 'strategy_analyst', flow: 'decision', title: `退回修改 · revision ${event.revision}` };
+    if (name === 'agent_timeout_detected') return { from: event.actor_role, to: 'orchestration_supervisor', flow: 'risk', title: 'Worker 超时且没有提交输出' };
+    if (name === 'orchestration_loop_detected') return { from: 'orchestration_supervisor', to: '你', flow: 'risk', title: '重复退回循环已被停止' };
+    if (name === 'orchestration_authority_violation_detected') return { from: event.actor_role, to: 'orchestration_supervisor', flow: 'risk', title: '越权请求被编排层阻断' };
     if (name === 'context_pack_created' || name === 'model_request_started') return { from: '系统设施', to: 'strategy_analyst', flow: 'information', title: name === 'context_pack_created' ? '交付 Context Pack' : '调用受限 LLM 能力' };
     if (name === 'model_response_received') return { from: 'LLM 能力', to: 'strategy_analyst', flow: 'information', title: '返回未经信任的模型输出' };
     if (['model_intent_accepted', 'model_plan_accepted'].includes(name)) return { from: 'strategy_analyst', to: 'risk_controller', flow: 'decision', title: '提交结构化策略提议' };
@@ -111,11 +136,14 @@
     if (name === 'long_term_memory_written') return { from: 'risk_controller', to: 'runtime_supervisor', flow: 'information', title: '批准写入脱敏长期记忆' };
     if (name === 'long_term_memory_retrieved') return { from: 'runtime_supervisor', to: 'strategy_analyst', flow: 'information', title: '按 Scope 召回有来源的记忆' };
     if (name === 'memory_write_blocked') return { from: 'risk_controller', to: 'runtime_supervisor', flow: 'risk', title: '敏感长期写入被阻断，副作用为零' };
-    if (name === 'run_completed') return { from: 'runtime_supervisor', to: '你', flow: 'decision', title: '交付完整运行终态' };
+    if (name === 'run_completed') return { from: event.lesson === 'orchestration' ? 'orchestration_supervisor' : 'runtime_supervisor', to: '你', flow: 'decision', title: '交付完整运行终态' };
     return null;
   }
+  function modeForScenario(scenario = '') {
+    return String(scenario).startsWith('orchestration_') ? 'orchestration' : 'parallel';
+  }
   function createState(mode = 'serial') {
-    const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
+    const definitions = mode === 'parallel' ? PARALLEL_NODES : mode === 'orchestration' ? ORCHESTRATION_NODES : NODES;
     return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), agentStates: Object.fromEntries(STUDIO_ROLES.map(role => [role.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
   }
   function failState(state, error) {
@@ -140,6 +168,39 @@
     const id = event.task_id;
     switch (event.event) {
       case 'goal_received': state.nodes.G1 = 'completed'; break;
+      case 'orchestration_started':
+        state.nodes.OS1 = 'running';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'active';
+        break;
+      case 'task_envelope_created': state.nodes.OS1 = 'proposed'; break;
+      case 'orchestration_decision_recorded': state.nodes.OS1 = event.action === 'STOP' ? 'abstained' : 'running'; break;
+      case 'task_ownership_changed': state.nodes.OS1 = 'running'; break;
+      case 'orchestration_budget_updated': state.nodes.OS1 = 'running'; break;
+      case 'task_ownership_revoked': state.nodes.OS1 = 'verifying'; break;
+      case 'agent_timeout_detected':
+        if (id in state.nodes) state.nodes[id] = 'timed_out';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'failed';
+        break;
+      case 'agent_task_started':
+        if (id in state.nodes) state.nodes[id] = 'running';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'active';
+        break;
+      case 'agent_task_completed':
+        if (id in state.nodes) state.nodes[id] = 'completed';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'completed';
+        break;
+      case 'risk_review_completed':
+        state.nodes.L1 = event.approved ? 'completed' : 'rejected';
+        state.agentStates.risk_controller = event.approved ? 'completed' : 'rejected';
+        break;
+      case 'task_returned_for_revision': state.nodes.OS1 = 'replan'; break;
+      case 'orchestration_loop_detected': state.nodes.OS1 = 'budget_blocked'; break;
+      case 'orchestration_authority_violation_detected': state.nodes.OS1 = 'rejected'; break;
+      case 'paper_runtime_mapped':
+        state.nodes.R1 = 'completed';
+        state.agentStates.runtime_supervisor = 'completed';
+        break;
+      case 'orchestration_stopped': state.nodes.OS1 = 'abstained'; break;
       case 'retrieval_bypassed': state.nodes.RG1 = 'completed'; break;
       case 'retrieval_query_created': state.nodes.RG1 = 'retrieving'; break;
       case 'retrieval_candidate_scored': state.nodes.RG1 = 'ranking'; break;
@@ -341,8 +402,14 @@
         state.activeTasks = [];
         break;
       case 'run_completed':
-        state.nodes.R1 = 'completed';
-        if (state.agentStates.runtime_supervisor !== 'waiting') state.agentStates.runtime_supervisor = 'completed';
+        if (state.mode === 'orchestration') {
+          state.nodes.OS1 = 'completed';
+          if (state.nodes.R1 === 'waiting') state.nodes.R1 = 'blocked';
+          state.agentStates.orchestration_supervisor = 'completed';
+        } else {
+          state.nodes.R1 = 'completed';
+          if (state.agentStates.runtime_supervisor !== 'waiting') state.agentStates.runtime_supervisor = 'completed';
+        }
         break;
       case 'run_budget_started': state.budgetMs = event.budget_ms; break;
       case 'circuit_bypassed': state.nodes.C1 = 'completed'; break;
@@ -442,6 +509,21 @@
       case 'handoff_validation_completed': return { ...common, kind: event.passed ? 'handoff' : 'error', label: event.passed ? 'CONTRACT PASS' : 'CONTRACT FAIL', title: event.passed ? 'Handoff may activate recipient' : 'Recipient remains inactive', description: event.passed ? '所有交接断言通过。' : event.reasons.join(' · '), detailLabel: '交接校验结果', payload: event };
       case 'handoff_accepted': return { ...common, kind: 'handoff', label: 'ACCEPTED', title: `${event.sender_role} → ${event.actor_role}`, description: '接收方只接受合约内声明的 Payload 与权限。', detailLabel: '接受凭证', payload: event };
       case 'handoff_rejected': return { ...common, kind: 'error', label: 'HANDOFF REJECTED', title: 'Unsafe authority escalation stopped', description: `${event.reasons.join(' · ')} · 副作用 ${event.effect_count} 次`, detailLabel: '拒绝原因', payload: event };
+      case 'orchestration_started': return { ...common, kind: 'handoff', label: 'SUPERVISOR', title: 'Bounded orchestration policy loaded', description: `最多 ${event.policy.max_assignments} 次分配 · ${event.policy.max_revisions} 次修改 · ${event.policy.token_budget} tokens · 单一 Owner`, detailLabel: '编排策略', payload: event.policy };
+      case 'task_envelope_created': return { ...common, kind: 'handoff', label: 'TASK ENVELOPE', title: event.assignment_id, description: `只允许 ${event.allowed_roles.join(' → ')}；任务携带 Paper-only Guardrail。`, detailLabel: '任务信封', payload: event };
+      case 'orchestration_decision_recorded': return { ...common, kind: event.action === 'STOP' ? 'error' : 'handoff', label: event.action, title: event.reason, description: `${event.from_owner || 'Supervisor'} → ${event.to_owner || '释放所有权'} · 权限未变化`, detailLabel: 'Supervisor 决策与剩余预算', payload: event };
+      case 'task_ownership_changed': return { ...common, kind: 'handoff', label: 'OWNERSHIP', title: `${event.to_owner} owns ${event.assignment_id}`, description: `所有权 v${event.ownership_version} · role ${event.assignee_role} · single_owner=${event.single_owner}`, detailLabel: '所有权变更', payload: event };
+      case 'orchestration_budget_updated': return { ...common, kind: 'handoff', label: 'BUDGET', title: `${event.assignments_remaining} assignments · ${event.tokens_remaining} tokens left`, description: `${event.revisions_remaining} 次 Revision 剩余。`, detailLabel: '预算计数器', payload: event };
+      case 'agent_task_started': return { ...common, kind: 'handoff', label: 'WORK START', title: `${event.worker_id} · ${event.actor_role}`, description: `只处理 ${event.assignment_id} 中声明的职责。`, detailLabel: 'Worker 输入边界', payload: event };
+      case 'agent_task_completed': return { ...common, kind: 'handoff', label: 'WORK RESULT', title: `${event.worker_id} submitted output`, description: '结果返回 Supervisor；提交者不能自行选择下一步。', detailLabel: 'Agent 输出', payload: event.output };
+      case 'risk_review_completed': return { ...common, kind: event.approved ? 'handoff' : 'error', label: event.approved ? 'RISK PASS' : 'RETURN', title: event.approved ? `DV01 ${event.proposed_dv01} <= ${event.limit_dv01}` : (event.reason || `DV01 ${event.proposed_dv01} > ${event.limit_dv01}`), description: 'Risk 只能批准或拒绝，不能替分析师改写策略。', detailLabel: '独立风险判断', payload: event };
+      case 'task_returned_for_revision': return { ...common, kind: 'handoff', label: 'REVISION', title: `${event.reason_code} · revision ${event.revision}`, description: event.requested_change, detailLabel: '有界退回要求', payload: event };
+      case 'agent_timeout_detected': return { ...common, kind: 'error', label: 'TIMEOUT', title: `${event.worker_id} produced no committed output`, description: 'Supervisor 必须先撤销旧 Owner，才能把相同任务交给健康 Worker。', detailLabel: '超时证据', payload: event };
+      case 'task_ownership_revoked': return { ...common, kind: 'error', label: 'REVOKE', title: `${event.owner} no longer owns the task`, description: event.reason, detailLabel: '撤销凭证', payload: event };
+      case 'orchestration_loop_detected': return { ...common, kind: 'error', label: 'LOOP GUARD', title: `${event.signature} repeated ${event.occurrences} times`, description: 'Revision 预算已到边界；停止而不是继续消耗。', detailLabel: '循环签名', payload: event };
+      case 'orchestration_authority_violation_detected': return { ...common, kind: 'error', label: 'AUTHORITY BLOCK', title: event.requested, description: `允许范围：${event.allowed} · 权限未扩大 · 副作用 ${event.effect_count} 次`, detailLabel: '越权请求', payload: event };
+      case 'paper_runtime_mapped': return { ...common, kind: 'result', label: 'PAPER RUNTIME', title: event.graph, description: '只有 Risk 批准后的合约进入固定任务图；没有真实执行。', detailLabel: 'Runtime 映射', payload: event };
+      case 'orchestration_stopped': return { ...common, kind: 'error', label: 'SAFE STOP', title: event.reason, description: `安全停止 · 副作用 ${event.effect_count} 次 · Runtime 未激活`, detailLabel: '停止终态', payload: event };
       case 'retrieval_bypassed': return { ...common, kind: 'retrieval', label: 'RETRIEVER', title: 'Retrieval bypassed', description: event.reason };
       case 'retrieval_query_created': return { ...common, kind: 'retrieval', label: 'QUERY', title: event.query, description: `确定性 lexical retrieval · Top-K ${event.top_k} · 语料 ${event.corpus_size} chunks · 无伪造 embedding`, detailLabel: 'Query 与检索配置', payload: event };
       case 'retrieval_candidate_scored': return { ...common, kind: 'retrieval', label: 'RANK', title: `#${event.rank} ${event.chunk_id} · ${event.lexical_score}`, description: `${event.matched_terms.join(', ') || '无匹配词'}${event.selected_top_k ? ' · 进入 Top-K' : ' · 未进入 Top-K'}`, detailLabel: '完整 Chunk、来源与内容哈希', payload: event };
@@ -600,5 +682,5 @@
       default: return common;
     }
   }
-  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe };
+  return { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe };
 });

@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Operations Studio · 2s10s Paper Lab</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=28">
-  <script defer src="/rate_console_core.js?v=28"></script>
-  <script defer src="/rate_console.js?v=28"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=30">
+  <script defer src="/rate_console_core.js?v=30"></script>
+  <script defer src="/rate_console.js?v=30"></script>
 </head>
 <body>
   <aside class="lab-rail" aria-label="实验台导航">
@@ -24,9 +24,10 @@
     <div class="brand"><span class="brand-mark" aria-hidden="true">2s</span><div><h1>2s10s Agent Lab</h1><p>Multi-Agent Rates Research <span>/</span> 观察模型、Runtime、Tools 与 Guardrails 如何协作</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
-        <optgroup label="第 1 课 · Model Evals"><option value="eval_golden_pass" selected>Golden Trace · 候选行为通过</option><option value="eval_regression_fail">Regression · 越权与缺失风控被检出</option></optgroup>
+        <optgroup label="第 1 课 · Model Evals"><option value="eval_golden_pass">Golden Trace · 候选行为通过</option><option value="eval_regression_fail">Regression · 越权与缺失风控被检出</option></optgroup>
         <optgroup label="第 2 课 · Agent Memory"><option value="memory_redaction_pass">短期状态 → 脱敏长期记忆 → 有来源召回</option><option value="memory_privacy_block">隐私门禁 · 原始敏感信息拒绝写入</option></optgroup>
         <optgroup label="第 3 课 · Multi-Agent Handoff"><option value="handoff_contract_pass">Analyst → Risk → Runtime 合约交接</option><option value="handoff_contract_reject">越权交接 · Risk 拒绝并保持零副作用</option></optgroup>
+        <optgroup label="第 4 课 · Supervisor Orchestration"><option value="orchestration_normal" selected>正常编排 · Analyst → Risk → Runtime</option><option value="orchestration_revision">Risk 退回 · 修改后重新验约</option><option value="orchestration_timeout_reassign">Agent 超时 · 撤销后重分配</option><option value="orchestration_loop_block">Revision 循环 · 预算耗尽后停止</option><option value="orchestration_authority_block">越权重分配 · Supervisor 零副作用阻断</option></optgroup>
       </select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
@@ -48,10 +49,15 @@
 
   <main id="overview">
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
+    <section class="lesson-outcome-banner" id="lesson-outcome-banner" aria-live="polite" tabindex="-1" hidden>
+      <div class="outcome-mark" aria-hidden="true"><span>LESSON</span><b>✓</b></div>
+      <div class="outcome-copy"><span>本次运行的课程结论</span><strong id="lesson-outcome-theme">—</strong><p id="lesson-outcome-summary">—</p></div>
+      <div class="outcome-tags"><span id="lesson-outcome-scenario">SCENARIO · —</span><b id="lesson-outcome-result">—</b><span id="lesson-outcome-effect">SIDE EFFECTS · —</span></div>
+    </section>
     <section class="lab-summary" aria-label="实验台约束摘要">
       <div><span>STRATEGY</span><strong>2s10s</strong><small>DGS2 − DGS10</small></div>
       <div><span>EXECUTION MODE</span><strong class="summary-good">PAPER ONLY</strong><small>无真实订单</small></div>
-      <div><span>AGENT TEAM</span><strong>3 ROLES</strong><small>Analyst · Risk · Runtime</small></div>
+      <div><span>AGENT TEAM</span><strong>4 ROLES</strong><small>Supervisor · Analyst · Risk · Runtime</small></div>
       <div><span>AUTHORITY</span><strong class="summary-cyan">RUNTIME GATED</strong><small>模型仅提议</small></div>
     </section>
     <section class="course-focus" aria-label="课程进度">
@@ -60,6 +66,7 @@
         <li data-lesson="eval"><b>01</b><span><strong>Model Evals</strong><small>Golden Trace · 回归评测</small></span></li>
         <li data-lesson="memory"><b>02</b><span><strong>Agent Memory</strong><small>短期状态 · 长期记忆 · 脱敏</small></span></li>
         <li data-lesson="handoff"><b>03</b><span><strong>Multi-Agent Handoff</strong><small>职责边界 · 交接契约</small></span></li>
+        <li data-lesson="orchestration"><b>04</b><span><strong>Supervisor</strong><small>分配 · 退回 · 重分配 · 停止</small></span></li>
       </ol>
       <details class="lesson-archive" id="lesson-archive">
         <summary>历史课程 <span>默认收起</span></summary>
@@ -82,7 +89,7 @@
     <section class="approval-panel" id="approval-panel" aria-live="assertive" hidden><div class="approval-copy"><span>H1 · HUMAN APPROVAL REQUIRED</span><strong id="approval-tool">—</strong><small id="approval-fingerprint">—</small></div><div class="approval-actions"><button class="deny-button" id="deny-button" type="button">Deny</button><button class="approve-button" id="approve-button" type="button">Approve once</button></div></section>
     <section class="agent-studio" id="agents" aria-labelledby="studio-title">
       <div class="studio-heading">
-        <div><span class="eyebrow">THREE-AGENT DESK</span><h2 id="studio-title">三位 Agent 协作室</h2><p>人是角色，Runtime、Tools、Memory 是设施。角色之间只能通过可验证的 Handoff Envelope 沟通。</p></div>
+        <div><span class="eyebrow">FOUR-AGENT DESK</span><h2 id="studio-title">四位 Agent 协作室</h2><p>编排主管管理任务流，但不能改策略、批风险或执行 Tool；所有权与预算变化都来自 Trace。</p></div>
         <div class="flow-switcher" role="tablist" aria-label="选择信息流视图">
           <button class="flow-tab active" type="button" role="tab" aria-selected="true" data-flow="information"><i></i>信息流</button>
           <button class="flow-tab" type="button" role="tab" aria-selected="false" data-flow="decision"><i></i>决策流</button>
@@ -94,6 +101,17 @@
           <div class="flow-route" id="flow-route" data-flow="information" aria-live="polite">
             <span class="route-label">信息流</span><strong id="flow-route-title">Goal → Context → Intent → Observation → Result</strong><small id="flow-route-detail">点击角色查看它参与的原始事件；亮起状态全部来自 Trace。</small>
           </div>
+          <section class="orchestration-panel" id="orchestration-panel" aria-labelledby="orchestration-title" hidden>
+            <div class="orchestration-heading"><div><span class="eyebrow">SUPERVISOR CONTROL</span><strong id="orchestration-title">任务所有权与预算</strong></div><span id="orchestration-policy">等待编排策略</span></div>
+            <div class="orchestration-metrics">
+              <span><small>CURRENT OWNER</small><strong id="orchestration-owner">—</strong></span>
+              <span><small>LAST ACTION</small><strong id="orchestration-action">—</strong></span>
+              <span><small>ASSIGNMENTS</small><strong id="orchestration-assignments">0 / 5</strong></span>
+              <span><small>REVISIONS</small><strong id="orchestration-revisions">0 / 2</strong></span>
+              <span><small>TOKENS</small><strong id="orchestration-tokens">0 / 1200</strong></span>
+            </div>
+            <ol class="orchestration-decisions" id="orchestration-decisions"><li>运行后逐条显示 ASSIGN、RETURN、REASSIGN、STOP 或 COMPLETE。</li></ol>
+          </section>
           <div class="role-grid" id="role-grid" aria-label="Agent 角色与实时状态"></div>
           <section class="handoff-journey" id="handoff" aria-labelledby="handoff-journey-title">
             <div class="journey-heading"><div><span class="eyebrow">HANDOFF PROTOCOL</span><strong id="handoff-journey-title">一次交接如何发生</strong></div><span>所有状态来自 Trace</span></div>
