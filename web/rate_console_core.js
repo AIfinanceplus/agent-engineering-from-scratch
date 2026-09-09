@@ -40,12 +40,33 @@
   ];
   const PARALLEL_ROWS = [['G1'], ['RG1'], ['CG1'], ['TG1'], ['CT1'], ['MR1'], ['M1'], ['P1'], ['R1'], ['L1'], ['H1'], ['AZ1'], ['C1'], ['D1'], ['V1'], ['Q1'], ['A2', 'A10'], ['J1'], ['S1'], ['O1'], ['LG1'], ['E1']];
   const STUDIO_ROLES = [
-    { id: 'principal', name: '任务委托人', type: '人工', icon: '你', tasks: ['G1', 'H1'], idle: '提出目标，保留最终批准权' },
-    { id: 'model', name: '模型顾问', type: 'LLM', icon: 'M', tasks: ['M1'], idle: '等待受限模型请求' },
-    { id: 'runtime', name: '执行主管', type: '规则程序', icon: 'R', tasks: ['CT1', 'MR1', 'P1', 'R1'], idle: '校验提议并调度固定任务图' },
-    { id: 'data', name: '数据专员', type: '工具', icon: 'D', tasks: ['RG1', 'D1', 'A2', 'A10', 'J1', 'S1'], idle: '获取、准备并计算纸面结果' },
-    { id: 'risk', name: '风控专员', type: '规则程序', icon: '盾', tasks: ['CG1', 'TG1', 'L1', 'H1', 'AZ1', 'C1', 'V1', 'Q1'], idle: '检查来源、权限、容量与风险边界' },
-    { id: 'auditor', name: '账本审计员', type: '规则程序', icon: '审', tasks: ['O1', 'LG1', 'E1'], idle: '持久化、重放、对账与评估' },
+    {
+      id: 'strategy_analyst', name: '策略分析师', type: 'LLM + 规则', icon: 'A',
+      tasks: ['G1', 'RG1', 'CT1', 'MR1', 'M1', 'P1', 'D1', 'A2', 'A10', 'J1', 'S1'],
+      mission: '研究 2s10s，并提出有证据的纸面策略',
+      input: '目标 · DGS2/DGS10 · Context', output: 'strategy_handoff_v1',
+      functions: ['解释数据', '生成策略提议', '绑定 Evidence IDs'],
+      constraints: ['不能批准自己的提议', '不能选择 Runtime Tool', '不能下真实订单'],
+      idle: '等待目标和已验证数据',
+    },
+    {
+      id: 'risk_controller', name: '风险主管', type: '确定性规则', icon: 'R',
+      tasks: ['CG1', 'TG1', 'H1', 'AZ1', 'C1', 'V1', 'Q1', 'E1'],
+      mission: '独立验约，只决定 ALLOW 或 BLOCK',
+      input: 'strategy_handoff_v1', output: 'risk_handoff_v1 / REJECT',
+      functions: ['检查 Schema 与路由', '核对证据和 Hash', '执行 Paper-only 门禁'],
+      constraints: ['不能改写策略', '不能执行 Tool', '拒绝时副作用必须为 0'],
+      idle: '等待分析师交接',
+    },
+    {
+      id: 'runtime_supervisor', name: '执行主管', type: 'Runtime', icon: 'E',
+      tasks: ['R1', 'L1', 'O1', 'LG1'],
+      mission: '只把已批准合约映射到固定纸面任务图',
+      input: 'risk_handoff_v1', output: 'runtime_decision_v1 · Trace',
+      functions: ['重新验证交接', '映射固定 DAG', '持久化完整终态'],
+      constraints: ['paper_only=true', 'automatic_execution=false', '不能修改批准的 Payload'],
+      idle: '等待风险主管放行',
+    },
   ];
   const RISK_EVENT = /(citation|taint|injection|capability|approval|permission|privacy|memory_write_blocked|handoff_validation|handoff_rejected|circuit|admission|backpressure|rate_limit|lease|fence|portfolio_fill|ledger_mismatch|eval_)/;
   const DECISION_EVENT = /(model_intent|model_plan|model_regression|intent_validation|plan_validation|plan_created|plan_revised|replan|route_|routing|agent_role|handoff_contract|handoff_accepted|join_|run_completed)/;
@@ -56,45 +77,46 @@
     return 'information';
   }
   function roleForEvent(event) {
+    if (STUDIO_ROLES.some(role => role.id === event?.actor_role)) return event.actor_role;
     const task = event?.task_id;
-    if (event?.event === 'model_response_received') return 'model';
+    if (event?.event === 'model_response_received') return 'strategy_analyst';
     const role = STUDIO_ROLES.find(candidate => candidate.tasks.includes(task));
-    return role?.id || 'runtime';
+    return role?.id || 'runtime_supervisor';
   }
   function handoffForEvent(event) {
     const name = event?.event || '';
     const flow = flowForEvent(event);
-    if (name === 'goal_received') return { from: 'principal', to: 'runtime', flow, title: '提交教学目标' };
-    if (name === 'context_pack_created' || name === 'model_request_started') return { from: 'runtime', to: 'model', flow: 'information', title: name === 'context_pack_created' ? '交付 Context Pack' : '请求模型提出受限提议' };
-    if (name === 'model_response_received') return { from: 'model', to: 'runtime', flow: 'information', title: '返回未经信任的模型输出' };
-    if (['model_intent_accepted', 'model_plan_accepted'].includes(name)) return { from: 'runtime', to: 'data', flow: 'decision', title: name === 'model_intent_accepted' ? 'Intent 通过，准备映射固定任务图' : '模型 Plan 通过 Runtime 校验' };
-    if (name === 'model_repair_requested') return { from: 'runtime', to: 'model', flow: 'decision', title: '请求一次有界修复' };
-    if (name === 'plan_created') return { from: 'runtime', to: 'data', flow: 'decision', title: '下发 Runtime 固定任务图' };
-    if (name === 'tool_execution_started') return { from: 'runtime', to: 'data', flow: 'information', title: `调用 ${event.tool_name || 'Tool'}` };
-    if (name === 'tool_observation') return { from: 'data', to: 'runtime', flow: 'information', title: `返回 ${event.tool_name || 'Tool'} Observation` };
-    if (name === 'human_approval_requested') return { from: 'risk', to: 'principal', flow: 'risk', title: '请求一次人工批准' };
-    if (name === 'human_approval_resolved') return { from: 'principal', to: 'risk', flow: 'risk', title: `人工决定：${event.decision || '已提交'}` };
-    if (RISK_EVENT.test(name) && /(completed|rejected|blocked|verified|detected|resolved)/.test(name)) return { from: 'risk', to: 'runtime', flow: 'risk', title: name.replaceAll('_', ' ') };
-    if (name === 'ledger_event_appended') return { from: 'data', to: 'auditor', flow: 'information', title: `纸面事件已持久化：${event.event_type || 'event'}` };
-    if (name === 'ledger_reconciliation_completed') return { from: 'auditor', to: 'runtime', flow: 'risk', title: event.passed ? '重放对账通过' : '重放对账失败' };
-    if (name === 'golden_trace_loaded') return { from: 'auditor', to: 'model', flow: 'information', title: '载入已批准的 Golden Trace' };
-    if (name === 'model_regression_completed') return { from: 'auditor', to: 'runtime', flow: 'risk', title: event.passed ? '模型回归评测通过' : '检测到模型行为退化' };
-    if (name === 'short_term_memory_created') return { from: 'principal', to: 'runtime', flow: 'information', title: '创建本次 Run 的短期状态' };
-    if (name === 'privacy_redaction_completed') return { from: 'runtime', to: 'risk', flow: 'risk', title: '长期写入前完成隐私脱敏' };
-    if (name === 'long_term_memory_written') return { from: 'risk', to: 'auditor', flow: 'information', title: '写入脱敏的长期记忆' };
-    if (name === 'long_term_memory_retrieved') return { from: 'auditor', to: 'data', flow: 'information', title: '按 Scope 召回有来源的记忆' };
-    if (name === 'memory_write_blocked') return { from: 'risk', to: 'runtime', flow: 'risk', title: '敏感长期写入被阻断，副作用为零' };
+    if (name === 'goal_received') return { from: '你', to: 'strategy_analyst', flow, title: '提交 2s10s 教学目标' };
+    if (name === 'context_pack_created' || name === 'model_request_started') return { from: '系统设施', to: 'strategy_analyst', flow: 'information', title: name === 'context_pack_created' ? '交付 Context Pack' : '调用受限 LLM 能力' };
+    if (name === 'model_response_received') return { from: 'LLM 能力', to: 'strategy_analyst', flow: 'information', title: '返回未经信任的模型输出' };
+    if (['model_intent_accepted', 'model_plan_accepted'].includes(name)) return { from: 'strategy_analyst', to: 'risk_controller', flow: 'decision', title: '提交结构化策略提议' };
+    if (name === 'model_repair_requested') return { from: 'risk_controller', to: 'strategy_analyst', flow: 'decision', title: '退回并请求一次有界修复' };
+    if (name === 'plan_created') return { from: 'strategy_analyst', to: 'risk_controller', flow: 'decision', title: '提交固定 2s10s 任务图' };
+    if (name === 'tool_execution_started' || name === 'tool_observation') return { from: 'runtime_supervisor', to: 'strategy_analyst', flow: 'information', title: name === 'tool_execution_started' ? `调用 ${event.tool_name || 'Tool'}` : `返回 ${event.tool_name || 'Tool'} Observation` };
+    if (name === 'human_approval_requested') return { from: 'risk_controller', to: '你', flow: 'risk', title: '请求一次人工批准' };
+    if (name === 'human_approval_resolved') return { from: '你', to: 'risk_controller', flow: 'risk', title: `人工决定：${event.decision || '已提交'}` };
+    if (name === 'handoff_validation_started') return { from: event.sender_role, to: event.actor_role, flow: 'risk', title: '接收方开始独立验证交接' };
+    if (name === 'handoff_validation_completed') return { from: 'Contract Gate', to: event.actor_role, flow: 'risk', title: event.passed ? '所有交接规则通过' : '交接规则不通过' };
     if (name === 'handoff_contract_created') return event.recipient_role === 'risk_controller'
-      ? { from: 'data', to: 'risk', flow: 'decision', title: 'Strategy Analyst 提交结构化交接合约' }
-      : { from: 'risk', to: 'runtime', flow: 'decision', title: 'Risk Controller 提交已批准合约' };
-    if (name === 'handoff_accepted') return { from: event.actor_role === 'risk_controller' ? 'data' : 'risk', to: event.actor_role === 'risk_controller' ? 'risk' : 'runtime', flow: 'decision', title: '接收方验证并接受交接' };
-    if (name === 'handoff_rejected') return { from: 'risk', to: 'data', flow: 'risk', title: '越权交接被拒绝，未激活下游' };
-    if (name === 'run_completed') return { from: 'runtime', to: 'principal', flow: 'decision', title: '交付完整运行终态' };
+      ? { from: 'strategy_analyst', to: 'risk_controller', flow: 'decision', title: '发送 strategy_handoff_v1' }
+      : { from: 'risk_controller', to: 'runtime_supervisor', flow: 'decision', title: '发送 risk_handoff_v1' };
+    if (name === 'handoff_accepted') return { from: event.sender_role, to: event.actor_role, flow: 'decision', title: '接收方验约后接受交接' };
+    if (name === 'handoff_rejected') return { from: event.actor_role, to: event.sender_role, flow: 'risk', title: '拒绝越权交接；下游未激活' };
+    if (RISK_EVENT.test(name) && /(completed|rejected|blocked|verified|detected|resolved)/.test(name)) return { from: 'risk_controller', to: 'runtime_supervisor', flow: 'risk', title: name.replaceAll('_', ' ') };
+    if (name === 'ledger_event_appended') return { from: 'runtime_supervisor', to: 'risk_controller', flow: 'information', title: `纸面事件已持久化：${event.event_type || 'event'}` };
+    if (name === 'ledger_reconciliation_completed') return { from: 'runtime_supervisor', to: 'risk_controller', flow: 'risk', title: event.passed ? '重放对账通过' : '重放对账失败' };
+    if (name === 'golden_trace_loaded') return { from: 'runtime_supervisor', to: 'risk_controller', flow: 'information', title: '载入已批准的 Golden Trace' };
+    if (name === 'short_term_memory_created') return { from: '你', to: 'strategy_analyst', flow: 'information', title: '创建本次 Run 的短期状态' };
+    if (name === 'privacy_redaction_completed') return { from: 'strategy_analyst', to: 'risk_controller', flow: 'risk', title: '长期写入前完成隐私脱敏' };
+    if (name === 'long_term_memory_written') return { from: 'risk_controller', to: 'runtime_supervisor', flow: 'information', title: '批准写入脱敏长期记忆' };
+    if (name === 'long_term_memory_retrieved') return { from: 'runtime_supervisor', to: 'strategy_analyst', flow: 'information', title: '按 Scope 召回有来源的记忆' };
+    if (name === 'memory_write_blocked') return { from: 'risk_controller', to: 'runtime_supervisor', flow: 'risk', title: '敏感长期写入被阻断，副作用为零' };
+    if (name === 'run_completed') return { from: 'runtime_supervisor', to: '你', flow: 'decision', title: '交付完整运行终态' };
     return null;
   }
   function createState(mode = 'serial') {
     const definitions = mode === 'parallel' ? PARALLEL_NODES : NODES;
-    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
+    return { mode, phase: 'idle', runId: null, events: [], nodes: Object.fromEntries(definitions.map(n => [n.id, 'waiting'])), agentStates: Object.fromEntries(STUDIO_ROLES.map(role => [role.id, 'waiting'])), activeTasks: [], activeTask: null, join: { completed: [], waitingFor: ['A2', 'A10'], required: 2 }, approval: null, result: null, error: null, terminal: false, stopConfirmed: false, stopReason: null, cancelSupported: false, budgetMs: null, replayed: false };
   }
   function failState(state, error) {
     const uncertain = state.phase === 'cancelling' && !state.stopConfirmed;
@@ -211,12 +233,32 @@
       case 'long_term_memory_retrieved': state.nodes.RG1 = 'completed'; state.nodes.LG1 = 'completed'; break;
       case 'memory_write_blocked': state.nodes.TG1 = event.passed ? 'completed' : 'failed'; break;
       case 'short_term_memory_discarded': state.nodes.CT1 = 'completed'; break;
-      case 'agent_role_activated': if (id in state.nodes) state.nodes[id] = 'running'; break;
-      case 'handoff_contract_created': if (id in state.nodes) state.nodes[id] = 'proposed'; break;
-      case 'handoff_validation_started': if (id in state.nodes) state.nodes[id] = 'verifying'; break;
-      case 'handoff_validation_completed': if (id in state.nodes) state.nodes[id] = event.passed ? 'ready' : 'rejected'; break;
-      case 'handoff_accepted': if (id in state.nodes) state.nodes[id] = 'completed'; break;
-      case 'handoff_rejected': if (id in state.nodes) state.nodes[id] = 'rejected'; break;
+      case 'agent_role_activated':
+        if (id in state.nodes) state.nodes[id] = 'running';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'active';
+        break;
+      case 'handoff_contract_created':
+        if (id in state.nodes) state.nodes[id] = 'proposed';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'sending';
+        break;
+      case 'handoff_validation_started':
+        if (id in state.nodes) state.nodes[id] = 'verifying';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'validating';
+        break;
+      case 'handoff_validation_completed':
+        if (id in state.nodes) state.nodes[id] = event.passed ? 'ready' : 'rejected';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = event.passed ? 'ready' : 'rejected';
+        break;
+      case 'handoff_accepted':
+        if (id in state.nodes) state.nodes[id] = 'completed';
+        if (event.sender_role in state.agentStates) state.agentStates[event.sender_role] = 'completed';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'active';
+        break;
+      case 'handoff_rejected':
+        if (id in state.nodes) state.nodes[id] = 'rejected';
+        if (event.sender_role in state.agentStates) state.agentStates[event.sender_role] = 'completed';
+        if (event.actor_role in state.agentStates) state.agentStates[event.actor_role] = 'rejected';
+        break;
       case 'plan_created': state.nodes.P1 = 'completed'; break;
       case 'runtime_started': state.nodes.R1 = 'running'; break;
       case 'lease_bypassed': state.nodes.L1 = 'completed'; break;
@@ -298,7 +340,10 @@
         state.activeTask = null;
         state.activeTasks = [];
         break;
-      case 'run_completed': state.nodes.R1 = 'completed'; break;
+      case 'run_completed':
+        state.nodes.R1 = 'completed';
+        if (state.agentStates.runtime_supervisor !== 'waiting') state.agentStates.runtime_supervisor = 'completed';
+        break;
       case 'run_budget_started': state.budgetMs = event.budget_ms; break;
       case 'circuit_bypassed': state.nodes.C1 = 'completed'; break;
       case 'circuit_call_allowed': state.nodes.C1 = event.state === 'half_open' ? 'half_open' : 'running'; break;
