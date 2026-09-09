@@ -3,11 +3,12 @@ const assert = require('node:assert/strict');
 const { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
 
 test('studio assigns real events to personified roles without inventing extra LLMs', () => {
-  assert.deepEqual(STUDIO_ROLES.map(role => role.id), ['principal', 'model', 'runtime', 'data', 'risk', 'auditor']);
-  assert.equal(STUDIO_ROLES.filter(role => role.type === 'LLM').length, 1);
-  assert.equal(roleForEvent({ event: 'model_response_received', task_id: 'M1' }), 'model');
-  assert.equal(roleForEvent({ event: 'tool_observation', task_id: 'D1' }), 'data');
-  assert.equal(roleForEvent({ event: 'ledger_reconciliation_completed', task_id: 'LG1' }), 'auditor');
+  assert.deepEqual(STUDIO_ROLES.map(role => role.id), ['strategy_analyst', 'risk_controller', 'runtime_supervisor']);
+  assert.ok(STUDIO_ROLES.every(role => role.mission && role.input && role.output));
+  assert.ok(STUDIO_ROLES.every(role => role.functions.length && role.constraints.length));
+  assert.equal(roleForEvent({ event: 'model_response_received', task_id: 'M1' }), 'strategy_analyst');
+  assert.equal(roleForEvent({ event: 'handoff_validation_started', actor_role: 'risk_controller', task_id: 'L1' }), 'risk_controller');
+  assert.equal(roleForEvent({ event: 'ledger_reconciliation_completed', task_id: 'LG1' }), 'runtime_supervisor');
 });
 
 test('studio separates information, decision and risk flows with evidence-backed handoffs', () => {
@@ -15,7 +16,7 @@ test('studio separates information, decision and risk flows with evidence-backed
   assert.equal(flowForEvent({ event: 'model_intent_accepted' }), 'decision');
   assert.equal(flowForEvent({ event: 'capability_rejected' }), 'risk');
   assert.deepEqual(handoffForEvent({ event: 'model_response_received' }), {
-    from: 'model', to: 'runtime', flow: 'information', title: '返回未经信任的模型输出',
+    from: 'LLM 能力', to: 'strategy_analyst', flow: 'information', title: '返回未经信任的模型输出',
   });
   assert.equal(handoffForEvent({ event: 'tool_retry_scheduled' }), null);
 });
@@ -590,6 +591,9 @@ test('advanced lessons reduce eval, memory, and handoff evidence into real node 
   assert.equal(state.nodes.RG1, 'completed');
   assert.equal(state.nodes.L1, 'completed');
   assert.equal(state.nodes.E1, 'completed');
+  assert.equal(state.agentStates.strategy_analyst, 'completed');
+  assert.equal(state.agentStates.risk_controller, 'active');
+  assert.equal(state.agentStates.runtime_supervisor, 'waiting');
   assert.equal(flowForEvent({ event: 'memory_write_blocked' }), 'risk');
   assert.equal(flowForEvent({ event: 'handoff_contract_created' }), 'decision');
   assert.equal(describe({ event: 'model_eval_assertion_checked', assertion: 'paper_only', passed: false }).label, 'ASSERT FAIL');
