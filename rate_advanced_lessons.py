@@ -410,6 +410,8 @@ class RateAdvancedLessons:
             emit("handoff_validation_completed", "AZ1", actor_role="runtime_supervisor", **second_validation)
             emit("handoff_accepted", "AZ1", actor_role="runtime_supervisor",
                  sender_role="risk_controller", contract_sha256=second["contract_sha256"])
+            emit("agent_role_activated", "R1", actor_role="runtime_supervisor",
+                 role_contract=deepcopy(ROLE_CONTRACTS["runtime_supervisor"]))
             checks = {"analyst_to_risk_contract_valid": validation["passed"],
                       "risk_to_runtime_contract_valid": second_validation["passed"],
                       "evidence_ids_preserved": second["payload"]["evidence_ids"] == payload["evidence_ids"],
