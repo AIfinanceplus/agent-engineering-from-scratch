@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Workflow · Graph &amp; Live Stream</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=20">
-  <script defer src="/rate_console_core.js?v=20"></script>
-  <script defer src="/rate_console.js?v=20"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=21">
+  <script defer src="/rate_console_core.js?v=21"></script>
+  <script defer src="/rate_console.js?v=21"></script>
 </head>
 <body>
   <header class="topbar">
@@ -18,7 +18,7 @@
         <optgroup label="本课：部分成交与取消竞态"><option value="execution_race">确认丢失 · 部分成交、取消竞态与去重</option></optgroup>
         <optgroup label="上一课：Paper Fill Accounting"><option value="paper_fill_accounting">报价不是成交 · 纸面成交、对冲风险与已实现 P&amp;L</option></optgroup>
         <optgroup label="本课：Paper Portfolio Risk"><option value="paper_portfolio_risk">组合限额 · 原子预检 · 纸面风险容量</option></optgroup>
-        <optgroup label="本课：可选真实 Model Adapter"><option value="model_live">本地 OpenAI Key · 模型只提议，Runtime 决定</option></optgroup>
+        <optgroup label="本课：可选真实 Model Adapter"><option value="intent_live">本地 OpenAI Key · 受限 Intent，Runtime 映射固定任务图</option><option value="model_live">本地 OpenAI Key · 模型只提议，Runtime 决定</option></optgroup>
         <optgroup label="上一课：Replayable Event Stream"><option value="outbox_retry">先完成一次 Outbox Run，再重放事件</option><option value="outbox_fenced">先完成一次 Fencing Run，再重放事件</option></optgroup>
         <optgroup label="上一课：Lease &amp; Fencing"><option value="lease_failover">Runtime A 失联 · Runtime B 接管</option><option value="lease_renewal">Runtime A 续租 · 保持执行权</option></optgroup>
         <optgroup label="上一课：Durable Approval"><option value="approval_durable_restart">批准后重启 · 从磁盘恢复并继续</option><option value="approval_durable_stale">参数已变化 · 旧批准失效</option></optgroup>
@@ -34,7 +34,7 @@
           <label>持有窗口 <span>有效观测日</span><input name="holding_days" type="number" value="20" min="1" step="1" required></label>
           <label>DV01 <span>USD / bp</span><input name="dv01_usd_per_bp" type="number" value="100" min="0.01" step="any" required></label>
           <label>往返成本 <span>bp</span><input name="round_trip_cost_bps" type="number" value="1" min="0" step="any" required></label>
-          <label>OpenAI API Key <span>仅 model_live 本次请求使用，不保存</span><input id="model-api-key" name="model_api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…"></label>
+          <label>OpenAI API Key <span>仅 model_live / intent_live 本次请求使用，不保存</span><input id="model-api-key" name="model_api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…"></label>
         </form>
       </details>
       <button class="run-button" id="run-button" type="button"><span aria-hidden="true">▶</span> Run Agent</button>
