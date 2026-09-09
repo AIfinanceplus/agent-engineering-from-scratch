@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, DECOMPOSITION_NODES, AGENT_TOOL_NODES, OBSERVABILITY_NODES, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
 
 test('run reset selects the graph mode before rendering a scenario again', () => {
   assert.equal(modeForScenario('orchestration_normal'), 'orchestration');
@@ -8,6 +8,12 @@ test('run reset selects the graph mode before rendering a scenario again', () =>
   assert.equal(modeForScenario('handoff_contract_pass'), 'parallel');
   assert.ok('OS1' in createState(modeForScenario('orchestration_normal')).nodes);
   assert.ok(!('OS1' in createState(modeForScenario('eval_golden_pass')).nodes));
+  assert.equal(modeForScenario('decomposition_dynamic_pass'), 'decomposition');
+  assert.equal(modeForScenario('agent_tool_parallel_pass'), 'agent_tool');
+  assert.equal(modeForScenario('observability_slo_pass'), 'observability');
+  assert.ok('DG1' in createState('decomposition').nodes && DECOMPOSITION_NODES.length === 9);
+  assert.ok('MG1' in createState('agent_tool').nodes && AGENT_TOOL_NODES.length === 7);
+  assert.ok('SLO1' in createState('observability').nodes && OBSERVABILITY_NODES.length === 8);
 });
 
 test('studio assigns real events to personified roles without inventing extra LLMs', () => {
@@ -630,4 +636,60 @@ test('supervisor orchestration exposes ownership, bounded decisions, and safe st
   assert.equal(flowForEvent({ event: 'orchestration_loop_detected' }), 'risk');
   assert.equal(handoffForEvent({ event: 'task_ownership_changed', from_owner: null, assignee_role: 'strategy_analyst', ownership_version: 1 }).to, 'strategy_analyst');
   assert.equal(describe({ event: 'orchestration_stopped', reason: 'budget', effect_count: 0 }).label, 'SAFE STOP');
+});
+
+function lessonState(mode) {
+  const state = createState(mode);
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: `${mode}-run`, type, ...payload });
+  applyMessage(state, message('start', { execution_mode: mode }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', {
+    event: { event, task_id, run_id: state.runId, sequence: state.events.length + 1,
+      timestamp: '2026-09-01T01:02:03.000Z', ...extras },
+  }));
+  return { state, emit };
+}
+
+test('dynamic graph waits for validation and preserves a cycle rejection', () => {
+  const { state, emit } = lessonState('decomposition');
+  emit('goal_received', 'G1');
+  emit('task_graph_proposed', 'DG1');
+  emit('task_graph_validation_started', 'GV1');
+  emit('task_graph_rejected', 'GV1', { passed: false, reasons: ['cycle'], effect_count: 0, workers_dispatched: 0 });
+  emit('eval_completed', 'E1', { passed: true, output: { checks: {} } });
+  emit('run_completed', 'SY1');
+  assert.equal(state.nodes.GV1, 'rejected');
+  assert.equal(state.nodes.W1, 'blocked');
+  assert.equal(state.nodes.SY1, 'blocked');
+  assert.equal(describe({ event: 'task_graph_rejected', reasons: ['cycle'], effect_count: 0, workers_dispatched: 0 }).label, 'CYCLE BLOCK');
+});
+
+test('agent-as-tool scope rejection never becomes a completed runtime', () => {
+  const { state, emit } = lessonState('agent_tool');
+  emit('goal_received', 'G1');
+  emit('manager_control_started', 'MG1');
+  emit('agent_tool_call_started', 'AT2', { actor_role: 'risk_controller' });
+  emit('agent_tool_scope_rejected', 'AT2', { actor_role: 'risk_controller' });
+  emit('manager_run_stopped', 'MG1');
+  emit('eval_completed', 'E1', { passed: true, output: { checks: {} } });
+  emit('run_completed', 'MG1');
+  assert.equal(state.nodes.MG1, 'abstained');
+  assert.equal(state.nodes.AT2, 'rejected');
+  assert.equal(state.nodes.R1, 'blocked');
+});
+
+test('SLO breach keeps paper runtime blocked while the lesson eval passes', () => {
+  const { state, emit } = lessonState('observability');
+  emit('goal_received', 'G1');
+  emit('trace_root_started', 'TR1');
+  emit('span_started', 'SP2');
+  emit('span_completed', 'SP2');
+  emit('telemetry_aggregated', 'SLO1');
+  emit('slo_evaluation_completed', 'SLO1', { passed: false });
+  emit('slo_breach_detected', 'SLO1');
+  emit('observability_safe_stop', 'SLO1');
+  emit('eval_completed', 'E1', { passed: true, output: { checks: {} } });
+  emit('run_completed', 'SLO1');
+  assert.equal(state.nodes.SLO1, 'abstained');
+  assert.equal(state.nodes.R1, 'blocked');
+  assert.equal(state.nodes.E1, 'completed');
 });

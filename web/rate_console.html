@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Operations Studio · 2s10s Paper Lab</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=30">
-  <script defer src="/rate_console_core.js?v=30"></script>
-  <script defer src="/rate_console.js?v=30"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=31">
+  <script defer src="/rate_console_core.js?v=31"></script>
+  <script defer src="/rate_console.js?v=31"></script>
 </head>
 <body>
   <aside class="lab-rail" aria-label="实验台导航">
@@ -24,10 +24,9 @@
     <div class="brand"><span class="brand-mark" aria-hidden="true">2s</span><div><h1>2s10s Agent Lab</h1><p>Multi-Agent Rates Research <span>/</span> 观察模型、Runtime、Tools 与 Guardrails 如何协作</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
-        <optgroup label="第 1 课 · Model Evals"><option value="eval_golden_pass">Golden Trace · 候选行为通过</option><option value="eval_regression_fail">Regression · 越权与缺失风控被检出</option></optgroup>
-        <optgroup label="第 2 课 · Agent Memory"><option value="memory_redaction_pass">短期状态 → 脱敏长期记忆 → 有来源召回</option><option value="memory_privacy_block">隐私门禁 · 原始敏感信息拒绝写入</option></optgroup>
-        <optgroup label="第 3 课 · Multi-Agent Handoff"><option value="handoff_contract_pass">Analyst → Risk → Runtime 合约交接</option><option value="handoff_contract_reject">越权交接 · Risk 拒绝并保持零副作用</option></optgroup>
-        <optgroup label="第 4 课 · Supervisor Orchestration"><option value="orchestration_normal" selected>正常编排 · Analyst → Risk → Runtime</option><option value="orchestration_revision">Risk 退回 · 修改后重新验约</option><option value="orchestration_timeout_reassign">Agent 超时 · 撤销后重分配</option><option value="orchestration_loop_block">Revision 循环 · 预算耗尽后停止</option><option value="orchestration_authority_block">越权重分配 · Supervisor 零副作用阻断</option></optgroup>
+        <optgroup label="第 5 课 · Dynamic Task Graph"><option value="decomposition_dynamic_pass" selected>动态拆解 · 验图后 3 Worker 并行</option><option value="decomposition_cycle_block">循环依赖 · 派发前零副作用阻断</option></optgroup>
+        <optgroup label="第 6 课 · Agent-as-Tool"><option value="agent_tool_parallel_pass">Manager 并行调用两个专家</option><option value="agent_tool_scope_block">专家越权 · Scope Gate 阻断</option></optgroup>
+        <optgroup label="第 7 课 · Observability &amp; SLO"><option value="observability_slo_pass">Trace / Span / SLO 正常通过</option><option value="observability_slo_breach">延迟与 Token 超标 · 安全停止</option></optgroup>
       </select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
@@ -57,22 +56,22 @@
     <section class="lab-summary" aria-label="实验台约束摘要">
       <div><span>STRATEGY</span><strong>2s10s</strong><small>DGS2 − DGS10</small></div>
       <div><span>EXECUTION MODE</span><strong class="summary-good">PAPER ONLY</strong><small>无真实订单</small></div>
-      <div><span>AGENT TEAM</span><strong>4 ROLES</strong><small>Supervisor · Analyst · Risk · Runtime</small></div>
+      <div><span>AGENT TEAM</span><strong>4 ROLES</strong><small>Manager · Analyst · Risk · Runtime</small></div>
       <div><span>AUTHORITY</span><strong class="summary-cyan">RUNTIME GATED</strong><small>模型仅提议</small></div>
     </section>
     <section class="course-focus" aria-label="课程进度">
-      <div class="course-now"><span>当前场景</span><strong id="course-now-title">Model Evals · Golden Trace</strong><small id="course-now-detail">判断候选模型行为是否仍满足已批准合约。</small></div>
+      <div class="course-now"><span>当前场景</span><strong id="course-now-title">Dynamic Task Graph · 动态任务拆解</strong><small id="course-now-detail">让 Agent 根据目标生成受约束的子任务图，再由 Runtime 验证后派发。</small></div>
       <ol class="course-roadmap" aria-label="本次课程安排">
-        <li data-lesson="eval"><b>01</b><span><strong>Model Evals</strong><small>Golden Trace · 回归评测</small></span></li>
-        <li data-lesson="memory"><b>02</b><span><strong>Agent Memory</strong><small>短期状态 · 长期记忆 · 脱敏</small></span></li>
-        <li data-lesson="handoff"><b>03</b><span><strong>Multi-Agent Handoff</strong><small>职责边界 · 交接契约</small></span></li>
-        <li data-lesson="orchestration"><b>04</b><span><strong>Supervisor</strong><small>分配 · 退回 · 重分配 · 停止</small></span></li>
+        <li data-lesson="decomposition"><b>05</b><span><strong>Dynamic Task Graph</strong><small>动态拆解 · 验图 · Join</small></span></li>
+        <li data-lesson="agent_tool"><b>06</b><span><strong>Agent-as-Tool</strong><small>Manager 控制 · 专家委派</small></span></li>
+        <li data-lesson="observability"><b>07</b><span><strong>Observability &amp; SLO</strong><small>Trace · Span · 可执行门禁</small></span></li>
       </ol>
       <details class="lesson-archive" id="lesson-archive">
         <summary>历史课程 <span>默认收起</span></summary>
         <div class="archive-picker">
           <label for="archive-scenario">选择需要复习的旧场景</label>
           <select id="archive-scenario">
+            <optgroup label="已完成 · Agent Engineering 01–04"><option value="eval_golden_pass">Model Evals · Golden Trace</option><option value="eval_regression_fail">Model Evals · Regression</option><option value="memory_redaction_pass">Agent Memory · 脱敏写入</option><option value="memory_privacy_block">Agent Memory · 隐私阻断</option><option value="handoff_contract_pass">Multi-Agent Handoff · 通过</option><option value="handoff_contract_reject">Multi-Agent Handoff · 拒绝</option><option value="orchestration_normal">Supervisor · 正常编排</option><option value="orchestration_revision">Supervisor · 有界退回</option><option value="orchestration_timeout_reassign">Supervisor · 超时重分配</option><option value="orchestration_loop_block">Supervisor · 循环阻断</option><option value="orchestration_authority_block">Supervisor · 越权阻断</option></optgroup>
             <optgroup label="纸面执行与账本"><option value="paper_portfolio_risk">组合限额 · 原子预检</option><option value="paper_fill_accounting">纸面成交、对冲风险与结算 P&amp;L</option><option value="execution_race">部分成交、取消竞态与去重</option><option value="live">写入、重放并对账</option><option value="ledger_mismatch">篡改账本后阻断 E1</option></optgroup>
             <optgroup label="可靠性与审批 · Replayable Event Stream"><option value="outbox_retry">Outbox 重试与重放</option><option value="outbox_fenced">Outbox Fencing</option><option value="lease_failover">Runtime 租约接管</option><option value="lease_renewal">Runtime 租约续期</option><option value="approval_durable_restart">持久审批后重启</option><option value="approval_durable_stale">参数变化使旧批准失效</option><option value="approval_interactive">人工 Approve / Deny</option></optgroup>
             <optgroup label="安全、上下文与模型"><option value="intent_live">真实模型受限 Intent</option><option value="model_live">真实模型自由提议</option><option value="capability_wrong_tool">Tool 权限不匹配</option><option value="capability_valid">最小权限票据</option><option value="capability_expired">权限票据过期</option><option value="injection_mixed">恶意内容隔离</option><option value="injection_blocked">恶意证据导致 ABSTAIN</option><option value="injection_clean">干净证据正常传播</option><option value="rag_stale">旧资料被 Citation Gate 拒绝</option><option value="rag_topk">RAG Top-K</option><option value="rag_insufficient">证据不足</option><option value="context_compression">上下文压缩</option><option value="context_relevant">保留相关上下文</option><option value="context_conflict">新旧指令冲突</option><option value="route_fallback">模型 Fallback</option><option value="route_budget">模型预算不足</option><option value="model_repair">模型输出修复</option><option value="model_unsafe">模型越权拒绝</option><option value="replan_success">重规划成功</option><option value="replan_loop">重规划循环检测</option><option value="breaker_open">Circuit Breaker</option><option value="backpressure">背压控制</option><option value="deadline">运行预算超时</option><option value="manual_cancel">人工停止</option><option value="late_result">晚到结果</option><option value="ten_year_fail">10Y Tool 失败</option></optgroup>
@@ -81,10 +80,10 @@
         </div>
       </details>
     </section>
-    <section class="lesson-brief" aria-live="polite" data-lesson="eval">
-      <div><span>为什么需要</span><strong id="lesson-why-title">模型输出会随模型、Prompt 和上下文变化</strong><p id="lesson-why">普通单元测试无法判断语义行为是否退化；Golden Trace 固定必须发生的安全行为。</p></div>
-      <div><span>本课架构</span><strong id="lesson-how-title">Golden → Candidate → Assertions → Score</strong><p id="lesson-how">比较事件顺序、权限、Guardrails 与结果类型，不比较措辞是否逐字相同。</p></div>
-      <div><span>观察重点</span><strong id="lesson-watch-title">PASS 或 Regression Detected</strong><p id="lesson-watch">展开工程检查台查看每条 assertion；退化场景会明确指出越权 Tool 与缺失风险门禁。</p></div>
+    <section class="lesson-brief" aria-live="polite" data-lesson="decomposition">
+      <div><span>为什么需要</span><strong id="lesson-why-title">复杂目标不能永远写死成一张 DAG</strong><p id="lesson-why">任务数量会随问题变化，但动态不等于任意：任务 ID、输入输出和依赖必须先成为可验证的数据。</p></div>
+      <div><span>本课架构</span><strong id="lesson-how-title">Decompose → Graph Gate → Fan-out → Join → Synthesize</strong><p id="lesson-how">Graph Validator 在任何 Worker 启动前检查引用和环；通过后才并行派发三项有类型任务。</p></div>
+      <div><span>观察重点</span><strong id="lesson-watch-title">先验证拓扑，再创建 Worker</strong><p id="lesson-watch">正常场景观察 3/3 Join；有环场景停在 GV1，workers_dispatched=0。</p></div>
     </section>
     <section class="approval-panel" id="approval-panel" aria-live="assertive" hidden><div class="approval-copy"><span>H1 · HUMAN APPROVAL REQUIRED</span><strong id="approval-tool">—</strong><small id="approval-fingerprint">—</small></div><div class="approval-actions"><button class="deny-button" id="deny-button" type="button">Deny</button><button class="approve-button" id="approve-button" type="button">Approve once</button></div></section>
     <section class="agent-studio" id="agents" aria-labelledby="studio-title">
@@ -111,6 +110,17 @@
               <span><small>TOKENS</small><strong id="orchestration-tokens">0 / 1200</strong></span>
             </div>
             <ol class="orchestration-decisions" id="orchestration-decisions"><li>运行后逐条显示 ASSIGN、RETURN、REASSIGN、STOP 或 COMPLETE。</li></ol>
+          </section>
+          <section class="pattern-panel" id="pattern-panel" aria-labelledby="pattern-title">
+            <div class="orchestration-heading"><div><span class="eyebrow" id="pattern-label">GRAPH VALIDATION</span><strong id="pattern-title">运行控制面</strong></div><span>REAL EVENTS ONLY</span></div>
+            <div class="pattern-metrics">
+              <span><small>CONTROL OWNER</small><strong id="pattern-owner">Orchestrator</strong></span>
+              <span><small>TOPOLOGY</small><strong id="pattern-topology">动态 Fan-out / 3-way Join</strong></span>
+              <span><small>OBSERVED</small><strong id="pattern-active">0 observed</strong></span>
+              <span><small>GATE</small><strong id="pattern-gate">WAITING</strong></span>
+              <span><small>BUDGET / SLO</small><strong id="pattern-budget">0 workers before gate</strong></span>
+            </div>
+            <ol class="pattern-events" id="pattern-events"><li>— · 等待运行</li></ol>
           </section>
           <div class="role-grid" id="role-grid" aria-label="Agent 角色与实时状态"></div>
           <section class="handoff-journey" id="handoff" aria-labelledby="handoff-journey-title">

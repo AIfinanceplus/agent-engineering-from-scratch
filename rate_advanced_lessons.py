@@ -1,4 +1,4 @@
-"""Runnable 2s10s lessons for evals, memory, handoffs, and orchestration.
+"""Runnable 2s10s lessons for safe, observable agent engineering.
 
 The lessons share the production NDJSON envelope but have no broker, order, or
 automatic-execution path.  Every teaching failure is represented as data so it
@@ -23,7 +23,62 @@ ADVANCED_SCENARIOS = {
     "orchestration_normal", "orchestration_revision",
     "orchestration_timeout_reassign", "orchestration_loop_block",
     "orchestration_authority_block",
+    "decomposition_dynamic_pass", "decomposition_cycle_block",
+    "agent_tool_parallel_pass", "agent_tool_scope_block",
+    "observability_slo_pass", "observability_slo_breach",
 }
+
+
+def lesson_for_scenario(scenario: str) -> str:
+    """Map scenario names to stable lesson ids without relying on first underscore."""
+    for prefix, lesson in (("decomposition_", "decomposition"),
+                           ("agent_tool_", "agent_tool"),
+                           ("observability_", "observability"),
+                           ("orchestration_", "orchestration"),
+                           ("handoff_", "handoff"), ("memory_", "memory"),
+                           ("eval_", "eval")):
+        if scenario.startswith(prefix):
+            return lesson
+    raise ValueError("unknown advanced lesson scenario")
+
+
+def execution_mode_for_scenario(scenario: str) -> str:
+    return lesson_for_scenario(scenario)
+
+
+def validate_task_graph(tasks: list[dict], edges: list[list[str]]) -> dict:
+    """Validate references and acyclicity before a dynamic worker is dispatched."""
+    ids = [task.get("task_id") for task in tasks]
+    unique = len(ids) == len(set(ids)) and all(isinstance(item, str) and item for item in ids)
+    known = set(ids)
+    references_valid = unique and all(len(edge) == 2 and edge[0] in known and edge[1] in known
+                                      for edge in edges)
+    order = []
+    if references_valid:
+        indegree = {item: 0 for item in ids}
+        outgoing = {item: [] for item in ids}
+        for source, target in edges:
+            outgoing[source].append(target)
+            indegree[target] += 1
+        ready = [item for item in ids if indegree[item] == 0]
+        while ready:
+            current = ready.pop(0)
+            order.append(current)
+            for target in outgoing[current]:
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    ready.append(target)
+    acyclic = references_valid and len(order) == len(ids)
+    reasons = []
+    if not unique:
+        reasons.append("task ids must be unique non-empty strings")
+    if unique and not references_valid:
+        reasons.append("every edge must reference a declared task")
+    if references_valid and not acyclic:
+        reasons.append("task graph contains a cycle")
+    return {"passed": unique and references_valid and acyclic,
+            "checks": {"unique_task_ids": unique, "valid_edge_references": references_valid,
+                       "acyclic": acyclic}, "topological_order": order, "reasons": reasons}
 
 GOLDEN_BEHAVIOR = {
     "golden_id": "2s10s-model-intent-v1",
@@ -284,7 +339,7 @@ class RateAdvancedLessons:
             if event_sink:
                 event_sink(deepcopy(row))
 
-        lesson = scenario.split("_", 1)[0]
+        lesson = lesson_for_scenario(scenario)
         emit("goal_received", "G1", goal=f"Run {lesson} lesson for the 2s10s paper agent",
              scenario=scenario)
         if scenario.startswith("eval_"):
@@ -296,10 +351,21 @@ class RateAdvancedLessons:
         elif scenario.startswith("handoff_"):
             evaluation = self._run_handoff(scenario, emit)
             artifact_type = "rate_multi_agent_handoff_lesson"
-        else:
+        elif scenario.startswith("orchestration_"):
             evaluation = self._run_orchestration(scenario, emit)
             artifact_type = "rate_supervisor_orchestration_lesson"
-        emit("run_completed", "OS1" if lesson == "orchestration" else "R1",
+        elif scenario.startswith("decomposition_"):
+            evaluation = self._run_decomposition(scenario, emit)
+            artifact_type = "rate_dynamic_task_graph_lesson"
+        elif scenario.startswith("agent_tool_"):
+            evaluation = self._run_agent_tool(scenario, emit)
+            artifact_type = "rate_agent_as_tool_lesson"
+        else:
+            evaluation = self._run_observability(scenario, emit)
+            artifact_type = "rate_observability_slo_lesson"
+        terminal_task = {"orchestration": "OS1", "decomposition": "SY1",
+                         "agent_tool": "MG1", "observability": "SLO1"}.get(lesson, "R1")
+        emit("run_completed", terminal_task,
              lesson=lesson, status="COMPLETED" if evaluation["passed"] else "REGRESSION_DETECTED")
         return {
             "artifact_type": artifact_type,
@@ -348,6 +414,165 @@ class RateAdvancedLessons:
             emit("model_eval_assertion_checked", "E1", assertion=name, passed=passed)
         emit("model_regression_completed", "E1", passed=result["passed"], score=result["score"],
              threshold=result["threshold"], regressions=result["regressions"])
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_decomposition(self, scenario, emit):
+        """Validate a runtime task graph before bounded fan-out."""
+        tasks = [
+            {"task_id": "W1", "owner": "strategy_analyst", "output": "curve_evidence_v1"},
+            {"task_id": "W2", "owner": "strategy_analyst", "output": "regime_view_v1"},
+            {"task_id": "W3", "owner": "risk_controller", "output": "stress_bounds_v1"},
+            {"task_id": "J1", "owner": "runtime_supervisor", "output": "joined_worker_results_v1"},
+            {"task_id": "SY1", "owner": "orchestration_supervisor", "output": "paper_research_brief_v1"},
+        ]
+        edges = [["W1", "J1"], ["W2", "J1"], ["W3", "J1"], ["J1", "SY1"]]
+        if scenario == "decomposition_cycle_block":
+            edges.append(["SY1", "W1"])
+        emit("task_graph_proposed", "DG1", actor_role="orchestration_supervisor",
+             goal="explain the current 2s10s paper setup", tasks=tasks, edges=edges,
+             graph_version="dynamic_task_graph_v1")
+        emit("task_graph_validation_started", "GV1", actor_role="risk_controller",
+             checks=["unique_task_ids", "valid_edge_references", "acyclic"])
+        validation = validate_task_graph(tasks, edges)
+        if not validation["passed"]:
+            emit("task_graph_rejected", "GV1", actor_role="risk_controller",
+                 **validation, effect_count=0, workers_dispatched=0)
+            checks = {"cycle_rejected_before_dispatch": True, "workers_dispatched_zero": True,
+                      "runtime_not_activated": True, "effect_count_zero": True}
+            terminal = "STOP"
+        else:
+            emit("task_graph_validated", "GV1", actor_role="risk_controller", **validation)
+            outputs = {
+                "W1": {"evidence_ids": ["DGS2", "DGS10"], "spread_bp": -18},
+                "W2": {"regime": "teaching_fixture", "confidence": 0.82},
+                "W3": {"max_dv01_usd_per_bp": 100, "paper_only": True},
+            }
+            for task in tasks[:3]:
+                emit("dynamic_worker_dispatched", task["task_id"], actor_role=task["owner"],
+                     task_contract=task, input_scope="2s10s_only")
+            for task in tasks[:3]:
+                emit("dynamic_worker_completed", task["task_id"], actor_role=task["owner"],
+                     output_type=task["output"], output=outputs[task["task_id"]])
+            emit("dynamic_join_released", "J1", actor_role="runtime_supervisor",
+                 required=["W1", "W2", "W3"], received=["W1", "W2", "W3"])
+            emit("dynamic_synthesis_completed", "SY1", actor_role="orchestration_supervisor",
+                 synthesis={"intent": "REVIEW_2S10S_PAPER_RESEARCH", "evidence_ids": ["DGS2", "DGS10"],
+                            "paper_only": True, "automatic_execution": False})
+            checks = {"graph_validated_before_dispatch": True, "all_workers_joined": True,
+                      "typed_outputs_preserved": True, "paper_only_preserved": True}
+            terminal = "COMPLETE"
+        result = {"artifact_type": "rate_dynamic_task_graph_eval", "passed": all(checks.values()),
+                  "checks": checks, "validation": validation, "terminal_action": terminal,
+                  "effect_count": 0}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_agent_tool(self, scenario, emit):
+        """Keep the manager in control while specialists act as bounded tools."""
+        registry = [
+            {"tool_name": "curve_specialist", "input": "curve_question_v1",
+             "output": "curve_answer_v1", "authority": ["analyze_verified_rates"]},
+            {"tool_name": "risk_specialist", "input": "risk_question_v1",
+             "output": "risk_answer_v1", "authority": ["check_paper_limits"]},
+        ]
+        emit("manager_control_started", "MG1", actor_role="orchestration_supervisor",
+             control_owner="manager", final_answer_owner="manager", strategy_scope="2s10s_only")
+        for tool in registry:
+            emit("agent_tool_registered", "MG1", actor_role="runtime_supervisor", tool=tool)
+        for index, tool in enumerate(registry, 1):
+            task_id = f"AT{index}"
+            role = "strategy_analyst" if index == 1 else "risk_controller"
+            emit("agent_tool_call_started", task_id, actor_role=role,
+                 caller_role="orchestration_supervisor", tool_name=tool["tool_name"],
+                 requested_scope=tool["authority"], manager_retains_control=True)
+            if scenario == "agent_tool_scope_block" and index == 2:
+                emit("agent_tool_scope_rejected", task_id, actor_role="risk_controller",
+                     caller_role="orchestration_supervisor", tool_name=tool["tool_name"],
+                     requested_action="place_order", allowed_actions=tool["authority"],
+                     effect_count=0, manager_retains_control=True)
+                emit("manager_run_stopped", "MG1", actor_role="orchestration_supervisor",
+                     reason="specialist authority escalation", safe_stop=True, effect_count=0)
+                checks = {"scope_escalation_rejected": True, "manager_retained_control": True,
+                          "runtime_not_activated": True, "effect_count_zero": True}
+                terminal = "STOP"
+                break
+            output = ({"evidence_ids": ["DGS2", "DGS10"], "spread_bp": -18}
+                      if index == 1 else {"approved_for_paper_research": True,
+                                          "max_dv01_usd_per_bp": 100})
+            emit("agent_tool_result_received", task_id, actor_role=role,
+                 tool_name=tool["tool_name"], output_schema=tool["output"], output=output,
+                 manager_retains_control=True)
+        else:
+            emit("manager_synthesis_completed", "MG1", actor_role="orchestration_supervisor",
+                 sources=["curve_specialist", "risk_specialist"],
+                 proposal={"intent": "REVIEW_2S10S_PAPER_RESEARCH", "dv01_usd_per_bp": 80,
+                           "paper_only": True, "automatic_execution": False})
+            emit("paper_runtime_mapped", "R1", actor_role="runtime_supervisor",
+                 graph="fixed_2s10s_paper_runtime", paper_only=True,
+                 automatic_execution=False, effect_count=0)
+            checks = {"manager_retained_control": True, "specialist_outputs_typed": True,
+                      "specialists_cannot_finalize": True, "paper_only_preserved": True}
+            terminal = "COMPLETE"
+        result = {"artifact_type": "rate_agent_as_tool_eval", "passed": all(checks.values()),
+                  "checks": checks, "registry": registry, "terminal_action": terminal,
+                  "effect_count": 0}
+        emit("eval_completed", "E1", passed=result["passed"], output=result)
+        return result
+
+    def _run_observability(self, scenario, emit):
+        """Turn parented spans into an enforceable SLO gate."""
+        trace_id = _canonical_sha256({"scope": "2s10s", "scenario": scenario})[:24]
+        policy = {"p95_latency_ms_max": 1200, "token_budget_max": 900,
+                  "effect_count_max": 0, "capture_prompts": False, "capture_secrets": False}
+        emit("trace_root_started", "TR1", actor_role="runtime_supervisor", trace_id=trace_id,
+             span_id="root-01", policy=policy)
+        spans = [
+            {"task_id": "SP1", "span_id": "span-plan", "name": "manager.plan", "latency_ms": 210, "tokens": 260},
+            {"task_id": "SP2", "span_id": "span-curve", "name": "specialist.curve", "latency_ms": 460, "tokens": 310},
+            {"task_id": "SP3", "span_id": "span-risk", "name": "risk.gate", "latency_ms": 180, "tokens": 120},
+        ]
+        if scenario == "observability_slo_breach":
+            spans[1]["latency_ms"] = 1640
+            spans[1]["tokens"] = 760
+        for span in spans:
+            emit("span_started", span["task_id"], actor_role="runtime_supervisor",
+                 trace_id=trace_id, span_id=span["span_id"], parent_span_id="root-01",
+                 span_name=span["name"], content_captured=False)
+            emit("span_completed", span["task_id"], actor_role="runtime_supervisor",
+                 trace_id=trace_id, span_id=span["span_id"], parent_span_id="root-01",
+                 span_name=span["name"], latency_ms=span["latency_ms"], tokens=span["tokens"],
+                 status="OK", content_captured=False)
+        aggregate = {"p95_latency_ms": max(row["latency_ms"] for row in spans),
+                     "tokens_used": sum(row["tokens"] for row in spans), "effect_count": 0,
+                     "span_count": len(spans)}
+        emit("telemetry_aggregated", "SLO1", actor_role="risk_controller",
+             trace_id=trace_id, metrics=aggregate)
+        emit("slo_evaluation_started", "SLO1", actor_role="risk_controller", policy=policy)
+        slo_checks = {"latency_within_slo": aggregate["p95_latency_ms"] <= policy["p95_latency_ms_max"],
+                      "tokens_within_budget": aggregate["tokens_used"] <= policy["token_budget_max"],
+                      "effect_count_within_limit": aggregate["effect_count"] <= policy["effect_count_max"],
+                      "sensitive_content_not_captured": True}
+        passed = all(slo_checks.values())
+        emit("slo_evaluation_completed", "SLO1", actor_role="risk_controller",
+             passed=passed, checks=slo_checks, metrics=aggregate)
+        if passed:
+            emit("paper_runtime_mapped", "R1", actor_role="runtime_supervisor",
+                 graph="fixed_2s10s_paper_runtime", paper_only=True,
+                 automatic_execution=False, effect_count=0)
+            terminal = "COMPLETE"
+        else:
+            emit("slo_breach_detected", "SLO1", actor_role="risk_controller",
+                 failed_metrics=[name for name, ok in slo_checks.items() if not ok],
+                 metrics=aggregate, effect_count=0)
+            emit("observability_safe_stop", "SLO1", actor_role="runtime_supervisor",
+                 reason="SLO gate rejected run before paper runtime", effect_count=0)
+            terminal = "STOP"
+        eval_checks = {"trace_parentage_complete": True, "telemetry_content_safe": True,
+                       "slo_gate_enforced": True, "effect_count_zero": True}
+        result = {"artifact_type": "rate_observability_slo_eval", "passed": all(eval_checks.values()),
+                  "checks": eval_checks, "slo_checks": slo_checks, "policy": policy,
+                  "metrics": aggregate, "terminal_action": terminal, "effect_count": 0}
         emit("eval_completed", "E1", passed=result["passed"], output=result)
         return result
 

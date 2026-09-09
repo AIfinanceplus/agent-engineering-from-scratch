@@ -5,7 +5,7 @@ import unittest
 from rate_advanced_lessons import (ADVANCED_SCENARIOS, GOLDEN_BEHAVIOR,
                                    JsonlRateMemoryStore, ROLE_CONTRACTS,
                                    RateAdvancedLessons, evaluate_golden_trace,
-                                   validate_handoff, _handoff)
+                                   validate_handoff, validate_task_graph, _handoff)
 
 
 class AdvancedRateLessonTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class AdvancedRateLessonTests(unittest.TestCase):
         return result
 
     def test_all_teaching_scenarios_are_runnable(self):
-        self.assertEqual(len(ADVANCED_SCENARIOS), 11)
+        self.assertEqual(len(ADVANCED_SCENARIOS), 17)
         for scenario in sorted(ADVANCED_SCENARIOS):
             result = self.run_lesson(scenario)
             if scenario == "eval_regression_fail":
@@ -71,6 +71,41 @@ class AdvancedRateLessonTests(unittest.TestCase):
             stopped = next(row for row in result["trace"] if row["event"] == "orchestration_stopped")
             self.assertTrue(stopped["safe_stop"])
             self.assertEqual(stopped["effect_count"], 0)
+
+    def test_dynamic_graph_validates_before_dispatch_and_blocks_cycles(self):
+        passed = self.run_lesson("decomposition_dynamic_pass")
+        names = [row["event"] for row in passed["trace"]]
+        self.assertLess(names.index("task_graph_validated"), names.index("dynamic_worker_dispatched"))
+        self.assertEqual(names.count("dynamic_worker_completed"), 3)
+        blocked = self.run_lesson("decomposition_cycle_block")
+        self.assertFalse(any(row["event"] == "dynamic_worker_dispatched" for row in blocked["trace"]))
+        rejected = next(row for row in blocked["trace"] if row["event"] == "task_graph_rejected")
+        self.assertEqual((rejected["workers_dispatched"], rejected["effect_count"]), (0, 0))
+
+    def test_graph_validator_rejects_unknown_edges_and_cycles(self):
+        tasks = [{"task_id": "A"}, {"task_id": "B"}]
+        self.assertTrue(validate_task_graph(tasks, [["A", "B"]])["passed"])
+        self.assertFalse(validate_task_graph(tasks, [["A", "C"]])["checks"]["valid_edge_references"])
+        self.assertFalse(validate_task_graph(tasks, [["A", "B"], ["B", "A"]])["checks"]["acyclic"])
+
+    def test_agent_tool_manager_keeps_control_and_scope_block_is_safe(self):
+        passed = self.run_lesson("agent_tool_parallel_pass")
+        results = [row for row in passed["trace"] if row["event"] == "agent_tool_result_received"]
+        self.assertEqual(len(results), 2)
+        self.assertTrue(all(row["manager_retains_control"] for row in results))
+        blocked = self.run_lesson("agent_tool_scope_block")
+        self.assertFalse(any(row["event"] == "paper_runtime_mapped" for row in blocked["trace"]))
+        rejection = next(row for row in blocked["trace"] if row["event"] == "agent_tool_scope_rejected")
+        self.assertEqual(rejection["effect_count"], 0)
+
+    def test_observability_slo_controls_runtime_without_capturing_content(self):
+        passed = self.run_lesson("observability_slo_pass")
+        self.assertTrue(any(row["event"] == "paper_runtime_mapped" for row in passed["trace"]))
+        spans = [row for row in passed["trace"] if row["event"] == "span_completed"]
+        self.assertTrue(all(row["parent_span_id"] == "root-01" and not row["content_captured"] for row in spans))
+        blocked = self.run_lesson("observability_slo_breach")
+        self.assertEqual(blocked["eval"]["terminal_action"], "STOP")
+        self.assertFalse(any(row["event"] == "paper_runtime_mapped" for row in blocked["trace"]))
 
     def test_golden_eval_compares_behavior_not_wording(self):
         candidate = {

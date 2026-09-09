@@ -94,6 +94,21 @@ class RateUIContractTests(unittest.TestCase):
         self.assertEqual(source.count("releaseRunControls();"), 4)
         self.assertIn("byId('run-button').disabled = false;", source)
 
+    def test_next_three_lessons_have_distinct_graphs_and_control_surface(self):
+        html = (ROOT / "web" / "rate_console.html").read_text(encoding="utf-8")
+        source = (ROOT / "web" / "rate_console.js").read_text(encoding="utf-8")
+        core = (ROOT / "web" / "rate_console_core.js").read_text(encoding="utf-8")
+        for scenario in ("decomposition_dynamic_pass", "decomposition_cycle_block",
+                         "agent_tool_parallel_pass", "agent_tool_scope_block",
+                         "observability_slo_pass", "observability_slo_breach"):
+            self.assertIn(f'value="{scenario}"', html)
+            self.assertIn(scenario, source)
+        for element_id in ("pattern-panel", "pattern-owner", "pattern-topology",
+                           "pattern-active", "pattern-gate", "pattern-budget", "pattern-events"):
+            self.assertIn(f'id="{element_id}"', html)
+        for graph in ("DECOMPOSITION_NODES", "AGENT_TOOL_NODES", "OBSERVABILITY_NODES"):
+            self.assertIn(graph, core)
+
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
