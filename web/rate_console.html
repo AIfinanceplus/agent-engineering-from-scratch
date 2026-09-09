@@ -5,13 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Operations Studio · 2s10s Paper Lab</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=24">
-  <script defer src="/rate_console_core.js?v=24"></script>
-  <script defer src="/rate_console.js?v=24"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=27">
+  <script defer src="/rate_console_core.js?v=27"></script>
+  <script defer src="/rate_console.js?v=27"></script>
 </head>
 <body>
+  <aside class="lab-rail" aria-label="实验台导航">
+    <a class="rail-brand" href="#overview" aria-label="2s10s Agent Lab 首页"><span>2∕10</span><strong>Agent Lab</strong><small>Rates Research</small></a>
+    <nav>
+      <a class="active" href="#overview"><b>01</b><span>Overview<small>课程与运行参数</small></span></a>
+      <a href="#agents"><b>02</b><span>Agent Team<small>角色与职责边界</small></span></a>
+      <a href="#handoff"><b>03</b><span>Handoff<small>交接协议与通信</small></span></a>
+      <a href="#engineering-details"><b>04</b><span>Trace &amp; Evals<small>DAG 与完整事件流</small></span></a>
+    </nav>
+    <div class="rail-safety"><i aria-hidden="true"></i><span><strong>PAPER ONLY</strong><small>Automatic execution off</small></span></div>
+  </aside>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Operations Studio</h1><p>观察模型、Runtime、Tools 与 Guardrails 如何协作 <span>/</span> 2s10s 仅作纸面教学场景</p></div></div>
+    <div class="brand"><span class="brand-mark" aria-hidden="true">2s</span><div><h1>2s10s Agent Lab</h1><p>Multi-Agent Rates Research <span>/</span> 观察模型、Runtime、Tools 与 Guardrails 如何协作</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
         <optgroup label="第 1 课 · Model Evals"><option value="eval_golden_pass" selected>Golden Trace · 候选行为通过</option><option value="eval_regression_fail">Regression · 越权与缺失风控被检出</option></optgroup>
@@ -36,8 +46,14 @@
     </div>
   </header>
 
-  <main>
+  <main id="overview">
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
+    <section class="lab-summary" aria-label="实验台约束摘要">
+      <div><span>STRATEGY</span><strong>2s10s</strong><small>DGS2 − DGS10</small></div>
+      <div><span>EXECUTION MODE</span><strong class="summary-good">PAPER ONLY</strong><small>无真实订单</small></div>
+      <div><span>AGENT TEAM</span><strong>3 ROLES</strong><small>Analyst · Risk · Runtime</small></div>
+      <div><span>AUTHORITY</span><strong class="summary-cyan">RUNTIME GATED</strong><small>模型仅提议</small></div>
+    </section>
     <section class="course-focus" aria-label="课程进度">
       <div class="course-now"><span>当前场景</span><strong id="course-now-title">Model Evals · Golden Trace</strong><small id="course-now-detail">判断候选模型行为是否仍满足已批准合约。</small></div>
       <ol class="course-roadmap" aria-label="本次课程安排">
@@ -64,9 +80,9 @@
       <div><span>观察重点</span><strong id="lesson-watch-title">PASS 或 Regression Detected</strong><p id="lesson-watch">展开工程检查台查看每条 assertion；退化场景会明确指出越权 Tool 与缺失风险门禁。</p></div>
     </section>
     <section class="approval-panel" id="approval-panel" aria-live="assertive" hidden><div class="approval-copy"><span>H1 · HUMAN APPROVAL REQUIRED</span><strong id="approval-tool">—</strong><small id="approval-fingerprint">—</small></div><div class="approval-actions"><button class="deny-button" id="deny-button" type="button">Deny</button><button class="approve-button" id="approve-button" type="button">Approve once</button></div></section>
-    <section class="agent-studio" aria-labelledby="studio-title">
+    <section class="agent-studio" id="agents" aria-labelledby="studio-title">
       <div class="studio-heading">
-        <div><span class="eyebrow">LIVE ORGANIZATION</span><h2 id="studio-title">Agent 工作室</h2><p>角色是系统职责；只有标记为 LLM 的角色调用大模型。</p></div>
+        <div><span class="eyebrow">THREE-AGENT DESK</span><h2 id="studio-title">三位 Agent 协作室</h2><p>人是角色，Runtime、Tools、Memory 是设施。角色之间只能通过可验证的 Handoff Envelope 沟通。</p></div>
         <div class="flow-switcher" role="tablist" aria-label="选择信息流视图">
           <button class="flow-tab active" type="button" role="tab" aria-selected="true" data-flow="information"><i></i>信息流</button>
           <button class="flow-tab" type="button" role="tab" aria-selected="false" data-flow="decision"><i></i>决策流</button>
@@ -79,9 +95,19 @@
             <span class="route-label">信息流</span><strong id="flow-route-title">Goal → Context → Intent → Observation → Result</strong><small id="flow-route-detail">点击角色查看它参与的原始事件；亮起状态全部来自 Trace。</small>
           </div>
           <div class="role-grid" id="role-grid" aria-label="Agent 角色与实时状态"></div>
+          <section class="handoff-journey" id="handoff" aria-labelledby="handoff-journey-title">
+            <div class="journey-heading"><div><span class="eyebrow">HANDOFF PROTOCOL</span><strong id="handoff-journey-title">一次交接如何发生</strong></div><span>所有状态来自 Trace</span></div>
+            <ol class="journey-steps">
+              <li data-journey="analyst-send"><b>01</b><span><strong>分析师发送</strong><small>strategy_handoff_v1</small></span><em>等待</em></li>
+              <li data-journey="risk-verify"><b>02</b><span><strong>风险主管独立验约</strong><small>Schema · Route · Evidence · Hash · Paper-only</small></span><em>等待</em></li>
+              <li data-journey="risk-send"><b>03</b><span><strong>风险主管发送</strong><small>risk_handoff_v1</small></span><em>等待</em></li>
+              <li data-journey="runtime-verify"><b>04</b><span><strong>执行主管重新验约</strong><small>接受后才激活固定 Runtime</small></span><em>等待</em></li>
+            </ol>
+            <div class="envelope-schema"><span>沟通格式</span><code>{ schema_version, from_role, to_role, payload, contract_sha256 }</code><small>不传聊天暗示，不继承发送方权限，不接受未声明字段。</small></div>
+          </section>
           <div class="handoff-panel">
-            <div class="handoff-heading"><div><span class="eyebrow">KEY HANDOFFS</span><strong>角色交接记录</strong></div><span id="handoff-count">0 个关键交接</span></div>
-            <ol class="handoff-list" id="handoff-list"><li class="handoff-empty">运行后，这里只显示影响信息、决策或风险边界的关键交接。</li></ol>
+            <div class="handoff-heading"><div><span class="eyebrow">COMMUNICATION LOG</span><strong>Agent 沟通记录</strong></div><span id="handoff-count">0 条消息</span></div>
+            <ol class="handoff-list" id="handoff-list"><li class="handoff-empty">运行后，这里逐条显示发送、验约、接受或拒绝。</li></ol>
           </div>
         </div>
         <aside class="model-inspector" aria-labelledby="model-inspector-title">
@@ -96,7 +122,7 @@
     </section>
 
     <details class="engineering-details" id="engineering-details">
-      <summary><span><b>工程检查台</b><small>完整 DAG、所有 NDJSON 事件、原始参数与结果</small></span><i>展开</i></summary>
+      <summary><span><b>Trace &amp; Evals · 工程检查台</b><small>完整 DAG、所有 NDJSON 事件、原始参数与结果</small></span><i>展开</i></summary>
       <div class="workspace">
       <section class="graph-panel" aria-labelledby="graph-title">
         <div class="panel-heading"><div><span class="eyebrow">WORKFLOW</span><h2 id="graph-title">Agent Graph</h2></div><span class="small-tag" id="node-count">23 nodes</span></div>
