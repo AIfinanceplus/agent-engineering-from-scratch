@@ -112,6 +112,11 @@ class OpenAIRatePlanModel:
 
 def build_plan_prompt(goal, allowed_tools):
     """Keep the model contract explicit and exclude credentials or observations."""
+    approved_template = {
+        "goal": "one auditable 2s10s paper simulation",
+        "tasks": deepcopy(SAFE_RATE_TASKS),
+        "claims": {"paper_only": True, "automatic_execution": False},
+    }
     return {
         "role": "rate_plan_proposer",
         "goal": goal,
@@ -120,8 +125,10 @@ def build_plan_prompt(goal, allowed_tools):
             "format": "JSON object only",
             "required": ["goal", "tasks", "claims"],
             "task_fields": ["task_id", "tool_name", "depends_on"],
-            "constraints": ["paper_only", "no unknown tools", "acyclic dependencies"],
+            "constraints": ["paper_only", "no unknown tools", "acyclic dependencies", "no markdown fences"],
         },
+        "approved_template": approved_template,
+        "template_rule": "Return this exact task list and claims object. Do not add, remove, rename, or reorder fields or tasks.",
         "authority": "proposal_only_runtime_must_validate",
     }
 
