@@ -23,7 +23,8 @@ from rate_resilience import AdmissionController, CircuitBreaker, CircuitOpen
 from rate_replanning import (PlanRevisionGuard, ReplanBudgetExhausted,
                              ReplanLoopDetected, validate_rate_history_observation)
 from rate_model_planner import (SAFE_RATE_TASKS, ModelPlanParseError,
-                                ModelPlanRejected, ScriptedRatePlanModel,
+                                ModelPlanRejected, OpenAIRatePlanModel,
+                                RatePlanModelUnavailable, ScriptedRatePlanModel,
                                 build_plan_prompt, parse_plan_proposal,
                                 validate_plan_proposal)
 from rate_model_routing import (ModelProviderUnavailable, ModelRouter,
@@ -48,7 +49,7 @@ from tools import TOOL_REGISTRY, Tool, resolve_tool
 SCENARIOS = {"live", "two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result",
              "breaker_open", "breaker_recovery", "backpressure", "overload_rejected",
              "replan_success", "replan_loop", "replan_budget",
-             "model_valid", "model_repair", "model_unsafe",
+             "model_valid", "model_repair", "model_unsafe", "model_live",
              "route_primary", "route_fallback", "route_budget",
              "context_relevant", "context_compression", "context_conflict",
              "rag_topk", "rag_stale", "rag_insufficient",
@@ -60,7 +61,7 @@ BREAKER_SCENARIOS = {"breaker_open", "breaker_recovery"}
 ADMISSION_SCENARIOS = {"backpressure", "overload_rejected"}
 TIMING_SCENARIOS = {"two_year_slow", "ten_year_slow", "ten_year_fail", "deadline", "manual_cancel", "late_result"}
 REPLAN_SCENARIOS = {"replan_success", "replan_loop", "replan_budget"}
-MODEL_SCENARIOS = {"model_valid", "model_repair", "model_unsafe"}
+MODEL_SCENARIOS = {"model_valid", "model_repair", "model_unsafe", "model_live"}
 ROUTING_SCENARIOS = {"route_primary", "route_fallback", "route_budget"}
 CONTEXT_SCENARIOS = {"context_relevant", "context_compression", "context_conflict"}
 RAG_SCENARIOS = {"rag_topk", "rag_stale", "rag_insufficient"}
@@ -851,14 +852,25 @@ class RateParallelAgent:
                 completed.add("MR1")
             if demo_scenario in MODEL_SCENARIOS:
                 current_task = "M1"
-                model_adapter = ScriptedRatePlanModel(demo_scenario)
+                model_adapter = OpenAIRatePlanModel() if demo_scenario == "model_live" else ScriptedRatePlanModel(demo_scenario)
                 repaired = False
                 while True:
                     emit("model_request_started", task_id="M1", model=model_adapter.model_name,
                          is_real_llm=model_adapter.is_real_llm, prompt=prompt,
                          purpose="plan_proposal", attempt=model_adapter.calls + 1)
                     teaching_pause(0.3)
-                    raw_output = model_adapter.complete(prompt)
+                    try:
+                        raw_output = model_adapter.complete(
+                            prompt,
+                            repair_error=("return one valid JSON object; do not add capabilities" if repaired else None),
+                        )
+                    except RatePlanModelUnavailable as exc:
+                        emit("model_provider_failed", task_id="M1", model=model_adapter.model_name,
+                             provider="openai", error_type=type(exc).__name__, error_message=str(exc),
+                             retry_same_model=False, decision="ABSTAIN")
+                        emit("model_plan_rejected", task_id="P1", reasons=[str(exc)], decision="ABSTAIN")
+                        raise ParallelRunError(str(exc), "M1", trace, {"M1": str(exc)},
+                                               code="MODEL_PROVIDER_UNAVAILABLE") from exc
                     emit("model_response_received", task_id="M1", model=model_adapter.model_name,
                          is_real_llm=model_adapter.is_real_llm, raw_output=raw_output,
                          output_characters=len(raw_output), attempt=model_adapter.calls)
