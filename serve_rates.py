@@ -412,7 +412,7 @@ class RateStrategyHandler(R12VisualizerHandler):
             self.wfile.flush()
 
         try:
-            send("start", strategy="2s10s", execution_mode="parallel",
+            send("start", strategy="2s10s", execution_mode="orchestration" if scenario.startswith("orchestration_") else "parallel",
                  cancel_supported=False, budget_ms=30000,
                  lesson=scenario, deterministic_teaching_fixture=True)
             result = ADVANCED_LESSONS.run(
