@@ -892,6 +892,13 @@ class RateParallelAgent:
                         raise ParallelRunError(str(exc), "P1", trace, {"P1": str(exc)},
                                                code="MODEL_OUTPUT_INVALID") from exc
                     except ModelPlanRejected as exc:
+                        if demo_scenario == "model_live" and not repaired:
+                            repaired = True
+                            emit("model_repair_requested", task_id="M1", error=str(exc),
+                                 repair_kind="semantic_contract",
+                                 repair_contract="Return the exact approved_template JSON; keep paper_only=true and automatic_execution=false; do not add tools or fields")
+                            teaching_pause(0.45)
+                            continue
                         emit("model_plan_rejected", task_id="P1", reasons=exc.reasons,
                              decision="ABSTAIN")
                         teaching_pause(0.45)
