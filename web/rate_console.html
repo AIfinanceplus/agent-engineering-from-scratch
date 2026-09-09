@@ -5,16 +5,18 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Operations Studio · 2s10s Paper Lab</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="/rate_console.css?v=23">
-  <script defer src="/rate_console_core.js?v=23"></script>
-  <script defer src="/rate_console.js?v=23"></script>
+  <link rel="stylesheet" href="/rate_console.css?v=24">
+  <script defer src="/rate_console_core.js?v=24"></script>
+  <script defer src="/rate_console.js?v=24"></script>
 </head>
 <body>
   <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true">a<span>·</span></span><div><h1>Agent Operations Studio</h1><p>观察模型、Runtime、Tools 与 Guardrails 如何协作 <span>/</span> 2s10s 仅作纸面教学场景</p></div></div>
     <div class="controls">
       <label class="scenario-control"><span class="sr-only">本课运行场景</span><select id="scenario" aria-label="本课运行场景">
-        <optgroup label="当前课程：Model Adapter"><option value="intent_live" selected>真实模型 · 受限 Intent → Runtime 固定任务图</option><option value="model_live">真实模型 · 自由提议 → Runtime 严格校验</option></optgroup>
+        <optgroup label="第 1 课 · Model Evals"><option value="eval_golden_pass" selected>Golden Trace · 候选行为通过</option><option value="eval_regression_fail">Regression · 越权与缺失风控被检出</option></optgroup>
+        <optgroup label="第 2 课 · Agent Memory"><option value="memory_redaction_pass">短期状态 → 脱敏长期记忆 → 有来源召回</option><option value="memory_privacy_block">隐私门禁 · 原始敏感信息拒绝写入</option></optgroup>
+        <optgroup label="第 3 课 · Multi-Agent Handoff"><option value="handoff_contract_pass">Analyst → Risk → Runtime 合约交接</option><option value="handoff_contract_reject">越权交接 · Risk 拒绝并保持零副作用</option></optgroup>
       </select></label>
       <details class="settings" id="settings">
         <summary>运行参数 <span aria-hidden="true">⌄</span></summary>
@@ -25,8 +27,8 @@
           <label>持有窗口 <span>有效观测日</span><input name="holding_days" type="number" value="20" min="1" step="1" required></label>
           <label>DV01 <span>USD / bp</span><input name="dv01_usd_per_bp" type="number" value="100" min="0.01" step="any" required></label>
           <label>往返成本 <span>bp</span><input name="round_trip_cost_bps" type="number" value="1" min="0" step="any" required></label>
-          <label>OpenAI API Key <span>仅保存在当前标签页会话；不进入服务器配置或 Trace</span><input id="model-api-key" name="model_api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="首次运行输入 sk-…"></label>
-          <div class="key-session"><span id="key-session-status">本标签页尚未记住 Key</span><button id="forget-model-key" type="button">清除 Key</button></div>
+          <label id="model-key-field">OpenAI API Key <span>仅保存在当前标签页会话；不进入服务器配置或 Trace</span><input id="model-api-key" name="model_api_key" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="首次运行输入 sk-…"></label>
+          <div class="key-session" id="key-session"><span id="key-session-status">本标签页尚未记住 Key</span><button id="forget-model-key" type="button">清除 Key</button></div>
         </form>
       </details>
       <button class="run-button" id="run-button" type="button"><span aria-hidden="true">▶</span> Run Agent</button>
@@ -37,11 +39,11 @@
   <main>
     <div class="run-bar"><div class="run-status" id="run-status" data-phase="idle" role="status"><i aria-hidden="true"></i><span>Ready to run</span></div><span class="small-tag" id="run-budget">运行预算 30s</span><span class="run-id" id="run-id">等待开始一次运行</span></div>
     <section class="course-focus" aria-label="课程进度">
-      <div class="course-now"><span>当前课程</span><strong>真实模型接入与 Runtime 权限边界</strong><small>观察模型提议、结构化校验、修复与拒绝。</small></div>
-      <ol class="course-roadmap" aria-label="后续课程安排">
-        <li><b>01</b><span><strong>Model Evals</strong><small>Golden Trace · 回归评测</small></span></li>
-        <li><b>02</b><span><strong>Agent Memory</strong><small>短期状态 · 长期记忆 · 脱敏</small></span></li>
-        <li><b>03</b><span><strong>Multi-Agent Handoff</strong><small>职责边界 · 交接契约</small></span></li>
+      <div class="course-now"><span>当前场景</span><strong id="course-now-title">Model Evals · Golden Trace</strong><small id="course-now-detail">判断候选模型行为是否仍满足已批准合约。</small></div>
+      <ol class="course-roadmap" aria-label="本次课程安排">
+        <li data-lesson="eval"><b>01</b><span><strong>Model Evals</strong><small>Golden Trace · 回归评测</small></span></li>
+        <li data-lesson="memory"><b>02</b><span><strong>Agent Memory</strong><small>短期状态 · 长期记忆 · 脱敏</small></span></li>
+        <li data-lesson="handoff"><b>03</b><span><strong>Multi-Agent Handoff</strong><small>职责边界 · 交接契约</small></span></li>
       </ol>
       <details class="lesson-archive" id="lesson-archive">
         <summary>历史课程 <span>默认收起</span></summary>
@@ -50,11 +52,16 @@
           <select id="archive-scenario">
             <optgroup label="纸面执行与账本"><option value="paper_portfolio_risk">组合限额 · 原子预检</option><option value="paper_fill_accounting">纸面成交、对冲风险与结算 P&amp;L</option><option value="execution_race">部分成交、取消竞态与去重</option><option value="live">写入、重放并对账</option><option value="ledger_mismatch">篡改账本后阻断 E1</option></optgroup>
             <optgroup label="可靠性与审批 · Replayable Event Stream"><option value="outbox_retry">Outbox 重试与重放</option><option value="outbox_fenced">Outbox Fencing</option><option value="lease_failover">Runtime 租约接管</option><option value="lease_renewal">Runtime 租约续期</option><option value="approval_durable_restart">持久审批后重启</option><option value="approval_durable_stale">参数变化使旧批准失效</option><option value="approval_interactive">人工 Approve / Deny</option></optgroup>
-            <optgroup label="安全、上下文与模型"><option value="capability_wrong_tool">Tool 权限不匹配</option><option value="capability_valid">最小权限票据</option><option value="capability_expired">权限票据过期</option><option value="injection_mixed">恶意内容隔离</option><option value="injection_blocked">恶意证据导致 ABSTAIN</option><option value="injection_clean">干净证据正常传播</option><option value="rag_stale">旧资料被 Citation Gate 拒绝</option><option value="rag_topk">RAG Top-K</option><option value="rag_insufficient">证据不足</option><option value="context_compression">上下文压缩</option><option value="context_relevant">保留相关上下文</option><option value="context_conflict">新旧指令冲突</option><option value="route_fallback">模型 Fallback</option><option value="route_budget">模型预算不足</option><option value="model_repair">模型输出修复</option><option value="model_unsafe">模型越权拒绝</option><option value="replan_success">重规划成功</option><option value="replan_loop">重规划循环检测</option><option value="breaker_open">Circuit Breaker</option><option value="backpressure">背压控制</option><option value="deadline">运行预算超时</option><option value="manual_cancel">人工停止</option><option value="late_result">晚到结果</option><option value="ten_year_fail">10Y Tool 失败</option></optgroup>
+            <optgroup label="安全、上下文与模型"><option value="intent_live">真实模型受限 Intent</option><option value="model_live">真实模型自由提议</option><option value="capability_wrong_tool">Tool 权限不匹配</option><option value="capability_valid">最小权限票据</option><option value="capability_expired">权限票据过期</option><option value="injection_mixed">恶意内容隔离</option><option value="injection_blocked">恶意证据导致 ABSTAIN</option><option value="injection_clean">干净证据正常传播</option><option value="rag_stale">旧资料被 Citation Gate 拒绝</option><option value="rag_topk">RAG Top-K</option><option value="rag_insufficient">证据不足</option><option value="context_compression">上下文压缩</option><option value="context_relevant">保留相关上下文</option><option value="context_conflict">新旧指令冲突</option><option value="route_fallback">模型 Fallback</option><option value="route_budget">模型预算不足</option><option value="model_repair">模型输出修复</option><option value="model_unsafe">模型越权拒绝</option><option value="replan_success">重规划成功</option><option value="replan_loop">重规划循环检测</option><option value="breaker_open">Circuit Breaker</option><option value="backpressure">背压控制</option><option value="deadline">运行预算超时</option><option value="manual_cancel">人工停止</option><option value="late_result">晚到结果</option><option value="ten_year_fail">10Y Tool 失败</option></optgroup>
           </select>
           <button id="load-archive-scenario" type="button">载入历史场景</button>
         </div>
       </details>
+    </section>
+    <section class="lesson-brief" aria-live="polite" data-lesson="eval">
+      <div><span>为什么需要</span><strong id="lesson-why-title">模型输出会随模型、Prompt 和上下文变化</strong><p id="lesson-why">普通单元测试无法判断语义行为是否退化；Golden Trace 固定必须发生的安全行为。</p></div>
+      <div><span>本课架构</span><strong id="lesson-how-title">Golden → Candidate → Assertions → Score</strong><p id="lesson-how">比较事件顺序、权限、Guardrails 与结果类型，不比较措辞是否逐字相同。</p></div>
+      <div><span>观察重点</span><strong id="lesson-watch-title">PASS 或 Regression Detected</strong><p id="lesson-watch">展开工程检查台查看每条 assertion；退化场景会明确指出越权 Tool 与缺失风险门禁。</p></div>
     </section>
     <section class="approval-panel" id="approval-panel" aria-live="assertive" hidden><div class="approval-copy"><span>H1 · HUMAN APPROVAL REQUIRED</span><strong id="approval-tool">—</strong><small id="approval-fingerprint">—</small></div><div class="approval-actions"><button class="deny-button" id="deny-button" type="button">Deny</button><button class="approve-button" id="approve-button" type="button">Approve once</button></div></section>
     <section class="agent-studio" aria-labelledby="studio-title">
@@ -101,7 +108,7 @@
         <div class="panel-heading"><div><span class="eyebrow">EXECUTION</span><h2 id="stream-title">Agent Live Stream <span class="event-count" id="event-count">0</span></h2></div><label class="follow-control"><input id="follow" type="checkbox" checked> 跟随最新</label></div>
         <div class="stream-toolbar"><span id="stream-scope">全部节点 · 调用 · 结果</span><button id="clear-filter" type="button" hidden>显示全部 ×</button><button id="replay-button" type="button" hidden>↻ 重放最近 Run</button><button id="download" type="button" disabled>导出 JSON ↓</button></div>
         <section class="stream-overview" id="stream-overview" aria-live="polite" aria-label="本次运行能力变化">
-          <div class="overview-title"><div><span class="eyebrow">WHAT CHANGED</span><strong>Paper Ledger Reconciliation</strong></div><span class="overview-mode" id="overview-mode">等待运行</span></div>
+          <div class="overview-title"><div><span class="eyebrow">WHAT CHANGED</span><strong id="overview-title">Model Evals</strong></div><span class="overview-mode" id="overview-mode">等待运行</span></div>
           <p id="overview-change">新增边界：LG1 从纸面账本重放重建 P&amp;L，再与 S1 对账；不一致时阻断 E1。</p>
           <div class="capability-lane" aria-label="事件流能力阶段">
             <div class="capability-step" id="capability-persist"><span class="capability-dot">1</span><div><strong>Persist</strong><small>写入日志</small></div></div>
@@ -112,7 +119,7 @@
             <div class="capability-arrow" aria-hidden="true">→</div>
             <div class="capability-step" id="capability-replay"><span class="capability-dot">4</span><div><strong>Replay</strong><small>历史恢复</small></div></div>
           </div>
-          <div class="ledger-overview"><span class="eyebrow">LEDGER CHECK</span><strong id="ledger-status">等待 LG1</strong><p id="ledger-diff">Expected = Replayed · 无差异</p></div>
+          <div class="ledger-overview"><span class="eyebrow" id="check-label">LESSON CHECK</span><strong id="ledger-status">等待 E1</strong><p id="ledger-diff">等待可重放的评测证据</p></div>
           <div class="overview-metrics"><span><b id="frame-count">0</b><small>frames</small></span><span><b id="attempt-count">0</b><small>attempts</small></span><span><b id="side-effect-count">—</b><small>effects</small></span><span><b id="outcome-label">—</b><small>outcome</small></span></div>
         </section>
         <section class="stream-outcome" id="stream-outcome" aria-live="polite" hidden><div><span class="eyebrow">RUN OUTCOME</span><strong id="outcome-title">—</strong></div><p id="outcome-detail">—</p></section>

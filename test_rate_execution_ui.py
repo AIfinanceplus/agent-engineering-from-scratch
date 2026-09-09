@@ -28,6 +28,9 @@ class PartialFillConsoleContractTests(unittest.TestCase):
         self.assertIn('Model Evals', html)
         self.assertIn('Agent Memory', html)
         self.assertIn('Multi-Agent Handoff', html)
+        for scenario in ('eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass',
+                         'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject'):
+            self.assertIn(f'value="{scenario}"', html)
         self.assertIn("/api/rates/execution-race", client)
         self.assertIn("/api/rates/paper-fill", client)
         self.assertIn("/api/rates/paper-portfolio", client)
@@ -48,6 +51,8 @@ class PartialFillConsoleContractTests(unittest.TestCase):
         self.assertIn("sessionStorage.removeItem(MODEL_KEY_SESSION", client)
         self.assertIn("enteredModelApiKey || readSessionKey()", client)
         self.assertIn("selectArchivedScenario", client)
+        self.assertIn("/api/rates/advanced-lesson", client)
+        self.assertIn("updateLessonUI", client)
         self.assertIn("handoffForEvent", client)
         self.assertIn("updateModelInspector", client)
         self.assertIn('"model_api_key": model_api_key', server)
