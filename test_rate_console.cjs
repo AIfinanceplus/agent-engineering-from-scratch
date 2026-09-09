@@ -1,14 +1,15 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { NODES, PARALLEL_NODES, PARALLEL_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
+const { NODES, PARALLEL_NODES, PARALLEL_ROWS, ORCHESTRATION_NODES, ORCHESTRATION_ROWS, STUDIO_ROLES, flowForEvent, roleForEvent, handoffForEvent, createState, applyMessage, finishStream, failState, describe } = require('./web/rate_console_core.js');
 
 test('studio assigns real events to personified roles without inventing extra LLMs', () => {
-  assert.deepEqual(STUDIO_ROLES.map(role => role.id), ['strategy_analyst', 'risk_controller', 'runtime_supervisor']);
+  assert.deepEqual(STUDIO_ROLES.map(role => role.id), ['orchestration_supervisor', 'strategy_analyst', 'risk_controller', 'runtime_supervisor']);
   assert.ok(STUDIO_ROLES.every(role => role.mission && role.input && role.output));
   assert.ok(STUDIO_ROLES.every(role => role.functions.length && role.constraints.length));
   assert.equal(roleForEvent({ event: 'model_response_received', task_id: 'M1' }), 'strategy_analyst');
   assert.equal(roleForEvent({ event: 'handoff_validation_started', actor_role: 'risk_controller', task_id: 'L1' }), 'risk_controller');
   assert.equal(roleForEvent({ event: 'ledger_reconciliation_completed', task_id: 'LG1' }), 'runtime_supervisor');
+  assert.equal(roleForEvent({ event: 'orchestration_started', actor_role: 'orchestration_supervisor', task_id: 'OS1' }), 'orchestration_supervisor');
 });
 
 test('studio separates information, decision and risk flows with evidence-backed handoffs', () => {
@@ -597,4 +598,28 @@ test('advanced lessons reduce eval, memory, and handoff evidence into real node 
   assert.equal(flowForEvent({ event: 'memory_write_blocked' }), 'risk');
   assert.equal(flowForEvent({ event: 'handoff_contract_created' }), 'decision');
   assert.equal(describe({ event: 'model_eval_assertion_checked', assertion: 'paper_only', passed: false }).label, 'ASSERT FAIL');
+});
+
+test('supervisor orchestration exposes ownership, bounded decisions, and safe stop', () => {
+  assert.deepEqual(ORCHESTRATION_ROWS, [['G1'], ['OS1'], ['P1'], ['L1'], ['R1'], ['E1']]);
+  assert.equal(ORCHESTRATION_NODES.length, 6);
+  const state = createState('orchestration');
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: 'orchestration-run', type, ...payload });
+  applyMessage(state, message('start', { execution_mode: 'orchestration' }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', {
+    event: { event, task_id, run_id: state.runId, sequence: state.events.length + 1, timestamp: '2026-09-01T01:02:03.000Z', ...extras },
+  }));
+  emit('goal_received', 'G1');
+  emit('orchestration_started', 'OS1', { actor_role: 'orchestration_supervisor', policy: { max_assignments: 5, max_revisions: 2, token_budget: 1200 } });
+  emit('task_ownership_changed', 'OS1', { actor_role: 'orchestration_supervisor', from_owner: null, to_owner: 'analyst-worker-a', assignee_role: 'strategy_analyst', ownership_version: 1, single_owner: true });
+  emit('agent_timeout_detected', 'P1', { actor_role: 'strategy_analyst', worker_id: 'analyst-worker-a', output_committed: false });
+  emit('task_ownership_revoked', 'OS1', { actor_role: 'orchestration_supervisor', owner: 'analyst-worker-a', reason: 'timeout' });
+  emit('orchestration_decision_recorded', 'OS1', { actor_role: 'orchestration_supervisor', action: 'STOP', reason: 'budget exhausted', budget: {} });
+  emit('orchestration_stopped', 'OS1', { actor_role: 'orchestration_supervisor', safe_stop: true, effect_count: 0, reason: 'budget' });
+  assert.equal(state.nodes.OS1, 'abstained');
+  assert.equal(state.agentStates.orchestration_supervisor, 'active');
+  assert.equal(state.agentStates.strategy_analyst, 'failed');
+  assert.equal(flowForEvent({ event: 'orchestration_loop_detected' }), 'risk');
+  assert.equal(handoffForEvent({ event: 'task_ownership_changed', from_owner: null, assignee_role: 'strategy_analyst', ownership_version: 1 }).to, 'strategy_analyst');
+  assert.equal(describe({ event: 'orchestration_stopped', reason: 'budget', effect_count: 0 }).label, 'SAFE STOP');
 });
