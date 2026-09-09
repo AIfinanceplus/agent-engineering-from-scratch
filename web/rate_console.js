@@ -16,9 +16,9 @@
   const roleElements = new Map();
   const MODEL_KEY_SESSION = 'rate-console:model-api-key';
   const flowCopy = {
-    information: ['信息流', 'Goal → Context → Intent → Observation → Result', '展示真正传递的数据；没有进入 Trace 的信息不会被画成已传递。'],
-    decision: ['决策流', 'Model Proposal → Runtime Validation → Fixed Plan → Outcome', '区分模型提议与 Runtime 决定；模型不能直接启动 Tool。'],
-    risk: ['风控流', 'Evidence → Guardrail → Allow / Block → Audit', '展示检查对象、规则与影响；被绕过的历史能力不会显示成已通过。'],
+    information: ['信息流', '你 → 策略分析师 → 风险主管 → 执行主管 → Trace', '岗位卡固定显示输入和输出；沟通记录保留全部交接，不因流视图而消失。'],
+    decision: ['决策流', '策略提议 → 独立验约 → 已批准合约 → 固定 Runtime', '每位 Agent 只决定自己职责内的事情，接收方必须重新验证。'],
+    risk: ['风控流', 'Claims / Evidence → Contract Gate → ALLOW 或 BLOCK → Audit', '拒绝路径停在风险主管，执行主管保持未激活，副作用为零。'],
   };
   const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject']);
   const lessonCopy = {
@@ -182,10 +182,27 @@
       button.dataset.status = 'waiting';
       button.setAttribute('aria-pressed', 'false');
       const top = element('span', 'role-top');
-      top.append(element('span', 'role-avatar', role.icon), element('span', 'role-type', role.type));
+      const avatar = element('span', 'role-avatar');
+      avatar.setAttribute('aria-hidden', 'true');
+      avatar.append(element('i', 'avatar-head'), element('i', 'avatar-body'), element('b', 'avatar-code', role.icon));
+      top.append(avatar, element('span', 'role-type', role.type));
+      const mission = element('span', 'role-mission');
+      mission.append(element('small', '', '职责'), element('strong', '', role.mission));
+      const io = element('span', 'role-io');
+      const input = element('span', 'io-block');
+      input.append(element('small', '', 'INPUT'), element('b', '', role.input));
+      const output = element('span', 'io-block');
+      output.append(element('small', '', 'OUTPUT'), element('b', '', role.output));
+      io.append(input, element('i', 'io-arrow', '→'), output);
+      const boundaries = element('span', 'role-boundaries');
+      const capabilities = element('span', 'boundary-block');
+      capabilities.append(element('small', '', '可以做'), ...role.functions.map(item => element('em', '', `✓ ${item}`)));
+      const constraints = element('span', 'boundary-block boundary-deny');
+      constraints.append(element('small', '', '绝对不能'), ...role.constraints.map(item => element('em', '', `⊘ ${item}`)));
+      boundaries.append(capabilities, constraints);
       const footer = element('span', 'role-footer');
       footer.append(element('span', 'role-state', '等待运行'), element('span', 'role-evidence', '0 events'));
-      button.append(top, element('strong', 'role-name', role.name), element('span', 'role-activity', role.idle), footer);
+      button.append(top, element('strong', 'role-name', role.name), mission, io, boundaries, element('span', 'role-activity', role.idle), footer);
       button.addEventListener('click', () => {
         selectedRole = selectedRole === role.id ? null : role.id;
         filter = null;
@@ -200,6 +217,7 @@
   buildStudio();
 
   function roleStatus(role) {
+    if (Object.values(state.agentStates || {}).some(status => status !== 'waiting')) return state.agentStates[role.id] || 'waiting';
     const statuses = role.tasks.map(task => state.nodes[task]).filter(Boolean);
     const failed = ['failed', 'rejected', 'open', 'expired', 'fenced', 'budget_blocked', 'abstained'];
     const active = ['ready', 'running', 'proposed', 'repairing', 'retrieving', 'ranking', 'topk', 'verifying', 'scanning', 'quarantining', 'waiting_human', 'restarting', 'restoring', 'acquired', 'renewing', 'taking_over', 'retrying', 'writing', 'issuing', 'issued', 'authorizing', 'selecting', 'compressing', 'selected', 'reserved', 'fallback'];
@@ -214,9 +232,9 @@
     const handoffs = state.events.map(event => ({ event, handoff: handoffForEvent(event) })).filter(item => item.handoff);
     const list = byId('handoff-list');
     list.replaceChildren();
-    byId('handoff-count').textContent = `${handoffs.length} 个关键交接`;
+    byId('handoff-count').textContent = `${handoffs.length} 条消息`;
     if (!handoffs.length) {
-      list.append(element('li', 'handoff-empty', '运行后，这里只显示影响信息、决策或风险边界的关键交接。'));
+      list.append(element('li', 'handoff-empty', '运行后，这里逐条显示发送、验约、接受或拒绝。'));
       return;
     }
     for (const { event, handoff } of handoffs) {
@@ -237,9 +255,34 @@
         const row = byId('event-list').querySelector(`[data-sequence="${event.sequence}"]`);
         if (row) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
-      item.append(meta, element('div', 'handoff-actors', `${from}  →  ${to}`), element('strong', 'handoff-title', handoff.title), evidence);
+      let message = 'Trace 中的结构化消息';
+      if (event.event === 'handoff_contract_created') message = `Envelope · ${event.handoff?.schema_version || 'rate_handoff_v1'} · hash ${(event.handoff?.contract_sha256 || '').slice(0, 10)}…`;
+      if (event.event === 'handoff_validation_started') message = '接收方不继承信任：重新检查 Schema、路由、Evidence、Guardrails 与 Hash';
+      if (event.event === 'handoff_validation_completed') message = event.passed ? 'PASS · 合约允许进入下一步' : `BLOCK · ${(event.reasons || []).join(' · ')}`;
+      if (event.event === 'handoff_accepted') message = 'ACCEPT · 只有合约声明的 Payload 和权限进入接收方';
+      if (event.event === 'handoff_rejected') message = `REJECT · ${(event.reasons || []).join(' · ')} · effect_count=${event.effect_count}`;
+      item.append(meta, element('div', 'handoff-actors', `${from}  →  ${to}`), element('strong', 'handoff-title', handoff.title), element('p', 'handoff-message', message), evidence);
       list.append(item);
     }
+  }
+
+  function updateHandoffJourney() {
+    const events = state.events;
+    const has = (name, predicate = () => true) => events.find(event => event.event === name && predicate(event));
+    const set = (id, status, label) => {
+      const step = document.querySelector(`[data-journey="${id}"]`);
+      step.dataset.status = status;
+      step.querySelector('em').textContent = label;
+    };
+    const firstSent = has('handoff_contract_created', event => event.recipient_role === 'risk_controller');
+    const firstCheck = has('handoff_validation_completed', event => event.actor_role === 'risk_controller');
+    const rejected = has('handoff_rejected', event => event.actor_role === 'risk_controller');
+    const secondSent = has('handoff_contract_created', event => event.recipient_role === 'runtime_supervisor');
+    const secondCheck = has('handoff_validation_completed', event => event.actor_role === 'runtime_supervisor');
+    set('analyst-send', firstSent ? 'completed' : 'waiting', firstSent ? '已发送' : '等待');
+    set('risk-verify', rejected ? 'rejected' : firstCheck?.passed ? 'completed' : firstSent ? 'active' : 'waiting', rejected ? '已拒绝' : firstCheck?.passed ? '通过' : firstSent ? '验约中' : '等待');
+    set('risk-send', rejected ? 'blocked' : secondSent ? 'completed' : firstCheck?.passed ? 'active' : 'waiting', rejected ? '未执行' : secondSent ? '已发送' : firstCheck?.passed ? '准备交接' : '等待');
+    set('runtime-verify', rejected ? 'blocked' : secondCheck?.passed ? 'completed' : secondSent ? 'active' : 'waiting', rejected ? '未激活' : secondCheck?.passed ? '通过并激活' : secondSent ? '验约中' : '等待');
   }
 
   function updateModelInspector() {
@@ -276,13 +319,14 @@
     const relevantHandoffs = state.events.map(handoffForEvent).filter(Boolean).filter(handoff => handoff.flow === flowMode);
     for (const role of STUDIO_ROLES) {
       const button = roleElements.get(role.id);
-      const roleEvents = state.events.filter(event => role.tasks.includes(event.task_id) || (role.id === 'model' && event.event === 'model_response_received'));
+      const roleEvents = state.events.filter(event => roleForEvent(event) === role.id || event.sender_role === role.id || event.recipient_role === role.id);
       const latest = roleEvents.at(-1);
       const status = roleStatus(role);
       button.dataset.status = status;
       button.dataset.flowMuted = String(state.events.length > 0 && !relevantHandoffs.some(handoff => [handoff.from, handoff.to].includes(role.id)));
       button.setAttribute('aria-pressed', String(selectedRole === role.id));
-      button.querySelector('.role-state').textContent = status === 'active' ? '正在工作' : status === 'completed' ? '本次已完成' : status === 'failed' ? '已停止 / 阻断' : status === 'blocked' ? '下游未执行' : '等待运行';
+      const statusCopy = { active: '已激活', sending: '正在交接', validating: '独立验约中', ready: '验约通过', completed: '本次已完成', rejected: '已拒绝', failed: '已停止 / 阻断', blocked: '下游未执行', waiting: '等待运行' };
+      button.querySelector('.role-state').textContent = statusCopy[status] || status;
       button.querySelector('.role-evidence').textContent = `${roleEvents.length} events`;
       button.querySelector('.role-activity').textContent = latest ? describe(latest).title : role.idle;
     }
@@ -292,6 +336,7 @@
     byId('flow-route-title').textContent = copy[1];
     byId('flow-route-detail').textContent = copy[2];
     renderHandoffs();
+    updateHandoffJourney();
     updateModelInspector();
   }
 
@@ -639,6 +684,14 @@
   byId('forget-model-key').addEventListener('click', clearSessionKey);
   byId('load-archive-scenario').addEventListener('click', selectArchivedScenario);
   byId('scenario').addEventListener('change', () => {
+    if (byId('scenario').value.startsWith('handoff_')) {
+      flowMode = 'decision';
+      document.querySelectorAll('.flow-tab').forEach(tab => {
+        const selected = tab.dataset.flow === flowMode;
+        tab.classList.toggle('active', selected);
+        tab.setAttribute('aria-selected', String(selected));
+      });
+    }
     updateLessonUI();
     update();
   });
