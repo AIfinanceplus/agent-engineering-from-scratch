@@ -20,7 +20,71 @@
     decision: ['决策流', 'Model Proposal → Runtime Validation → Fixed Plan → Outcome', '区分模型提议与 Runtime 决定；模型不能直接启动 Tool。'],
     risk: ['风控流', 'Evidence → Guardrail → Allow / Block → Audit', '展示检查对象、规则与影响；被绕过的历史能力不会显示成已通过。'],
   };
+  const advancedScenarios = new Set(['eval_golden_pass', 'eval_regression_fail', 'memory_redaction_pass', 'memory_privacy_block', 'handoff_contract_pass', 'handoff_contract_reject']);
+  const lessonCopy = {
+    eval: {
+      title: 'Model Evals · Golden Trace', detail: '判断候选模型行为是否仍满足已批准合约。',
+      whyTitle: '模型输出会随模型、Prompt 和上下文变化', why: '普通单元测试无法判断语义行为是否退化；Golden Trace 固定必须发生的安全行为。',
+      howTitle: 'Golden → Candidate → Assertions → Score', how: '比较事件顺序、权限、Guardrails 与结果类型，不比较措辞是否逐字相同。',
+      watchTitle: 'PASS 或 Regression Detected', watch: '查看每条 assertion；退化场景会明确指出越权 Tool 与缺失风险门禁。',
+      overview: 'Golden Trace → Candidate Run → Behavioral Assertions → Regression Decision',
+    },
+    memory: {
+      title: 'Agent Memory · 生命周期与隐私', detail: '区分本次运行状态和可以跨运行保存的脱敏知识。',
+      whyTitle: '没有生命周期的“记忆”会变成隐私泄漏', why: '短期状态帮助完成当前任务；长期记忆必须先脱敏、带 Scope 和来源，并允许审计。',
+      howTitle: 'Short-term → Privacy Gate → Long-term → Retrieval', how: '原始 API Key、邮箱和账户标识只能停留在短期内存；长期层只接收脱敏记录。',
+      watchTitle: '写入、召回或零副作用阻断', watch: '正常场景展示持久化哈希与来源；违规场景在落盘前拒绝，effect_count=0。',
+      overview: 'Run State → Redaction → Append-only Memory → Scoped Retrieval',
+    },
+    handoff: {
+      title: 'Multi-Agent Handoff · 交接契约', detail: '每个 Agent 只在自己的职责和权限范围内工作。',
+      whyTitle: '多 Agent 增加的是边界，不只是角色数量', why: '自由文本交接会丢失来源并暗中扩大权限；接收方必须重新验证，而不是盲目信任发送方。',
+      howTitle: 'Analyst → Risk → Runtime', how: '每次交接绑定 Schema、角色、证据、Paper-only Guardrail 和内容哈希。',
+      watchTitle: '接受后激活，拒绝则下游不启动', watch: '合法合约逐级传递；越权 automatic_execution 会被 Risk 拒绝且副作用为零。',
+      overview: 'Role Contract → Handoff Envelope → Recipient Validation → Activation / Reject',
+    },
+  };
   const scenarioBudget = () => ['deadline', 'late_result'].includes(byId('scenario').value) ? 1000 : ['live', 'execution_race', 'paper_fill_accounting', 'paper_portfolio_risk', 'model_live', 'intent_live', 'approval_interactive', 'approval_durable_restart', 'approval_durable_stale', 'lease_failover', 'lease_renewal', 'outbox_retry', 'outbox_fenced'].includes(byId('scenario').value) ? 120000 : 30000;
+
+  const lessonForScenario = scenario => scenario.startsWith('memory_') ? 'memory' : scenario.startsWith('handoff_') ? 'handoff' : 'eval';
+  function sourceNote(scenario) {
+    if (scenario.startsWith('eval_')) return '可重复模型候选 · Golden Trace 比较语义行为 · 回归失败阻止升级';
+    if (scenario.startsWith('memory_')) return '短期状态仅本次 Run · 长期记忆先脱敏并绑定来源 · 无敏感值进入 Trace';
+    if (scenario.startsWith('handoff_')) return '确定性教学 Agent · 接收方独立验约 · 仍为 2s10s paper_only';
+    if (scenario === 'live') return '公开数据 · 无延时或故障注入';
+    if (scenario === 'execution_race') return '纸面成交事件 · 持久化后发送 · 重复 fill 去重';
+    if (scenario === 'paper_fill_accounting') return '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L';
+    if (scenario === 'paper_portfolio_risk') return '2s10s 纸面组合投影 · 净平行 DV01 限额 · 拦截不写入账本';
+    if (scenario === 'intent_live') return '本地 OpenAI API · Key 不进入 Trace · 模型只能提议受限 Intent';
+    if (scenario === 'model_live') return '本地 OpenAI API · Key 不进入 Trace · 模型输出仅为待校验提议';
+    return '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+  }
+  function updateLessonUI() {
+    const scenario = byId('scenario').value;
+    const lesson = advancedScenarios.has(scenario) ? lessonForScenario(scenario) : null;
+    const copy = lesson ? lessonCopy[lesson] : { title: '历史课程复习', detail: '旧能力仍可运行，但默认不占用当前课程界面。', whyTitle: '历史能力', why: '从历史课程抽屉载入的场景。', howTitle: '原有 Runtime', how: '沿用原来的事件协议与安全边界。', watchTitle: '完整 Trace', watch: '展开工程检查台复习原始事件。' };
+    byId('course-now-title').textContent = copy.title;
+    byId('course-now-detail').textContent = copy.detail;
+    byId('lesson-why-title').textContent = copy.whyTitle;
+    byId('lesson-why').textContent = copy.why;
+    byId('lesson-how-title').textContent = copy.howTitle;
+    byId('lesson-how').textContent = copy.how;
+    byId('lesson-watch-title').textContent = copy.watchTitle;
+    byId('lesson-watch').textContent = copy.watch;
+    document.querySelector('.lesson-brief').dataset.lesson = lesson || 'history';
+    document.querySelectorAll('.course-roadmap li').forEach(item => item.classList.toggle('active', item.dataset.lesson === lesson));
+    const needsKey = ['model_live', 'intent_live'].includes(scenario);
+    byId('model-key-field').hidden = !needsKey;
+    byId('key-session').hidden = !needsKey;
+    byId('source-note').textContent = sourceNote(scenario);
+    if (!state.runId && lesson) {
+      byId('overview-title').textContent = copy.title.split(' · ')[0];
+      byId('overview-change').textContent = copy.overview;
+      byId('check-label').textContent = 'LESSON CHECK';
+      byId('ledger-status').textContent = '等待 E1';
+      byId('ledger-diff').textContent = '等待可重放的评测证据';
+    }
+  }
 
   function readSessionKey() {
     try { return sessionStorage.getItem(MODEL_KEY_SESSION) || ''; } catch (_) { return ''; }
@@ -262,6 +326,14 @@
   }
   function eventImpact(event, view) {
     const name = event.event || '';
+    if (name === 'model_regression_completed') return { phase: 'MODEL EVAL', state: `结果：${event.passed ? 'PASS' : 'REGRESSION'}`, effect: event.passed ? '候选：可继续' : '候选：阻止升级' };
+    if (name === 'model_eval_assertion_checked') return { phase: 'ASSERTION', state: `状态：${event.passed ? '通过' : '退化'}`, effect: '副作用：0 次' };
+    if (name === 'memory_write_blocked') return { phase: 'PRIVACY GATE', state: '状态：已阻断', effect: `副作用：${event.effect_count} 次` };
+    if (name === 'long_term_memory_written') return { phase: 'MEMORY WRITE', state: '状态：已脱敏持久化', effect: '范围：2s10s_preferences' };
+    if (name === 'long_term_memory_retrieved') return { phase: 'MEMORY READ', state: '状态：有来源召回', effect: '权限：只读 Context' };
+    if (name === 'handoff_rejected') return { phase: 'HANDOFF GATE', state: '状态：接收方拒绝', effect: `副作用：${event.effect_count} 次` };
+    if (name === 'handoff_accepted') return { phase: 'HANDOFF', state: '状态：合约已接受', effect: '下游：允许激活' };
+    if (name === 'handoff_validation_completed') return { phase: 'CONTRACT', state: `状态：${event.passed ? '通过' : '拒绝'}`, effect: event.passed ? '下游：待激活' : '下游：不启动' };
     if (name === 'ledger_mismatch_detected') return { phase: 'RECONCILIATION FAILURE', state: '状态：账本不一致', effect: '下游：E1 被阻断' };
     if (name === 'ledger_reconciliation_completed') return { phase: 'RECONCILIATION', state: '状态：已对账', effect: `事件：${event.event_count ?? 0} 个` };
     if (name === 'ledger_event_appending' || name === 'ledger_event_appended') return { phase: 'PERSIST', state: `状态：${event.event_type}`, effect: '副作用：纸面账本 · fsync' };
@@ -282,6 +354,8 @@
   }
   function updateOverview() {
     const eventCount = state.events.length;
+    const selectedScenario = byId('scenario').value;
+    const selectedLesson = advancedScenarios.has(selectedScenario) ? lessonForScenario(selectedScenario) : null;
     const frameCount = state.runId ? eventCount + 1 + (state.terminal ? 1 : 0) : 0;
     const attempts = state.events.filter(event => ['tool_execution_started', 'outbox_dispatch_started'].includes(event.event)).length;
     const effectEvent = [...state.events].reverse().find(event => Number.isFinite(event.effect_count));
@@ -291,8 +365,11 @@
     const ledger = state.result?.paper_ledger;
     const executionResult = state.result?.execution;
     const raceDemo = executionResult?.artifact_type === 'paper_execution_projection';
+    if (selectedLesson) byId('overview-title').textContent = lessonCopy[selectedLesson].title.split(' · ')[0];
     byId('overview-change').textContent = state.replayed
       ? '当前展示的是已持久化历史；页面只重建状态，不重新调用 Tool。'
+      : selectedLesson
+        ? lessonCopy[selectedLesson].overview
       : raceDemo
         ? '新增边界：取消请求不会抹掉取消确认前已经发生的成交；fill_id 重复回报只保留一次副作用。'
         : '新增边界：LG1 从纸面账本重放重建 P&L，再与 S1 对账；不一致时阻断 E1。';
@@ -304,7 +381,8 @@
     Object.entries(steps).forEach(([id, status]) => { const node = byId(`capability-${id}`); node.classList.remove('active', 'completed'); if (status) node.classList.add(status); });
     const outcomePanel = byId('stream-outcome');
     outcomePanel.hidden = !state.runId;
-    byId('outcome-title').textContent = state.replayed ? 'Replay completed · same run, no Tool call' : state.phase === 'completed' ? 'Run completed · Eval passed' : state.phase === 'failed' ? 'Run failed · inspect the boundary below' : 'Run in progress';
+    const regression = state.events.find(event => event.event === 'model_regression_completed' && !event.passed);
+    byId('outcome-title').textContent = state.replayed ? 'Replay completed · same run, no Tool call' : regression ? 'Regression detected · candidate blocked' : state.phase === 'completed' ? 'Run completed · Eval passed' : state.phase === 'failed' ? 'Run failed · inspect the boundary below' : 'Run in progress';
     const last = state.events.at(-1);
     byId('outcome-detail').textContent = last ? `${last.task_id || 'Runtime'} · ${last.event} · sequence ${last.sequence}` : '等待第一条真实事件';
     if (byId('ledger-status')) {
@@ -332,6 +410,15 @@
       byId('ledger-status').textContent = paperPortfolio.risk_status + ' · 2S10S OPEN ' + summary.open_curve_trade_count + ' · NET DV01 ' + summary.net_parallel_dv01_usd_per_bp + ' USD/bp';
       byId('ledger-status').dataset.state = state.result?.eval?.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = 'gross DV01 ' + summary.gross_dv01_usd_per_bp + ' USD/bp · limits ' + paperPortfolio.violations.length + ' · realized P&L ' + summary.realized_pnl_usd;
+    }
+    const advancedResult = state.result && ['rate_model_eval_lesson', 'rate_memory_lesson', 'rate_multi_agent_handoff_lesson'].includes(state.result.artifact_type) ? state.result : null;
+    if (advancedResult && byId('ledger-status')) {
+      const regressions = advancedResult.eval.regressions || [];
+      const checks = Object.entries(advancedResult.eval.checks || {});
+      byId('check-label').textContent = advancedResult.artifact_type === 'rate_model_eval_lesson' ? 'MODEL EVAL' : advancedResult.artifact_type === 'rate_memory_lesson' ? 'MEMORY EVAL' : 'HANDOFF EVAL';
+      byId('ledger-status').textContent = advancedResult.eval.passed ? 'PASS · CONTRACT PRESERVED' : 'REGRESSION · CANDIDATE BLOCKED';
+      byId('ledger-status').dataset.state = advancedResult.eval.passed ? 'pass' : 'error';
+      byId('ledger-diff').textContent = regressions.length ? regressions.join(' · ') : checks.map(([name, passed]) => `${passed ? '✓' : '✂'} ${name}`).join(' · ');
     }
   }
   function update() {
@@ -496,10 +583,10 @@
     byId('event-list').replaceChildren();
     byId('settings').open = false;
     byId('follow').checked = true;
-    byId('source-note').textContent = config.demo_scenario === 'live' ? '公开数据 · 无延时或故障注入' : config.demo_scenario === 'execution_race' ? '纸面成交事件 · 持久化后发送 · 重复 fill 去重' : config.demo_scenario === 'paper_fill_accounting' ? '纸面成交账本 · 报价与成交分离 · 幂等重试 · 结算 P&L' : config.demo_scenario === 'paper_portfolio_risk' ? '2s10s 纸面组合投影 · 净平行 DV01 限额 · 拦截不写入账本' : config.demo_scenario === 'intent_live' ? '本地 OpenAI API · Key 不进入页面或 Trace · 模型只能提议受限 Intent，Runtime 映射固定任务图' : config.demo_scenario === 'model_live' ? '本地 OpenAI API · Key 不进入页面或 Trace · 模型输出仅为待校验提议' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+    byId('source-note').textContent = sourceNote(config.demo_scenario);
     update();
     try {
-      const endpoint = config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : config.demo_scenario === 'paper_fill_accounting' ? '/api/rates/paper-fill' : config.demo_scenario === 'paper_portfolio_risk' ? '/api/rates/paper-portfolio' : '/api/rates/stream';
+      const endpoint = advancedScenarios.has(config.demo_scenario) ? '/api/rates/advanced-lesson' : config.demo_scenario === 'execution_race' ? '/api/rates/execution-race' : config.demo_scenario === 'paper_fill_accounting' ? '/api/rates/paper-fill' : config.demo_scenario === 'paper_portfolio_risk' ? '/api/rates/paper-portfolio' : '/api/rates/stream';
       const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify(config) });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
@@ -552,7 +639,7 @@
   byId('forget-model-key').addEventListener('click', clearSessionKey);
   byId('load-archive-scenario').addEventListener('click', selectArchivedScenario);
   byId('scenario').addEventListener('change', () => {
-    if (!state.runId) byId('source-note').textContent = byId('scenario').value === 'live' ? '公开数据 · 无延时或故障注入' : '教学演示 · 公开历史快照 · 包含明确的延时/故障注入';
+    updateLessonUI();
     update();
   });
   byId('parameters').addEventListener('submit', event => { event.preventDefault(); run(); });
@@ -581,5 +668,6 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
   updateKeyStatus();
+  updateLessonUI();
   update();
 })();
