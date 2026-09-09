@@ -48,6 +48,18 @@ class RateUIContractTests(unittest.TestCase):
         self.assertIn('value="context_conflict"', html)
         self.assertIn('先运行一次，再从日志重放', html)
 
+    def test_console_exposes_finagent_style_lab_navigation_and_fixed_safety_summary(self):
+        html = (ROOT / "web" / "rate_console.html").read_text(encoding="utf-8")
+        css = (ROOT / "web" / "rate_console.css").read_text(encoding="utf-8")
+        for anchor in ("overview", "agents", "handoff", "engineering-details"):
+            self.assertIn(f'href="#{anchor}"', html)
+        for constraint in ("PAPER ONLY", "3 ROLES", "RUNTIME GATED"):
+            self.assertIn(constraint, html)
+        self.assertIn('class="lab-rail"', html)
+        self.assertIn('class="lab-summary"', html)
+        self.assertIn("FinAgent Lab-inspired institutional cockpit", css)
+        self.assertIn("color-scheme:dark", css)
+
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
