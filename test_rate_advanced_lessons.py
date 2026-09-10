@@ -20,6 +20,13 @@ class AdvancedRateLessonTests(unittest.TestCase):
         events = []
         result = self.lessons.run(scenario, f"TEST-{scenario}", events.append)
         self.assertEqual(events, result["trace"])
+        if scenario.startswith("durable_"):
+            self.assertEqual(result["status"], "WAITING_FOR_RESTART")
+            self.assertEqual(result["trace"][-1]["event"], "run_paused_for_restart")
+            resumed_events = []
+            result = self.lessons.resume_durable(
+                scenario, result["run_id"], f"RESUME-{scenario}", resumed_events.append)
+            self.assertEqual(resumed_events, result["trace"])
         self.assertEqual(result["trace"][-1]["event"], "run_completed")
         self.assertTrue(result["guardrails"]["paper_only"])
         self.assertFalse(result["guardrails"]["automatic_execution"])
@@ -117,6 +124,18 @@ class AdvancedRateLessonTests(unittest.TestCase):
         rejection = next(row for row in stale["trace"] if row["event"] == "stale_checkpoint_rejected")
         self.assertEqual((rejection["resumed_tasks"], rejection["effect_count"]), (0, 0))
         self.assertFalse(any(row["event"] == "unfinished_task_resumed" for row in stale["trace"]))
+
+    def test_durable_checkpoint_requires_a_second_run_to_resume(self):
+        events = []
+        paused = self.lessons.run("durable_resume_pass", "CHECKPOINT-RUN", events.append)
+        self.assertEqual(paused["status"], "WAITING_FOR_RESTART")
+        self.assertTrue(paused["checkpoint"]["restart_available"])
+        self.assertEqual(paused["trace"][-1]["event"], "run_paused_for_restart")
+        self.assertFalse(any(row["event"] == "checkpoint_loaded" for row in paused["trace"]))
+        resumed = self.lessons.resume_durable("durable_resume_pass", "CHECKPOINT-RUN", "NEW-PROCESS")
+        self.assertEqual(resumed["resume_of_run_id"], "CHECKPOINT-RUN")
+        self.assertEqual(resumed["trace"][0]["event"], "resume_requested")
+        self.assertIn("checkpoint_loaded", [row["event"] for row in resumed["trace"]])
 
     def test_saga_compensates_in_reverse_or_escalates_truthfully(self):
         compensated = self.run_lesson("saga_compensation_pass")

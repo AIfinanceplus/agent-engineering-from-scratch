@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+from threading import Lock
 
 
 ADVANCED_SCENARIOS = {
@@ -331,6 +332,8 @@ def validate_handoff(envelope: dict) -> dict:
 class RateAdvancedLessons:
     def __init__(self, memory_store: JsonlRateMemoryStore):
         self.memory_store = memory_store
+        self._durable_lock = Lock()
+        self._durable_checkpoints = {}
 
     def run(self, scenario: str, run_id: str, event_sink=None) -> dict:
         if scenario not in ADVANCED_SCENARIOS:
@@ -370,8 +373,24 @@ class RateAdvancedLessons:
             evaluation = self._run_observability(scenario, emit)
             artifact_type = "rate_observability_slo_lesson"
         elif scenario.startswith("durable_"):
-            evaluation = self._run_durable_workflow(scenario, run_id, emit)
-            artifact_type = "rate_durable_workflow_lesson"
+            checkpoint = self._checkpoint_durable_workflow(scenario, run_id, emit)
+            emit("run_paused_for_restart", "CP1", lesson=lesson,
+                 status="WAITING_FOR_RESTART", checkpoint_id=checkpoint["checkpoint_id"])
+            return {
+                "artifact_type": "rate_durable_workflow_lesson",
+                "run_id": run_id,
+                "workflow_run_id": run_id,
+                "status": "WAITING_FOR_RESTART",
+                "scenario": scenario,
+                "trace": trace,
+                "checkpoint": {"checkpoint_id": checkpoint["checkpoint_id"],
+                               "restart_available": True},
+                "eval": {"passed": None, "terminal_action": "WAITING_FOR_RESTART",
+                         "checks": {"checkpoint_committed": True,
+                                    "unfinished_work_preserved": True}},
+                "guardrails": {"strategy_scope": "2s10s_only", "paper_only": True,
+                               "automatic_execution": False, "broker_connection": False},
+            }
         elif scenario.startswith("saga_"):
             evaluation = self._run_saga(scenario, emit)
             artifact_type = "rate_saga_compensation_lesson"
@@ -386,6 +405,45 @@ class RateAdvancedLessons:
         return {
             "artifact_type": artifact_type,
             "run_id": run_id,
+            "status": "COMPLETED" if evaluation["passed"] else "COMPLETED_WITH_REGRESSION",
+            "scenario": scenario,
+            "trace": trace,
+            "eval": evaluation,
+            "guardrails": {"strategy_scope": "2s10s_only", "paper_only": True,
+                           "automatic_execution": False, "broker_connection": False},
+        }
+
+    def resume_durable(self, scenario: str, checkpoint_run_id: str, run_id: str,
+                       event_sink=None) -> dict:
+        """Start a new transport run that resumes one persisted logical workflow."""
+        if scenario not in {"durable_resume_pass", "durable_stale_checkpoint_block"}:
+            raise ValueError("scenario is not a durable workflow lesson")
+        with self._durable_lock:
+            checkpoint = deepcopy(self._durable_checkpoints.get(checkpoint_run_id))
+        if checkpoint is None or checkpoint["scenario"] != scenario:
+            raise ValueError("checkpoint is missing or does not match the selected scenario")
+        trace = []
+
+        def emit(event: str, task_id: str, **payload):
+            row = {"sequence": len(trace) + 1, "run_id": run_id,
+                   "timestamp": datetime.now(timezone.utc).isoformat(),
+                   "event": event, "task_id": task_id, **deepcopy(payload)}
+            trace.append(row)
+            if event_sink:
+                event_sink(deepcopy(row))
+
+        emit("resume_requested", "RV1", actor_role="runtime_supervisor",
+             workflow_run_id=checkpoint_run_id,
+             checkpoint_id=checkpoint["checkpoint_id"], new_process=True)
+        evaluation = self._resume_durable_workflow(scenario, checkpoint_run_id,
+                                                   checkpoint, emit)
+        emit("run_completed", "RC1", lesson="durable",
+             status="COMPLETED" if evaluation["passed"] else "REGRESSION_DETECTED")
+        return {
+            "artifact_type": "rate_durable_workflow_lesson",
+            "run_id": run_id,
+            "workflow_run_id": checkpoint_run_id,
+            "resume_of_run_id": checkpoint_run_id,
             "status": "COMPLETED" if evaluation["passed"] else "COMPLETED_WITH_REGRESSION",
             "scenario": scenario,
             "trace": trace,
@@ -592,8 +650,8 @@ class RateAdvancedLessons:
         emit("eval_completed", "E1", passed=result["passed"], output=result)
         return result
 
-    def _run_durable_workflow(self, scenario, run_id, emit):
-        """Resume only unfinished work after validating a durable checkpoint."""
+    def _checkpoint_durable_workflow(self, scenario, run_id, emit):
+        """Commit a recovery point and stop, leaving resume to another request."""
         graph_version = "dynamic_task_graph_v1"
         input_fingerprint = _canonical_sha256({"scope": "2s10s", "dv01": 100})
         outputs = {
@@ -601,6 +659,7 @@ class RateAdvancedLessons:
             "W2": {"output_type": "regime_view_v1", "sha256": _canonical_sha256("teaching_fixture")},
         }
         checkpoint = {"checkpoint_id": f"CP-{run_id[-8:]}", "run_id": run_id,
+                      "scenario": scenario,
                       "graph_version": graph_version, "input_fingerprint": input_fingerprint,
                       "completed_tasks": ["W1", "W2"], "interrupted_tasks": ["W3"],
                       "output_receipts": outputs,
@@ -615,11 +674,20 @@ class RateAdvancedLessons:
              checkpoint=checkpoint, persistence="atomic_append_then_fsync")
         emit("runtime_interrupted", "CP1", actor_role="runtime_supervisor",
              reason="teaching_process_crash", committed_output_absent_for=["W3"])
+        with self._durable_lock:
+            self._durable_checkpoints[run_id] = deepcopy(checkpoint)
+        return checkpoint
+
+    def _resume_durable_workflow(self, scenario, checkpoint_run_id, checkpoint, emit):
+        """Reload, revalidate, and selectively resume one committed checkpoint."""
+        graph_version = "dynamic_task_graph_v1"
+        input_fingerprint = _canonical_sha256({"scope": "2s10s", "dv01": 100})
+        outputs = checkpoint["output_receipts"]
         emit("checkpoint_loaded", "RV1", actor_role="runtime_supervisor",
              checkpoint_id=checkpoint["checkpoint_id"], checkpoint_sha256=checkpoint["checkpoint_sha256"])
         current_fingerprint = (_canonical_sha256({"scope": "2s10s", "dv01": 180})
                                if scenario == "durable_stale_checkpoint_block" else input_fingerprint)
-        checks = {"run_id_matches": checkpoint["run_id"] == run_id,
+        checks = {"run_id_matches": checkpoint["run_id"] == checkpoint_run_id,
                   "graph_version_matches": checkpoint["graph_version"] == graph_version,
                   "input_fingerprint_matches": checkpoint["input_fingerprint"] == current_fingerprint,
                   "guardrails_unchanged": checkpoint["guardrails"] == {

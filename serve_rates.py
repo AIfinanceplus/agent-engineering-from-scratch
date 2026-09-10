@@ -34,7 +34,7 @@ ADVANCED_LESSONS = RateAdvancedLessons(JsonlRateMemoryStore(
 
 
 class RateStrategyHandler(R12VisualizerHandler):
-    version_label = "RATE-CONSOLE-V23-ADVANCED-LESSONS"
+    version_label = "RATE-CONSOLE-V24-DURABLE-RESTART"
     page_title = "Agent Workflow · Graph & Live Stream"
 
     def do_GET(self):
@@ -48,7 +48,7 @@ class RateStrategyHandler(R12VisualizerHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/advanced-lesson", "/api/rates/execution-race", "/api/rates/paper-fill", "/api/rates/paper-portfolio", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
+        if self.path not in {"/api/rates/run-once", "/api/rates/recovery-demo", "/api/rates/idempotency-demo", "/api/rates/stream", "/api/rates/advanced-lesson", "/api/rates/durable-resume", "/api/rates/execution-race", "/api/rates/paper-fill", "/api/rates/paper-portfolio", "/api/rates/replay", "/api/rates/cancel", "/api/rates/approval"}:
             return super().do_POST()
         request_data = self._read_eval_request()
         if request_data is None:
@@ -75,6 +75,8 @@ class RateStrategyHandler(R12VisualizerHandler):
             return self._stream_run(request_data)
         if self.path == "/api/rates/advanced-lesson":
             return self._stream_advanced_lesson(request_data)
+        if self.path == "/api/rates/durable-resume":
+            return self._stream_durable_resume(request_data)
         if self.path == "/api/rates/execution-race":
             return self._stream_execution_race()
         if self.path == "/api/rates/paper-fill":
@@ -424,6 +426,53 @@ class RateStrategyHandler(R12VisualizerHandler):
             try:
                 send("error", error={"code": exc.__class__.__name__,
                                      "message": str(exc), "task_id": "R1", "trace": []})
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+
+    def _stream_durable_resume(self, request_data):
+        """Resume a Lesson 8 checkpoint in a distinct NDJSON transport run."""
+        scenario = request_data.get("demo_scenario")
+        checkpoint_run_id = request_data.get("checkpoint_run_id")
+        if scenario not in {"durable_resume_pass", "durable_stale_checkpoint_block"}:
+            return self._send_eval_json(400, {"ok": False, "error": {
+                "code": "INVALID_DURABLE_SCENARIO", "message": "invalid durable lesson scenario"}})
+        if not isinstance(checkpoint_run_id, str) or not checkpoint_run_id:
+            return self._send_eval_json(400, {"ok": False, "error": {
+                "code": "CHECKPOINT_RUN_REQUIRED", "message": "checkpoint_run_id is required"}})
+        run_id = f"RATE-RESUME-{uuid4().hex[:16]}"
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-transform")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        self.close_connection = True
+
+        def send(message_type, **payload):
+            message = {"protocol": "rate-ndjson-v1", "type": message_type,
+                       "run_id": run_id, **payload}
+            EVENT_LOG.append(message)
+            self.wfile.write((json.dumps(message, ensure_ascii=False,
+                                         separators=(",", ":")) + "\n").encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            send("start", strategy="2s10s", execution_mode="durable",
+                 cancel_supported=False, budget_ms=30000, lesson=scenario,
+                 resume_of_run_id=checkpoint_run_id, deterministic_teaching_fixture=True)
+            result = ADVANCED_LESSONS.resume_durable(
+                scenario, checkpoint_run_id, run_id,
+                event_sink=lambda event: send("event", event=event))
+            send("result", result=result)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return
+        except Exception as exc:
+            try:
+                send("error", error={"code": exc.__class__.__name__,
+                                     "message": str(exc), "task_id": "RV1", "trace": []})
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
@@ -809,12 +858,13 @@ def main() -> None:
     host = os.environ.get("HOST", "127.0.0.1")
     port = int(os.environ.get("PORT", "8000"))
     server = ThreadingHTTPServer((host, port), RateStrategyHandler)
-    print("Agent Operations Studio · RATE-CONSOLE-V26-AGENT-HANDOFF")
+    print("Agent Operations Studio · RATE-CONSOLE-V27-DURABLE-RESTART")
     print(f"Open http://{host}:{port}")
     print("Focused console: real node states, Tool arguments, results and retries")
     print("Graph: G1 -> RG1 retrieves -> CG1 verifies -> CT1 packs -> model -> P1 -> R1 -> L1 -> H1 -> AZ1 -> Tools -> S1 -> O1 -> LG1 ledger reconcile -> E1")
     print("Default UI: high relevance stale chunk -> citation rejection -> verified evidence pack")
     print("New lesson: Stream Explainer · persist → deliver → observe → replay · no Tool re-execution")
+    print("Lesson 8: checkpoint first, then click 从断点重启 for a separate recovery request")
     print("D1 ladder: FRED live -> U.S. Treasury live -> disclosed bundled snapshot")
     print("No broker connection or automatic execution")
     print("Press Ctrl+C to stop.")

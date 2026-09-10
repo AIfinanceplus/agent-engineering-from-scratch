@@ -7,7 +7,7 @@
     STUDIO_ROLES, flowForEvent, roleForEvent,
     handoffForEvent, modeForScenario, createState, applyMessage, finishStream, failState, describe } = window.RateConsole;
   const byId = id => document.getElementById(id);
-  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', completed: '已完成', failed: '失败', blocked: '未执行', abstained: '主动停止', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
+  const labels = { waiting: '待执行', ready: '可执行', running: '运行中', paused: '等待重启', completed: '已完成', failed: '失败', blocked: '未执行', abstained: '主动停止', cancelling: '停止中', cancelled: '已取消', timed_out: '超时停止', unknown: '状态未知', open: 'OPEN', half_open: 'HALF-OPEN', queued: '排队中', throttling: '限速等待', rejected: '已拒绝', replan: '需重规划 ↺', invalidated: '已作废', proposed: '提议待审', repairing: '修复中', retrieving: '召回中', ranking: '排名中', topk: 'Top-K 完成', verifying: '验源中', scanning: '扫描中', quarantining: '隔离中', waiting_human: '等待人工', approved: '已批准', restarting: '进程重启', restoring: '恢复审批', acquiring: '申请租约', acquired: '持有租约', renewing: '续租中', expired: '已过期', taking_over: '接管中', fenced: '旧持有者已隔离', retrying: '等待重试', writing: '写入中', deduplicated: '已去重', issuing: '签发中', issued: '已签发', authorizing: '鉴权中', verified: '已授权', selecting: '筛选中', compressing: '压缩中', selected: '已选路', reserved: '预算已预留', fallback: '切换模型', budget_blocked: '预算阻止' };
   let state = createState(modeForScenario(document.getElementById('scenario')?.value || 'durable_resume_pass'));
   let inFlight = false;
   let filter = null;
@@ -15,6 +15,8 @@
   let flowMode = 'information';
   let cancelPending = false;
   let cancelNote = '';
+  let pendingCheckpoint = null;
+  let resumingCheckpoint = false;
   const rows = [];
   const nodeElements = new Map();
   const edgeElements = [];
@@ -132,8 +134,9 @@
     const lesson = advancedScenarios.has(scenario) ? lessonForScenario(scenario) : null;
     const visible = state.terminal;
     banner.hidden = !visible;
-    document.querySelector('.course-focus').dataset.completed = String(visible);
-    document.querySelectorAll('.course-roadmap li').forEach(item => item.classList.toggle('run-completed', visible && item.dataset.lesson === lesson));
+    const completed = visible && state.phase !== 'paused';
+    document.querySelector('.course-focus').dataset.completed = String(completed);
+    document.querySelectorAll('.course-roadmap li').forEach(item => item.classList.toggle('run-completed', completed && item.dataset.lesson === lesson));
     if (!visible) return;
     const copy = lessonOutcomeCopy[scenario] || (lesson ? [lessonCopy[lesson].watchTitle, lessonCopy[lesson].watch] : ['本次历史能力已运行', '完整结果与边界证据保留在 Trace & Evals 工程检查台。']);
     const terminalAction = state.result?.eval?.terminal_action;
@@ -142,11 +145,12 @@
     const guardedTerminal = ['STOP', 'ESCALATE', 'ROLLBACK'].includes(terminalAction);
     const terminalLabels = { STOP: 'SAFE STOP', ESCALATE: 'MANUAL REVIEW', ROLLBACK: 'AUTO ROLLBACK',
       COMPENSATED: 'COMPENSATED', PROMOTE: 'PROMOTED', COMPLETE: 'CONTRACT PASS' };
-    banner.dataset.outcome = guardedTerminal ? 'stopped' : passed ? 'pass' : 'blocked';
-    byId('lesson-outcome-theme').textContent = copy[0];
-    byId('lesson-outcome-summary').textContent = copy[1];
+    const waitingRestart = state.phase === 'paused';
+    banner.dataset.outcome = waitingRestart ? 'waiting' : guardedTerminal ? 'stopped' : passed ? 'pass' : 'blocked';
+    byId('lesson-outcome-theme').textContent = waitingRestart ? 'Checkpoint 已提交，等待你触发恢复' : copy[0];
+    byId('lesson-outcome-summary').textContent = waitingRestart ? '当前 HTTP 运行已经结束。点击“从断点重启”，观察新运行如何加载旧状态、重新验约并只继续 W3。' : copy[1];
     byId('lesson-outcome-scenario').textContent = `SCENARIO · ${scenario}`;
-    byId('lesson-outcome-result').textContent = !state.result ? 'RUN ERROR' : terminalLabels[terminalAction] || (passed ? 'CONTRACT PASS' : 'REGRESSION BLOCKED');
+    byId('lesson-outcome-result').textContent = !state.result ? 'RUN ERROR' : waitingRestart ? 'WAITING RESTART' : terminalLabels[terminalAction] || (passed ? 'CONTRACT PASS' : 'REGRESSION BLOCKED');
     byId('lesson-outcome-effect').textContent = `SIDE EFFECTS · ${effectEvent?.effect_count ?? 0}`;
   }
   function sourceNote(scenario) {
@@ -624,7 +628,7 @@
     const outcomePanel = byId('stream-outcome');
     outcomePanel.hidden = !state.runId;
     const regression = state.events.find(event => event.event === 'model_regression_completed' && !event.passed);
-    byId('outcome-title').textContent = state.replayed ? 'Replay completed · same run, no Tool call' : regression ? 'Regression detected · candidate blocked' : state.phase === 'completed' ? 'Run completed · Eval passed' : state.phase === 'failed' ? 'Run failed · inspect the boundary below' : 'Run in progress';
+    byId('outcome-title').textContent = state.replayed ? 'Replay completed · same run, no Tool call' : regression ? 'Regression detected · candidate blocked' : state.phase === 'paused' ? 'Checkpoint committed · restart available' : state.phase === 'completed' ? 'Run completed · Eval passed' : state.phase === 'failed' ? 'Run failed · inspect the boundary below' : 'Run in progress';
     const last = state.events.at(-1);
     byId('outcome-detail').textContent = last ? `${last.task_id || 'Runtime'} · ${last.event} · sequence ${last.sequence}` : '等待第一条真实事件';
     if (byId('ledger-status')) {
@@ -659,8 +663,9 @@
       const checks = Object.entries(advancedResult.eval.checks || {});
       const evalLabels = { rate_model_eval_lesson: 'MODEL EVAL', rate_memory_lesson: 'MEMORY EVAL', rate_multi_agent_handoff_lesson: 'HANDOFF EVAL', rate_supervisor_orchestration_lesson: 'ORCHESTRATION EVAL', rate_dynamic_task_graph_lesson: 'GRAPH EVAL', rate_agent_as_tool_lesson: 'DELEGATION EVAL', rate_observability_slo_lesson: 'SLO EVAL', rate_durable_workflow_lesson: 'RECOVERY EVAL', rate_saga_compensation_lesson: 'SAGA EVAL', rate_agent_release_lesson: 'RELEASE EVAL' };
       byId('check-label').textContent = evalLabels[advancedResult.artifact_type];
-      byId('ledger-status').textContent = advancedResult.eval.passed ? 'PASS · CONTRACT PRESERVED' : 'REGRESSION · CANDIDATE BLOCKED';
-      byId('ledger-status').dataset.state = advancedResult.eval.passed ? 'pass' : 'error';
+      const waitingRestart = advancedResult.status === 'WAITING_FOR_RESTART';
+      byId('ledger-status').textContent = waitingRestart ? 'CHECKPOINT COMMITTED · WAITING RESTART' : advancedResult.eval.passed ? 'PASS · CONTRACT PRESERVED' : 'REGRESSION · CANDIDATE BLOCKED';
+      byId('ledger-status').dataset.state = waitingRestart ? '' : advancedResult.eval.passed ? 'pass' : 'error';
       byId('ledger-diff').textContent = regressions.length ? regressions.join(' · ') : checks.map(([name, passed]) => `${passed ? '✓' : '✂'} ${name}`).join(' · ');
     }
   }
@@ -673,7 +678,7 @@
       button.setAttribute('aria-label', `${id} ${definitions().find(n => n.id === id).title} · ${statusLabel} · 筛选事件`);
     }
     edgeElements.forEach(edge => { edge.element.dataset.active = String(state.nodes[edge.from] === 'completed' && !['waiting', 'blocked'].includes(state.nodes[edge.to])); });
-    const phases = { idle: 'Ready to run', connecting: 'Connecting', running: 'Agent running', completed: 'Run completed', failed: 'Run failed', cancelling: 'Stopping · 等待确认', cancelled: 'Run cancelled', timed_out: 'Run timed out' };
+    const phases = { idle: 'Ready to run', connecting: 'Connecting', running: 'Agent running', paused: 'Checkpoint saved · waiting restart', completed: 'Run completed', failed: 'Run failed', cancelling: 'Stopping · 等待确认', cancelled: 'Run cancelled', timed_out: 'Run timed out' };
     byId('run-status').dataset.phase = state.phase;
     byId('run-status').querySelector('span').textContent = phases[state.phase];
     byId('run-id').textContent = state.runId || (inFlight ? '正在连接 Runtime…' : '等待开始一次运行');
@@ -688,9 +693,12 @@
     });
     byId('filter-empty').hidden = (!filter && !roleFilter) || rows.some(row => !row.hidden);
     byId('download').disabled = !state.events.length;
-    byId('replay-button').hidden = !state.terminal || !state.runId || inFlight;
+    byId('replay-button').hidden = !state.terminal || state.phase === 'paused' || !state.runId || inFlight;
     byId('replay-button').disabled = inFlight;
     byId('run-button').disabled = inFlight;
+    byId('restart-checkpoint-button').hidden = !pendingCheckpoint;
+    byId('restart-checkpoint-button').disabled = inFlight;
+    byId('restart-checkpoint-button').textContent = resumingCheckpoint ? '正在从断点重启…' : '↻ 从断点重启';
     byId('stop-button').hidden = !inFlight || state.terminal || !state.cancelSupported;
     byId('stop-button').disabled = cancelPending || state.phase === 'cancelling';
     byId('stop-button').textContent = state.phase === 'cancelling' ? '停止中…' : cancelPending ? '已请求…' : 'Stop';
@@ -703,7 +711,7 @@
     }
     byId('run-button').textContent = inFlight ? '运行中…' : state.terminal ? '↻  Run again' : '▶  Run Agent';
     for (const input of byId('parameters').elements) input.disabled = inFlight;
-    byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'completed' ? (state.replayed ? '历史事件已重放 · 未重新调用 Tool' : '事件流已完成 · 完整输入与输出已保留') : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
+    byId('stream-footer').textContent = state.phase === 'failed' ? (state.error?.message || 'E1 评估未通过，详见结果') : ['cancelled', 'timed_out'].includes(state.phase) ? '所有 Tool 已退出 · 已完成节点保留 · 下游未继续' : state.phase === 'cancelling' ? '停止请求已发出；事件流保持连接，等待 Tool 确认' : state.phase === 'paused' ? 'Checkpoint 已持久化 · 点击“从断点重启”开启新的恢复请求' : state.phase === 'completed' ? (state.replayed ? '历史事件已重放 · 未重新调用 Tool' : '事件流已完成 · 完整输入与输出已保留') : cancelNote || (inFlight ? '连接保持中 · 等待下一条真实事件' : '准备接收真实运行事件');
     updateLessonOutcome();
     updateOverview();
     updateStudio();
@@ -731,7 +739,10 @@
       if (message.event.event === 'tool_observation' && message.event.task_id === 'D1') showSource(message.event.output);
     } else if (message.type === 'result') {
       state.result = message.result;
-      addRow({ task_id: 'END' }, { kind: state.phase === 'completed' ? 'result' : 'error', label: 'RUN RESULT', title: state.phase === 'completed' ? 'Run completed · Eval passed' : 'Run completed · Eval failed', description: '最终产物包含完整 Plan、Trace、数据、模拟与 Eval。', detailLabel: '完整运行结果 · JSON', payload: message.result });
+      if (state.phase === 'paused') pendingCheckpoint = { runId: message.result.run_id, scenario: message.result.scenario };
+      else if (message.result.resume_of_run_id) pendingCheckpoint = null;
+      const paused = state.phase === 'paused';
+      addRow({ task_id: 'END' }, { kind: paused ? 'control' : state.phase === 'completed' ? 'result' : 'error', label: paused ? 'CHECKPOINT READY' : 'RUN RESULT', title: paused ? '等待手动从断点重启' : state.phase === 'completed' ? 'Run completed · Eval passed' : 'Run completed · Eval failed', description: paused ? '第一段请求已经结束；恢复必须由新的 HTTP 请求显式触发。' : '最终产物包含完整 Plan、Trace、数据、模拟与 Eval。', detailLabel: '完整运行结果 · JSON', payload: message.result });
     } else if (message.type === 'error') showError();
     update();
     scrollToLatest();
@@ -825,6 +836,8 @@
     }
     cancelPending = false;
     cancelNote = '';
+    pendingCheckpoint = null;
+    resumingCheckpoint = false;
     inFlight = true;
     try {
       state = createState(config.execution_mode);
@@ -857,6 +870,37 @@
       } finally {
         releaseRunControls();
       }
+    }
+  }
+  async function resumeFromCheckpoint() {
+    if (inFlight || !pendingCheckpoint) return;
+    const checkpoint = { ...pendingCheckpoint };
+    inFlight = true;
+    resumingCheckpoint = true;
+    filter = null;
+    selectedRole = null;
+    rows.length = 0;
+    byId('event-list').replaceChildren();
+    try {
+      state = createState('durable');
+      state.phase = 'connecting';
+      buildGraph();
+      update();
+      const response = await fetch('/api/rates/durable-resume', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' }, body: JSON.stringify({ checkpoint_run_id: checkpoint.runId, demo_scenario: checkpoint.scenario }) });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.error?.message || `HTTP ${response.status}`);
+      }
+      await consume(response);
+    } catch (error) {
+      failState(state, { code: 'RESUME_ERROR', message: error.message, task_id: 'RV1' });
+      showError();
+    } finally {
+      inFlight = false;
+      resumingCheckpoint = false;
+      update();
+      scrollToLatest();
+      if (state.terminal) byId('lesson-outcome-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }
   async function replayLast() {
@@ -896,6 +940,7 @@
     }
   }
   byId('run-button').addEventListener('click', run);
+  byId('restart-checkpoint-button').addEventListener('click', resumeFromCheckpoint);
   byId('replay-button').addEventListener('click', replayLast);
   byId('stop-button').addEventListener('click', requestStop);
   byId('approve-button').addEventListener('click', () => decideApproval('approve'));
@@ -912,6 +957,8 @@
       });
     }
     if (!inFlight) {
+      pendingCheckpoint = null;
+      resumingCheckpoint = false;
       state = createState(modeForScenario(byId('scenario').value));
       filter = null;
       selectedRole = null;

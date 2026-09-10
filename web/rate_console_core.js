@@ -323,6 +323,8 @@
       case 'durable_task_completed': state.nodes[id] = 'completed'; break;
       case 'checkpoint_committed': state.nodes.CP1 = 'completed'; break;
       case 'runtime_interrupted': state.nodes.CP1 = 'failed'; break;
+      case 'run_paused_for_restart': state.nodes.DW1 = 'paused'; state.nodes.CP1 = 'paused'; state.nodes.RV1 = 'ready'; break;
+      case 'resume_requested': state.nodes.RV1 = 'running'; break;
       case 'checkpoint_loaded': state.nodes.RV1 = 'verifying'; break;
       case 'checkpoint_binding_validated': state.nodes.RV1 = event.passed ? 'completed' : 'rejected'; break;
       case 'stale_checkpoint_rejected':
@@ -626,9 +628,11 @@
       else if (message.type === 'result') {
         if (state.stopReason) throw new Error('停止请求后不能接受成功结果。');
         const result = message.result;
-        if (!result || result.run_id !== state.runId || !Array.isArray(result.trace) || JSON.stringify(result.trace) !== JSON.stringify(state.events) || state.events.at(-1)?.event !== 'run_completed') throw new Error('最终结果与已接收的事件流不一致。');
+        const waitingForRestart = result?.status === 'WAITING_FOR_RESTART';
+        const expectedTerminalEvent = waitingForRestart ? 'run_paused_for_restart' : 'run_completed';
+        if (!result || result.run_id !== state.runId || !Array.isArray(result.trace) || JSON.stringify(result.trace) !== JSON.stringify(state.events) || state.events.at(-1)?.event !== expectedTerminalEvent) throw new Error('最终结果与已接收的事件流不一致。');
         state.result = result;
-        state.phase = result.eval?.passed === true ? 'completed' : 'failed';
+        state.phase = waitingForRestart ? 'paused' : result.eval?.passed === true ? 'completed' : 'failed';
         state.terminal = true;
       } else if (message.type === 'error') {
         if (['RUN_CANCELLED', 'RUN_DEADLINE_EXCEEDED'].includes(message.error?.code)) {
@@ -679,6 +683,8 @@
       case 'durable_task_completed': return { ...common, kind: 'result', label: 'COMMITTED OUTPUT', title: `${event.task_id} · ${event.output_receipt.output_type}`, description: '输出收据带内容哈希，可在恢复时验证而无需重跑 Tool。', detailLabel: '输出收据', payload: event.output_receipt };
       case 'checkpoint_committed': return { ...common, kind: 'durable', label: 'CHECKPOINT', title: event.checkpoint.checkpoint_id, description: '先原子追加并 fsync，再承认恢复点存在。', detailLabel: '完整 Checkpoint', payload: event.checkpoint };
       case 'runtime_interrupted': return { ...common, kind: 'error', label: 'PROCESS CRASH', title: event.reason, description: `没有已提交输出：${event.committed_output_absent_for.join(' · ')}`, detailLabel: '中断边界', payload: event };
+      case 'run_paused_for_restart': return { ...common, kind: 'control', label: 'WAITING RESTART', title: 'Checkpoint 已保存', description: '当前请求到此结束；请点击“从断点重启”启动新的恢复请求。', detailLabel: '可恢复终态', payload: event };
+      case 'resume_requested': return { ...common, kind: 'durable', label: 'NEW PROCESS', title: `Resume ${event.checkpoint_id}`, description: `新的 HTTP 请求恢复逻辑 Run ${event.workflow_run_id}。`, detailLabel: '恢复入口', payload: event };
       case 'checkpoint_loaded': return { ...common, kind: 'durable', label: 'LOAD', title: event.checkpoint_id, description: '加载不等于信任；下一步必须重新校验所有绑定。', detailLabel: '恢复请求', payload: event };
       case 'checkpoint_binding_validated': return { ...common, kind: event.passed ? 'result' : 'error', label: event.passed ? 'BINDING PASS' : 'STALE', title: event.passed ? 'Checkpoint may resume' : 'Checkpoint cannot resume', description: Object.entries(event.checks).map(([name, ok]) => `${ok ? '✓' : '✕'} ${name}`).join(' · '), detailLabel: '绑定对比', payload: event };
       case 'stale_checkpoint_rejected': return { ...common, kind: 'error', label: 'STALE BLOCK', title: event.reasons.join(' · '), description: `恢复任务 ${event.resumed_tasks} · 副作用 ${event.effect_count}`, detailLabel: '拒绝终态', payload: event };

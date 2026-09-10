@@ -70,6 +70,23 @@ test('replayed start is visible in state while preserving the same event reducer
   assert.equal(state.runId, 'replay-run');
 });
 
+test('durable checkpoint is a terminal pause and resume remains a distinct stream', () => {
+  const state = createState('durable');
+  const message = (type, payload = {}) => ({ protocol: 'rate-ndjson-v1', run_id: 'checkpoint-run', type, ...payload });
+  applyMessage(state, message('start', { execution_mode: 'durable' }));
+  const emit = (event, task_id, extras = {}) => applyMessage(state, message('event', { event: { event, task_id, run_id: 'checkpoint-run', sequence: state.events.length + 1, timestamp: '2026-09-01T01:02:03.000Z', ...extras } }));
+  emit('goal_received', 'G1');
+  emit('durable_run_started', 'DW1');
+  emit('checkpoint_committed', 'CP1', { checkpoint: { checkpoint_id: 'CP-1' } });
+  emit('runtime_interrupted', 'CP1', { reason: 'teaching_process_crash', committed_output_absent_for: ['W3'] });
+  emit('run_paused_for_restart', 'CP1', { checkpoint_id: 'CP-1' });
+  applyMessage(state, message('result', { result: { run_id: 'checkpoint-run', status: 'WAITING_FOR_RESTART', trace: state.events, eval: { passed: null } } }));
+  assert.equal(state.phase, 'paused');
+  assert.equal(state.terminal, true);
+  finishStream(state);
+  assert.equal(describe({ event: 'run_paused_for_restart' }).label, 'WAITING RESTART');
+});
+
 test('retry keeps the node active and completion unblocks the next node', () => {
   const { state, emit } = setup();
   emit('task_started', 'D1');

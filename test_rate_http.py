@@ -93,6 +93,20 @@ class RateHTTPTests(unittest.TestCase):
         connection.close()
         return response.status, headers, [json.loads(line) for line in raw.splitlines()]
 
+    def post_durable_resume(self, checkpoint_run_id, scenario):
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=10)
+        body = json.dumps({"checkpoint_run_id": checkpoint_run_id,
+                           "demo_scenario": scenario}).encode("utf-8")
+        connection.request(
+            "POST", "/api/rates/durable-resume", body=body,
+            headers={"Content-Type": "application/json", "Accept": "application/x-ndjson"},
+        )
+        response = connection.getresponse()
+        raw = response.read().decode("utf-8")
+        headers = dict(response.getheaders())
+        connection.close()
+        return response.status, headers, [json.loads(line) for line in raw.splitlines()]
+
     def post_replay(self, payload):
         connection = http.client.HTTPConnection(self.host, self.port, timeout=10)
         connection.request("POST", "/api/rates/replay", body=json.dumps(payload).encode("utf-8"),
@@ -154,7 +168,15 @@ class RateHTTPTests(unittest.TestCase):
             self.assertEqual(messages[-1]["type"], "result")
             streamed = [row["event"] for row in messages if row["type"] == "event"]
             self.assertEqual(streamed, messages[-1]["result"]["trace"])
-            self.assertEqual(streamed[-1]["event"], "run_completed")
+            if scenario.startswith("durable_"):
+                self.assertEqual(streamed[-1]["event"], "run_paused_for_restart")
+                self.assertEqual(messages[-1]["result"]["status"], "WAITING_FOR_RESTART")
+                status, _, resumed = self.post_durable_resume(messages[0]["run_id"], scenario)
+                self.assertEqual(status, 200)
+                self.assertEqual(resumed[0]["resume_of_run_id"], messages[0]["run_id"])
+                self.assertEqual(resumed[-1]["result"]["trace"][-1]["event"], "run_completed")
+            else:
+                self.assertEqual(streamed[-1]["event"], "run_completed")
             self.assertFalse(messages[-1]["result"]["guardrails"]["automatic_execution"])
 
     def test_stream_emits_start_events_and_result(self):
@@ -195,8 +217,8 @@ class RateHTTPTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Agent Graph", html)
         self.assertIn("Agent Live Stream", html)
-        self.assertIn("rate_console.js?v=32", html)
-        self.assertIn("rate_console_core.js?v=32", html)
+        self.assertIn("rate_console.js?v=33", html)
+        self.assertIn("rate_console_core.js?v=33", html)
         self.assertIn("Agent Operations Studio", html)
         self.assertIn("id=\"lesson-archive\"", html)
         self.assertIn("默认收起", html)

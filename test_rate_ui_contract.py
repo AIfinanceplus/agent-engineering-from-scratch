@@ -124,6 +124,15 @@ class RateUIContractTests(unittest.TestCase):
                       "Golden / Shadow / 5% Canary"):
             self.assertIn(label, source)
 
+    def test_durable_lesson_exposes_a_manual_checkpoint_restart_control(self):
+        html = (ROOT / "web" / "rate_console.html").read_text(encoding="utf-8")
+        source = (ROOT / "web" / "rate_console.js").read_text(encoding="utf-8")
+        core = (ROOT / "web" / "rate_console_core.js").read_text(encoding="utf-8")
+        self.assertIn('id="restart-checkpoint-button"', html)
+        self.assertIn("resumeFromCheckpoint", source)
+        self.assertIn("/api/rates/durable-resume", source)
+        self.assertIn("WAITING_FOR_RESTART", core)
+
     def test_rate_overlay_retains_workbench_components_and_replaces_only_strategy(self):
         base = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         source = (ROOT / "web" / "rate_workbench.js").read_text(encoding="utf-8")
